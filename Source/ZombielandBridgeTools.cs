@@ -77,6 +77,26 @@ namespace ZombieLand
 			};
 		}
 
+		static object DescribePawn(Pawn pawn)
+		{
+			return new
+			{
+				pawnId = ZombieRuntimeActions.StableThingId(pawn),
+				thingId = pawn?.ThingID,
+				defName = pawn?.def?.defName,
+				kindDef = pawn?.kindDef?.defName,
+				label = pawn?.LabelCap,
+				spawned = pawn?.Spawned ?? false,
+				dead = pawn?.Dead ?? false,
+				downed = pawn?.Downed ?? false,
+				faction = pawn?.Faction?.Name,
+				position = pawn == null ? null : ZombieRuntimeActions.DescribeCell(pawn.Position),
+				currentJob = pawn?.CurJobDef?.defName,
+				currentJobReport = pawn?.CurJob?.GetReport(pawn),
+				stunned = pawn?.stances?.stunner?.Stunned
+			};
+		}
+
 		static object DescribeTankyArmor(Zombie zombie)
 		{
 			return zombie == null ? null : new
@@ -1950,6 +1970,122 @@ namespace ZombieLand
 				explosiveDamage,
 				before,
 				after = DescribeZombie(albino)
+			};
+		}
+
+		[Tool("zombieland/scream_with_albino", Description = "Start a real albino sabotage job and verify its 40-tick scream pulse forces a nearby colonist to vomit and stuns them.")]
+		public static object ScreamWithAlbino()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var colonist = map.mapPawns.FreeColonists
+				.Where(pawn => pawn.Spawned && pawn.Dead == false && pawn.health.Downed == false && pawn.InMentalState == false)
+				.OrderBy(pawn => pawn.Position.x)
+				.ThenBy(pawn => pawn.Position.z)
+				.FirstOrDefault();
+			if (colonist == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No spawned free colonist was available as an albino scream target."
+				};
+			}
+
+			if (TryFindAdjacentClearCell(colonist, out var albinoCell) == false)
+			{
+				return new
+				{
+					success = false,
+					colonist = DescribePawn(colonist),
+					error = "No clear adjacent cell was found for the albino scream test."
+				};
+			}
+
+			var albino = ZombieRuntimeActions.SpawnZombie(albinoCell, map, ZombieType.Albino, true);
+			if (albino == null)
+			{
+				return new
+				{
+					success = false,
+					colonist = DescribePawn(colonist),
+					error = "ZombieGenerator.SpawnZombie returned no albino test zombie."
+				};
+			}
+			albino.SetFaction(Faction.OfPlayer);
+
+			var jobBefore = colonist.CurJobDef?.defName;
+			var stunnedBefore = colonist.stances?.stunner?.Stunned ?? false;
+			albino.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Sabotage), JobCondition.InterruptForced, null, true, true);
+			AdvanceGameTicks(1);
+
+			var driver = albino.jobs.curDriver as JobDriver_Sabotage;
+			if (driver == null)
+			{
+				return new
+				{
+					success = false,
+					albino = DescribeZombie(albino),
+					colonist = DescribePawn(colonist),
+					error = "Albino did not enter the sabotage job driver."
+				};
+			}
+
+			albino.pather?.StopDead();
+			if (albino.Position != albinoCell)
+			{
+				albino.Position = albinoCell;
+				albino.Notify_Teleported(false, false);
+			}
+			driver.destination = IntVec3.Invalid;
+			driver.door = null;
+			driver.hackTarget = null;
+			driver.waitCounter = 0;
+			driver.hackCounter = 0;
+			albino.scream = 0;
+			var pulseTick = 40;
+			var samples = new List<object>();
+			for (var tick = 1; tick <= pulseTick; tick++)
+			{
+				AdvanceGameTicks(1);
+				if (tick == 1 || tick == pulseTick || tick % 10 == 0)
+				{
+					samples.Add(new
+					{
+						tick,
+						scream = albino.scream,
+						colonistJob = colonist.CurJobDef?.defName,
+						colonistStunned = colonist.stances?.stunner?.Stunned ?? false
+					});
+				}
+			}
+
+			var jobAfter = colonist.CurJobDef?.defName;
+			var stunnedAfter = colonist.stances?.stunner?.Stunned ?? false;
+			var distanceSquared = colonist.Position.DistanceToSquared(albino.Position);
+
+			return new
+			{
+				success = albino.scream >= pulseTick && jobAfter == JobDefOf.Vomit.defName && stunnedAfter,
+				pulseTick,
+				distanceSquared,
+				albino = DescribeZombie(albino),
+				colonist = DescribePawn(colonist),
+				albinoCell = ZombieRuntimeActions.DescribeCell(albinoCell),
+				jobBefore,
+				jobAfter,
+				stunnedBefore,
+				stunnedAfter,
+				screamAfter = albino.scream,
+				samples
 			};
 		}
 
