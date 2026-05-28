@@ -5478,43 +5478,6 @@ namespace ZombieLand
 				rect.height += MainMenuDrawer_DoMainMenuControls_Path.addedHeight;
 			}
 		}
-		[HarmonyPatch(typeof(Widgets))]
-		[HarmonyPatch(nameof(Widgets.ButtonTextWorker))]
-		static class Widgets_ButtonText_Path
-		{
-			static bool Prepare() => false; // Cosmetic main-menu button skin; ButtonTextWorker draw path changed in RimWorld 1.6.
-
-			static void NewDrawAtlas(Rect rect, Texture2D atlas, string label)
-			{
-				Widgets.DrawAtlas(rect, atlas);
-				if (label == "Zombieland")
-				{
-					var texture = Tools.GetZombieButtonBackground();
-					GUI.DrawTexture(rect, texture, ScaleMode.StretchToFill, true, 0f);
-				}
-			}
-
-			static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-			{
-				var from = typeof(Widgets).MethodNamed(nameof(Widgets.DrawAtlas), new Type[] { typeof(Rect), typeof(Texture2D) });
-				var to = SymbolExtensions.GetMethodInfo(() => NewDrawAtlas(Rect.zero, null, null));
-
-				var found = false;
-				foreach (var instruction in instructions)
-				{
-					if (instruction.Calls(from))
-					{
-						instruction.operand = to;
-						yield return new CodeInstruction(OpCodes.Ldarg_1);
-						found = true;
-					}
-					yield return instruction;
-				}
-
-				if (!found)
-					Error("Unexpected code in patch " + MethodBase.GetCurrentMethod().DeclaringType);
-			}
-		}
 		[HarmonyPatch(typeof(MainMenuDrawer))]
 		[HarmonyPatch(nameof(MainMenuDrawer.DoMainMenuControls))]
 		static class MainMenuDrawer_DoMainMenuControls_Path
@@ -5531,19 +5494,19 @@ namespace ZombieLand
 			{
 				if (Current.ProgramState == ProgramState.Playing)
 				{
-					var label = "Options".Translate();
-					var idx = optList.FirstIndexOf(opt => opt.label == label);
-					if (idx > 0 && idx < optList.Count())
-						optList.Insert(idx, new ListableOption("Zombieland", delegate
-						{
-							MainMenuDrawer.CloseMainTab();
-							var me = LoadedModManager.GetMod<ZombielandMod>();
-							var dialog = new Dialog_ModSettings(me);
-							Find.WindowStack.Add(dialog);
-						}, null));
+						var label = "Options".Translate();
+						var idx = optList.FirstIndexOf(opt => opt.label == label);
+						if (idx > 0 && idx < optList.Count())
+							optList.Insert(idx, new ListableOption_Zombieland(delegate
+							{
+								MainMenuDrawer.CloseMainTab();
+								var me = LoadedModManager.GetMod<ZombielandMod>();
+								var dialog = new Dialog_ModSettings(me);
+								Find.WindowStack.Add(dialog);
+							}));
+					}
+					return OptionListingUtility.DrawOptionListing(rect, optList);
 				}
-				return OptionListingUtility.DrawOptionListing(rect, optList);
-			}
 
 			static float DrawOptionListingPatch2(Rect rect, List<ListableOption> optList)
 			{

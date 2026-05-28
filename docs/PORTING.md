@@ -32,6 +32,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 - Use native 1.6 saves for runtime fixtures. Do not load RimWorld 1.4 saves in 1.6; use `/Users/ap/Documents/OlderRimWorlds/RimWorldMac1.4-UserData/Saves/Test.rws` only as a visual/source reference.
 - GABS process matching can be confused by a simultaneously running older RimWorld process because the executable name is still `RimWorld by Ludeon Studios`. Confirm the active 1.6 GABS connection before runtime tests.
 - `Source/ZombielandBridgeTools.cs` exposes repeatable Zombieland bridge actions. Prefer `zombieland/spawn_reference_lineup` over repeated manual debug-action/UI spawning for the eight-type visual fixture. Debug actions and bridge endpoints share `Source/ZombieRuntimeActions.cs` for zombie spawn/remove and bite/infection operations; keep future test-only runtime mutations there instead of duplicating menu and bridge logic.
+- The in-game bottom-right Menu tab uses `ListableOption_Zombieland` for the Zombieland settings option. It draws `ZombieButtonBackground` directly at the option level; avoid reviving the old global `Widgets.ButtonTextWorker` texture transpiler.
 
 ## Known Risks
 
@@ -40,7 +41,6 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 - Suicide bomber bomb vests are restored for the visual baseline through an explicit overlay draw in `RenderExtras`. The old `PawnGraphicSet.ResolveApparelGraphics` injection does not participate in RimWorld 1.6 render-tree apparel drawing and still needs a cleaner render-node redesign later.
 - The old `PathFinder.FindPathNow` cost-injection transpiler is disabled for the runtime-load baseline because RimWorld 1.6 moved map pathing to the new `Verse.PathFinder` job/data model. Redesign zombie avoidance costs against 1.6 path grid customization instead of reviving the old `PathFinderNodeFast.knownCost` patch.
 - `ZombieWanderer.processor` is a static coroutine that can keep running across yields while RimWorld starts a long-event save load. It must stay guarded by `LongEventHandler.AnyEventNowOrWaiting` / `ShouldWaitForEvent` and by per-map validity checks; without those guards, loading a save from an already-loaded Zombieland map can crash in `MapInfo.ValidFloodCell -> PathGrid.WalkableFast`.
-- The cosmetic Zombieland main-menu button atlas patch is disabled because `Widgets.ButtonTextWorker` no longer contains the old draw call shape. This is not gameplay-critical.
 - Compile success is not runtime success. The first runtime phase must validate mod load, map start, zombie spawning, pawn rendering, infection, corpse conversion, and special zombie behaviors.
 - Generated logs and build output can consume context quickly. Keep artifacts on disk and summarize.
 
