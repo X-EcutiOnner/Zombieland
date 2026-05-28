@@ -223,6 +223,17 @@ namespace ZombieLand
 			return false;
 		}
 
+		static int CountThingsNear(Map map, IntVec3 center, ThingDef thingDef, float radius)
+		{
+			if (map == null || center.IsValid == false || thingDef == null)
+				return 0;
+
+			return GenRadial.RadialCellsAround(center, radius, true)
+				.Where(cell => cell.InBounds(map))
+				.SelectMany(cell => cell.GetThingList(map))
+				.Count(thing => thing.def == thingDef);
+		}
+
 		[Tool("zombieland/get_status", Description = "Read a compact live Zombieland status summary for the current RimWorld session.")]
 		public static object GetStatus()
 		{
@@ -732,6 +743,79 @@ namespace ZombieLand
 				afterZombieCount,
 				explosionQueued = queuedAfterKill == queuedBeforeKill + 1,
 				explosionExecuted = queuedAfterExecute == 0
+			};
+		}
+
+		[Tool("zombieland/kill_toxic_splasher", Description = "Kill a toxic splasher through Zombie.Kill and verify that it drops StickyGoo around its death cell.")]
+		public static object KillToxicSplasher(
+			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned toxic splasher is used.", Required = false, DefaultValue = "")] string target = "",
+			[ToolParameter(Description = "Radius around the death cell used to count StickyGoo before and after death.", Required = false, DefaultValue = 8)] int radius = 8)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Pawn pawn;
+			string error;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				pawn = CurrentZombies(map).OfType<Zombie>().FirstOrDefault(zombie => zombie.isToxicSplasher);
+				if (pawn == null)
+				{
+					return new
+					{
+						success = false,
+						error = "No spawned toxic splasher was found."
+					};
+				}
+			}
+			else if (TryFindZombie(map, target, out pawn, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+
+			if (pawn is not Zombie zombie || zombie.isToxicSplasher == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(pawn),
+					error = "Target is not a toxic splasher."
+				};
+			}
+
+			var cappedRadius = Math.Max(1, Math.Min(radius, 24));
+			var beforeZombieCount = CurrentZombies(map).Length;
+			var before = DescribeZombie(zombie);
+			var position = zombie.Position;
+			var stickyGooBefore = CountThingsNear(map, position, CustomDefs.StickyGoo, cappedRadius);
+			zombie.Kill(null);
+			var stickyGooAfter = CountThingsNear(map, position, CustomDefs.StickyGoo, cappedRadius);
+			var afterZombieCount = CurrentZombies(map).Length;
+
+			return new
+			{
+				success = zombie.Dead && stickyGooAfter > stickyGooBefore,
+				position = ZombieRuntimeActions.DescribeCell(position),
+				radius = cappedRadius,
+				before,
+				dead = zombie.Dead,
+				destroyed = zombie.Destroyed,
+				stickyGooBefore,
+				stickyGooAfter,
+				stickyGooDelta = stickyGooAfter - stickyGooBefore,
+				beforeZombieCount,
+				afterZombieCount
 			};
 		}
 
