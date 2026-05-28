@@ -1070,5 +1070,84 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/emp_electrifier", Description = "Apply real EMP damage to an electrifier zombie and verify the deactivation patch disables its electric state.")]
+		public static object EmpElectrifier(
+			[ToolParameter(Description = "Optional electrifier zombie id, ThingID, label, or short name. When omitted, the first spawned electrifier is used, or one is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
+			[ToolParameter(Description = "EMP damage amount. The disable duration should increase by this amount times 60 ticks.", Required = false, DefaultValue = 5)] int damage = 5)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Zombie electrifier;
+			var spawnedElectrifier = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				electrifier = CurrentZombies(map).OfType<Zombie>().FirstOrDefault(zombie => zombie.isElectrifier);
+				if (electrifier == null)
+				{
+					var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+					if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+						return error;
+
+					electrifier = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Electrifier, true);
+					spawnedElectrifier = true;
+				}
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				electrifier = pawn as Zombie;
+			}
+
+			if (electrifier == null || electrifier.isElectrifier == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(electrifier),
+					error = "Target is not an electrifier."
+				};
+			}
+
+			var cappedDamage = Math.Max(1, Math.Min(damage, 60));
+			var tickBefore = GenTicks.TicksGame;
+			var disabledUntilBefore = electrifier.electricDisabledUntil;
+			var activeBefore = electrifier.IsActiveElectric;
+			var before = DescribeZombie(electrifier);
+			var dinfo = new DamageInfo(DamageDefOf.EMP, cappedDamage, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+			var damageResult = electrifier.TakeDamage(dinfo);
+			var disabledUntilAfter = electrifier.electricDisabledUntil;
+			var activeAfter = electrifier.IsActiveElectric;
+
+			return new
+			{
+				success = activeBefore && activeAfter == false && disabledUntilAfter >= tickBefore + cappedDamage * 60,
+				spawnedElectrifier,
+				damage = cappedDamage,
+				tickBefore,
+				disabledUntilBefore,
+				disabledUntilAfter,
+				activeBefore,
+				activeAfter,
+				damageTotal = damageResult.totalDamageDealt,
+				before,
+				after = DescribeZombie(electrifier)
+			};
+		}
+
 	}
 }
