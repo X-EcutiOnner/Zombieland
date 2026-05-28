@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Verse;
+using Verse.AI;
 
 namespace ZombieLand
 {
@@ -379,6 +380,7 @@ namespace ZombieLand
 		static void AdvanceGameTicks(int ticks)
 		{
 			var tickManager = Find.TickManager;
+			ZombieTicker.managers = Find.Maps.Select(map => map.GetComponent<TickManager>()).OfType<TickManager>().ToArray();
 			for (var i = 0; i < ticks; i++)
 				tickManager.DoSingleTick();
 		}
@@ -425,6 +427,31 @@ namespace ZombieLand
 				if (candidate.Fogged(map))
 					continue;
 				if (candidate.GetFirstThing<Mineable>(map) != null)
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+					continue;
+
+				cell = candidate;
+				return true;
+			}
+			return false;
+		}
+
+		static bool TryFindAdjacentBuildingCell(Pawn pawn, out IntVec3 cell)
+		{
+			cell = IntVec3.Invalid;
+			var map = pawn?.Map;
+			if (map == null)
+				return false;
+
+			foreach (var offset in GenAdj.CardinalDirections)
+			{
+				var candidate = pawn.Position + offset;
+				if (candidate.InBounds(map) == false)
+					continue;
+				if (candidate.Fogged(map))
+					continue;
+				if (candidate.GetEdifice(map) != null)
 					continue;
 				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
 					continue;
@@ -1759,6 +1786,157 @@ namespace ZombieLand
 				suitChanged,
 				before,
 				after = DescribeZombie(tanky)
+			};
+		}
+
+		[Tool("zombieland/smash_with_tanky", Description = "Put a wall on a tanky zombie route and verify the real stumble-to-AttackStatic job path damages it.")]
+		public static object SmashWithTanky(
+			[ToolParameter(Description = "Optional tanky zombie id, ThingID, label, or short name. When omitted, a fresh tanky zombie is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
+			[ToolParameter(Description = "Deterministic Rand seed for the melee attack sample.", Required = false, DefaultValue = 616161)] int seed = 616161)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Zombie tanky;
+			var spawnedTanky = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+					return error;
+
+				tanky = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.TankyOperator, true);
+				spawnedTanky = true;
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				tanky = pawn as Zombie;
+			}
+
+			if (tanky == null || tanky.IsTanky == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(tanky),
+					error = "Target is not a tanky zombie."
+				};
+			}
+
+			if (TryFindAdjacentBuildingCell(tanky, out var buildingCell) == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(tanky),
+					error = "No clear adjacent wall cell was found."
+				};
+			}
+
+			var wall = ThingMaker.MakeThing(ThingDefOf.Wall, ThingDefOf.WoodLog) as Building;
+			if (wall == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create test wall."
+				};
+			}
+			GenSpawn.Spawn(wall, buildingCell, map, WipeMode.Vanish);
+			wall.SetFaction(Faction.OfPlayer);
+
+			tanky.pather?.StopDead();
+			tanky.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+			tanky.state = ZombieState.Wandering;
+			tanky.checkSmashable = true;
+			tanky.tankDestination = buildingCell;
+
+			var info = ZombieWanderer.GetMapInfo(map);
+			var recalc = info.RecalculateAll(new[] { buildingCell }, CurrentZombies(map).OfType<Zombie>());
+			var recalcSteps = 0;
+			while (recalcSteps < 2048 && recalc.MoveNext())
+				recalcSteps++;
+			var routeParentIgnoringBuildings = info.GetParent(tanky.Position, true);
+			var routeParentRespectingBuildings = info.GetParent(tanky.Position, false);
+
+			var before = DescribeZombie(tanky);
+			var hitPointsBefore = wall.HitPoints;
+			var wallId = ZombieRuntimeActions.StableThingId(wall);
+			var samples = new List<object>();
+			var sawAttackStaticJob = false;
+			tanky.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
+			if (tanky.jobs.curDriver is JobDriver_Stumble stumbleDriver)
+				stumbleDriver.destination = IntVec3.Invalid;
+
+			Rand.PushState(seed);
+			try
+			{
+				for (var i = 0; i < 3; i++)
+				{
+					AdvanceGameTicks(1);
+					var currentJob = tanky.CurJobDef?.defName;
+					var stumbleDestination = tanky.jobs.curDriver is JobDriver_Stumble currentStumbleDriver
+						? currentStumbleDriver.destination
+						: IntVec3.Invalid;
+					if (currentJob == JobDefOf.AttackStatic.defName)
+						sawAttackStaticJob = true;
+					samples.Add(new
+					{
+						tick = i + 1,
+						currentJob,
+						stumbleDestination = ZombieRuntimeActions.DescribeCell(stumbleDestination),
+						fullBodyBusy = tanky.stances?.FullBodyBusy ?? false,
+						wallDestroyed = wall.Destroyed,
+						wallHitPoints = wall.Destroyed ? 0 : wall.HitPoints
+					});
+					if (wall.Destroyed || wall.HitPoints < hitPointsBefore)
+						break;
+				}
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			var wallDestroyed = wall.Destroyed;
+			var hitPointsAfter = wallDestroyed ? 0 : wall.HitPoints;
+
+			return new
+			{
+				success = (wallDestroyed || hitPointsAfter < hitPointsBefore)
+					&& sawAttackStaticJob,
+				spawnedTanky,
+				seed,
+				sawAttackStaticJob,
+				tankyCell = ZombieRuntimeActions.DescribeCell(tanky.Position),
+				buildingCell = ZombieRuntimeActions.DescribeCell(buildingCell),
+				routeParentIgnoringBuildings = ZombieRuntimeActions.DescribeCell(routeParentIgnoringBuildings),
+				routeParentRespectingBuildings = ZombieRuntimeActions.DescribeCell(routeParentRespectingBuildings),
+				recalcSteps,
+				wallId,
+				wallDef = wall.def.defName,
+				wallDestroyed,
+				hitPointsBefore,
+				hitPointsAfter,
+				hitPointDelta = hitPointsAfter - hitPointsBefore,
+				before,
+				after = DescribeZombie(tanky),
+				samples
 			};
 		}
 
