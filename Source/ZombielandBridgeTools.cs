@@ -805,6 +805,123 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/cure_zombie_infection_recipe", Description = "Apply the real cure-infection recipe worker with 100% serum and verify the cured corpse no longer queues conversion.")]
+		public static object CureZombieInfectionRecipe()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var doctorCell, out var doctorSpawnError) == false)
+				return doctorSpawnError;
+
+			var doctor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(doctor, doctorCell, map, WipeMode.Vanish);
+			if (TryFindAdjacentClearCell(doctor, out var patientCell) == false
+				&& TryFindClearSpawnCell(map, doctor.Position, 8f, out patientCell, out var patientSpawnError) == false)
+				return patientSpawnError;
+
+			var patient = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(patient, patientCell, map, WipeMode.Vanish);
+
+			if (ZombieRuntimeActions.AddZombieBite(patient, "harmful", out var bite, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					patient = DescribePawn(patient),
+					error
+				};
+			}
+
+			var recipe = CustomDefs.CureZombieInfection;
+			var worker = recipe?.Worker;
+			var partsBefore = worker?.GetPartsToApplyOn(patient, recipe).ToArray() ?? Array.Empty<BodyPartRecord>();
+			var serumDef = DefDatabase<ThingDef>.GetNamed("ZombieSerumSimple", false);
+			if (recipe == null || worker == null || serumDef == null || partsBefore.Length == 0)
+			{
+				return new
+				{
+					success = false,
+					doctor = DescribePawn(doctor),
+					patient = DescribePawn(patient),
+					infection = ZombieRuntimeActions.DescribePawnInfection(patient),
+					recipeFound = recipe != null,
+					workerFound = worker != null,
+					serumFound = serumDef != null,
+					curablePartCount = partsBefore.Length,
+					error = "The cure recipe fixture could not find a recipe worker, serum, or curable bite part."
+				};
+			}
+
+			var part = partsBefore.First();
+			var serum = ThingMaker.MakeThing(serumDef);
+			var infectionBefore = ZombieRuntimeActions.DescribePawnInfection(patient);
+			worker.ApplyOnPawn(patient, part, doctor, new List<Thing> { serum }, null);
+			var infectionAfter = ZombieRuntimeActions.DescribePawnInfection(patient);
+			var partsAfter = worker.GetPartsToApplyOn(patient, recipe).ToArray();
+			var biteStateAfter = bite.TendDuration?.GetInfectionState().ToString();
+			var mayBecomeZombieWhenDeadAfter = bite.mayBecomeZombieWhenDead;
+
+			if (ZombieRuntimeActions.KillPawnToCorpse(patient, out var corpse, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					doctor = DescribePawn(doctor),
+					patient = DescribePawn(patient),
+					infectionBefore,
+					infectionAfter,
+					error
+				};
+			}
+
+			var queue = map.GetComponent<TickManager>()?.colonistsToConvert;
+			var queueCountBeforeRot = queue?.Count ?? -1;
+			var queuedBeforeRot = queue?.Contains(corpse) ?? false;
+			var rotTriggered = ZombieRuntimeActions.TriggerCorpseRotStageChanged(corpse, out var rotStageBefore, out var rotStageAfter, out error);
+			var queueCountAfterRot = queue?.Count ?? -1;
+			var queuedAfterRot = queue?.Contains(corpse) ?? false;
+
+			return new
+			{
+				success = partsBefore.Length > 0
+					&& partsAfter.Length == 0
+					&& mayBecomeZombieWhenDeadAfter == false
+					&& rotTriggered
+					&& queuedBeforeRot == false
+					&& queuedAfterRot == false,
+				doctor = DescribePawn(doctor),
+				patientCorpse = DescribeCorpse(corpse),
+				doctorCell = ZombieRuntimeActions.DescribeCell(doctorCell),
+				patientCell = ZombieRuntimeActions.DescribeCell(patientCell),
+				biteLabel = bite.LabelCap,
+				curedPart = part.def?.defName,
+				infectionBefore,
+				infectionAfter,
+				biteStateAfter,
+				mayBecomeZombieWhenDeadAfter,
+				curablePartCountBefore = partsBefore.Length,
+				curablePartCountAfter = partsAfter.Length,
+				serumDef = serum.def.defName,
+				rotTriggered,
+				rotStageBefore = rotStageBefore.ToString(),
+				rotStageAfter = rotStageAfter.ToString(),
+				rotError = error,
+				queueCountBeforeRot,
+				queueCountAfterRot,
+				queuedBeforeRot,
+				queuedAfterRot
+			};
+		}
+
 		[Tool("zombieland/convert_pawn_to_zombie", Description = "Convert a spawned non-zombie pawn to a Zombieland zombie and return before/after state for smoke tests.")]
 		public static object ConvertPawnToZombie(
 			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
