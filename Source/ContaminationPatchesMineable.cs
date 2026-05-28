@@ -100,6 +100,7 @@ namespace ZombieLand
 	}
 
 	[HarmonyPatch(typeof(Mineable), nameof(Mineable.TrySpawnYield))]
+	[HarmonyPatch(new[] { typeof(Map), typeof(bool), typeof(Pawn) })]
 	static class Mineable_TrySpawnYield_Patch
 	{
 		public static Map mineableMap;

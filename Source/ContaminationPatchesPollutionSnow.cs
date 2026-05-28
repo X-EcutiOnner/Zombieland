@@ -45,7 +45,7 @@ namespace ZombieLand
 		static MethodBase TargetMethod()
 		{
 			var m_SetDepth = SymbolExtensions.GetMethodInfo((SnowGrid grid) => grid.SetDepth(default, default));
-			var type = AccessTools.FirstInner(typeof(JobDriver_ClearSnow), type => type.Name.Contains("DisplayClass"));
+			var type = AccessTools.FirstInner(typeof(JobDriver_ClearSnowAndSand), type => type.Name.Contains("DisplayClass"));
 			return AccessTools.FirstMethod(type, method => method.CallsMethod(m_SetDepth));
 		}
 

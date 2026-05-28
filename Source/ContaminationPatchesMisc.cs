@@ -278,17 +278,24 @@ namespace ZombieLand
 
 		static IEnumerable<MethodBase> TargetMethods()
 		{
-			yield return SymbolExtensions.GetMethodInfo((CompChangeableProjectile comp) => comp.RemoveShell());
-			yield return SymbolExtensions.GetMethodInfo((CompEggLayer comp) => comp.ProduceEgg());
-			yield return SymbolExtensions.GetMethodInfo((CompHasGatherableBodyResource comp) => comp.Gathered(default));
-			yield return AccessTools.Method(typeof(CompMechCarrier), nameof(CompMechCarrier.PostSpawnSetup));
-			yield return SymbolExtensions.GetMethodInfo((CompPlantable comp) => comp.DoPlant(default, default, default));
-			yield return SymbolExtensions.GetMethodInfo((CompPollutionPump comp) => comp.Pump());
-			yield return AccessTools.Method(typeof(CompRefuelable), nameof(CompRefuelable.PostDestroy));
-			yield return SymbolExtensions.GetMethodInfo((CompSpawnerItems comp) => comp.SpawnItems());
-			yield return SymbolExtensions.GetMethodInfo((CompSpawner comp) => comp.TryDoSpawn());
-			yield return AccessTools.Method(typeof(CompTreeConnection), nameof(CompTreeConnection.CompTick));
-			yield return SymbolExtensions.GetMethodInfo((CompWasteProducer comp) => comp.ProduceWaste(0));
+			var makeThing = SymbolExtensions.GetMethodInfo(() => ThingMaker.MakeThing(default, default));
+			var candidates = new MethodBase[]
+			{
+				SymbolExtensions.GetMethodInfo((CompChangeableProjectile comp) => comp.RemoveShell()),
+				SymbolExtensions.GetMethodInfo((CompEggLayer comp) => comp.ProduceEgg()),
+				SymbolExtensions.GetMethodInfo((CompHasGatherableBodyResource comp) => comp.Gathered(default)),
+				AccessTools.Method(typeof(CompMechCarrier), nameof(CompMechCarrier.PostSpawnSetup)),
+				SymbolExtensions.GetMethodInfo((CompPlantable comp) => comp.DoPlant(default, default, default)),
+				SymbolExtensions.GetMethodInfo((CompPollutionPump comp) => comp.Pump()),
+				AccessTools.Method(typeof(CompRefuelable), nameof(CompRefuelable.PostDestroy)),
+				SymbolExtensions.GetMethodInfo((CompSpawnerItems comp) => comp.SpawnItems()),
+				SymbolExtensions.GetMethodInfo((CompSpawner comp) => comp.TryDoSpawn()),
+				AccessTools.Method(typeof(CompTreeConnection), nameof(CompTreeConnection.CompTick)),
+				SymbolExtensions.GetMethodInfo((CompWasteProducer comp) => comp.ProduceWaste(0))
+			};
+			foreach (var method in candidates)
+				if (method?.CallsMethod(makeThing) == true)
+					yield return method;
 		}
 
 		static Thing MakeThing(ThingDef def, ThingDef stuff, ThingComp thingComp)
@@ -311,15 +318,8 @@ namespace ZombieLand
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static Thing Spawn(ThingDef def, IntVec3 loc, Map map, WipeMode wipeMode, Pawn victim)
-		{
-			var result = GenSpawn.Spawn(def, loc, map, wipeMode);
-			victim.TransferContamination(ZombieSettings.Values.contamination.generalTransfer, result);
-			return result;
-		}
-
-		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-			=> instructions.ExtraArgumentsTranspiler(typeof(GenSpawn), () => Spawn(default, default, default, default, default), new[] { Ldarg_0 }, 1);
+		static void Prefix(Pawn victim) => Filth_MakeThing_Patch.filthSource = victim;
+		static void Postfix() => Filth_MakeThing_Patch.filthSource = null;
 	}
 
 	[HarmonyPatch(typeof(TendUtility), nameof(TendUtility.DoTend))]
@@ -348,7 +348,7 @@ namespace ZombieLand
 	}
 
 	[HarmonyPatch(typeof(PawnUtility), nameof(PawnUtility.GainComfortFromCellIfPossible))]
-	[HarmonyPatch(new[] { typeof(Pawn), typeof(bool) })]
+	[HarmonyPatch(new[] { typeof(Pawn), typeof(int), typeof(bool) })]
 	static class PawnUtility_GainComfortFromCellIfPossible_Patch
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
@@ -367,8 +367,8 @@ namespace ZombieLand
 		}
 	}
 
-	[HarmonyPatch(typeof(Pawn_CarryTracker), nameof(Pawn_CarryTracker.CarryHandsTick))]
-	static class Pawn_CarryTracker_CarryHandsTick_Patch
+	[HarmonyPatch(typeof(Pawn_CarryTracker), nameof(Pawn_CarryTracker.CarryHandsTickInterval))]
+	static class Pawn_CarryTracker_CarryHandsTickInterval_Patch
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
@@ -577,15 +577,15 @@ namespace ZombieLand
 			return AccessTools.FirstMethod(typeof(JobDriver_DisassembleMech), method => method.CallsMethod(m_TryPlaceThing));
 		}
 
-		static bool TryPlaceThing(Thing thing, IntVec3 center, Map map, ThingPlaceMode mode, Action<Thing, int> placedAction, Predicate<IntVec3> nearPlaceValidator, Rot4 rot, JobDriver_DisassembleMech driver)
+		static bool TryPlaceThing(Thing thing, IntVec3 center, Map map, ThingPlaceMode mode, Action<Thing, int> placedAction, Predicate<IntVec3> nearPlaceValidator, Rot4? rot, int squareRadius, JobDriver_DisassembleMech driver)
 		{
 			var pawn = driver.pawn;
 			var mech = driver.Mech;
 			mech.TransferContamination(ZombieSettings.Values.contamination.disassembleTransfer, pawn, thing);
-			return GenPlace.TryPlaceThing(thing, center, map, mode, placedAction, nearPlaceValidator, rot);
+			return GenPlace.TryPlaceThing(thing, center, map, mode, placedAction, nearPlaceValidator, rot, squareRadius);
 		}
 
 		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-			=> instructions.ExtraArgumentsTranspiler(typeof(GenPlace), () => TryPlaceThing(default, default, default, default, default, default, default, default), new[] { Ldarg_0 }, 1);
+			=> instructions.ExtraArgumentsTranspiler(typeof(GenPlace), () => TryPlaceThing(default, default, default, default, default, default, default, default, default), new[] { Ldarg_0 }, 1);
 	}
 }

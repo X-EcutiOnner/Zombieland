@@ -145,7 +145,7 @@ namespace ZombieLand
 						Widgets.DrawHighlight(rect);
 					TooltipHandler.TipRegion(rect, attr.Description);
 					var savedY = list.curY;
-					_ = list.Label(name, -1, attr.Description);
+					_ = list.Label(new TaggedString(name), -1, attr.Description);
 					list.curY = savedY;
 					for (var i = 0; i < intArray.Length; i++)
 						NumericField(list, $"{i + 1}:", ref intArray[i], null, true);
@@ -159,7 +159,7 @@ namespace ZombieLand
 						Widgets.DrawHighlight(rect);
 					TooltipHandler.TipRegion(rect, attr.Description);
 					var savedY = list.curY;
-					_ = list.Label(name, -1, attr.Description);
+					_ = list.Label(new TaggedString(name), -1, attr.Description);
 					list.curY = savedY;
 					for (var i = 0; i < floatArray.Length; i++)
 						NumericField(list, $"{i + 1}:", ref floatArray[i], null, true);

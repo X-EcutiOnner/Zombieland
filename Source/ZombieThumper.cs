@@ -303,9 +303,9 @@ namespace ZombieLand
 			GenDraw.DrawFieldEdges(ringDrawCells.ToList(), Color.white, null);
 		}
 
-		public override void Draw()
+		public override void DrawAt(Vector3 drawLoc, bool flip = false)
 		{
-			base.Draw();
+			base.DrawAt(drawLoc, flip);
 
 			float polePosition = 0f;
 			float impactRingColor = 0f;
@@ -341,7 +341,7 @@ namespace ZombieLand
 			var color = GenMath.LerpDoubleClamped(0f, 1f, 0f, cyanComponent, impactRingColor);
 			var z = GenMath.LerpDoubleClamped(0f, 1f, 1.6f, 0f, polePosition);
 
-			var position = DrawPos;
+			var position = drawLoc;
 			ThumperBase.Draw(position, AltitudeLayer.BuildingOnTop, altitudeOffset: 0, Color.white);
 			ThumperRing.Draw(position, AltitudeLayer.BuildingOnTop, altitudeOffset: 1, new Color(0f, color, color));
 			ThumperBackground.Draw(position, AltitudeLayer.BuildingOnTop, altitudeOffset: 2, Color.white);

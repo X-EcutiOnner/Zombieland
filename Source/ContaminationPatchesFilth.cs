@@ -112,15 +112,16 @@ namespace ZombieLand
 		static void Postfix() => Filth_MakeThing_Patch.filthSource = null;
 	}
 
-	[HarmonyPatch(typeof(TunnelHiveSpawner), nameof(TunnelHiveSpawner.Tick))]
+	[HarmonyPatch(typeof(TunnelHiveSpawner), "Spawn")]
+	[HarmonyPatch(new[] { typeof(Map), typeof(IntVec3) })]
 	static class TunnelHiveSpawner_Tick_Patch
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static void Prefix(TunnelHiveSpawner __instance)
+		static void Prefix(TunnelHiveSpawner __instance, Map map, IntVec3 loc)
 		{
 			Filth_MakeThing_Patch.filthSource = __instance;
-			Filth_MakeThing_Patch.filthCell = new TargetInfo(__instance.Position, __instance.Map);
+			Filth_MakeThing_Patch.filthCell = new TargetInfo(loc, map);
 		}
 		static void Postfix()
 		{

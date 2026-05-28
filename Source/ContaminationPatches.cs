@@ -98,7 +98,7 @@ namespace ZombieLand
 	}
 
 	[HarmonyPatch(typeof(Widgets), nameof(Widgets.ThingIcon))]
-	[HarmonyPatch(new[] { typeof(Rect), typeof(Thing), typeof(float), typeof(Rot4?), typeof(bool) })]
+	[HarmonyPatch(new[] { typeof(Rect), typeof(Thing), typeof(float), typeof(Rot4?), typeof(bool), typeof(float), typeof(bool) })]
 	static class Widgets_ThingIcon_Patch
 	{
 		static bool Prepare() => Constants.CONTAMINATION;

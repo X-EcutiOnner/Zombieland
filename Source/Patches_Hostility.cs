@@ -515,7 +515,7 @@ namespace ZombieLand
 	//
 	[HarmonyPatch(typeof(GenHostility))]
 	[HarmonyPatch(nameof(GenHostility.IsActiveThreatTo))]
-	[HarmonyPatch(new Type[] { typeof(IAttackTarget), typeof(Faction) })]
+	[HarmonyPatch(new Type[] { typeof(IAttackTarget), typeof(Faction), typeof(bool), typeof(bool) })]
 	static class GenHostility_IsActiveThreat_Patch
 	{
 		[HarmonyPriority(Priority.First)]
@@ -555,20 +555,20 @@ namespace ZombieLand
 	[HarmonyPatch(nameof(JobDriver_Wait.CheckForAutoAttack))]
 	static class JobDriver_Wait_CheckForAutoAttack_Patch
 	{
-		static bool IsActiveThreatTo(IAttackTarget target, Faction faction)
+		static bool IsActiveThreatTo(IAttackTarget target, Faction faction, bool ignoreHives, bool canBeFogged)
 		{
 			if (target is Zombie zombie)
 				return zombie.IsRopedOrConfused == false;
 			if (target is ZombieBlob || target is ZombieSpitter)
 				return faction.IsPlayer;
-			return GenHostility.IsActiveThreatTo(target, faction); // ok to call patched method bc we filtered out zombies
+			return GenHostility.IsActiveThreatTo(target, faction, ignoreHives, canBeFogged); // ok to call patched method bc we filtered out zombies
 		}
 
 		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
 		{
-			return Tools.DownedReplacer(instructions, 1).MethodReplacer(
+			return instructions.MethodReplacer(
 				SymbolExtensions.GetMethodInfo(() => GenHostility.IsActiveThreatTo(null, null)),
-				SymbolExtensions.GetMethodInfo(() => IsActiveThreatTo(null, null))
+				SymbolExtensions.GetMethodInfo(() => IsActiveThreatTo(null, null, default, default))
 			);
 		}
 	}

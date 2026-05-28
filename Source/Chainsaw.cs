@@ -230,7 +230,7 @@ namespace ZombieLand
 				};
 			}
 
-			yield return new Gizmo_RefuelableFuelStatus { refuelable = refuelable };
+			yield return new Gizmo_SetFuelLevel(refuelable);
 		}
 
 		public override string DescriptionDetailed

@@ -130,7 +130,7 @@ namespace ZombieLand
 
 			var zombie = driver.pawn;
 			var mode = thing.Position.Standable(thing.Map) ? PathEndMode.ClosestTouch : PathEndMode.Touch;
-			var path = zombie.Map.pathFinder.FindPath(zombie.Position, thing, TraverseParms.For(zombie, Danger.None, TraverseMode.PassDoors, false), mode);
+			var path = zombie.Map.pathFinder.FindPathNow(zombie.Position, thing, TraverseParms.For(zombie, Danger.None, TraverseMode.PassDoors, false), null, mode, null);
 			if (path.Found)
 			{
 				if (path.TryFindLastCellBeforeBlockingDoor(zombie, out var doorCell, out var door) && doorCell.IsValid)
@@ -165,7 +165,7 @@ namespace ZombieLand
 				return false;
 
 			var zombie = driver.pawn;
-			var path = zombie.Map.pathFinder.FindPath(zombie.Position, cell, TraverseParms.For(zombie, Danger.None, TraverseMode.PassDoors, false), PathEndMode.OnCell);
+			var path = zombie.Map.pathFinder.FindPathNow(zombie.Position, cell, TraverseParms.For(zombie, Danger.None, TraverseMode.PassDoors, false), null, PathEndMode.OnCell, null);
 			if (path.Found)
 			{
 				if (path.TryFindLastCellBeforeBlockingDoor(zombie, out var doorCell, out var door) && doorCell.IsValid)

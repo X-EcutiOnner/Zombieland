@@ -106,6 +106,7 @@
 			<leatherDef>Leather_Human</leatherDef>
 			<foodType>OmnivoreRoughAnimal</foodType>
 			<body>Human</body>
+			<renderTree>Humanlike</renderTree>
 			<nameCategory>HumanStandard</nameCategory>
 			<lifeStageAges>
 				<li>
@@ -169,6 +170,7 @@
 			<needsRest>false</needsRest>
 			<hasGenders>false</hasGenders>
 			<foodType>None</foodType>
+			<renderTree>Misc</renderTree>
 			<lifeExpectancy>2500</lifeExpectancy>
 			<baseBodySize>1</baseBodySize>
 			<baseHealthScale>5</baseHealthScale>
@@ -222,6 +224,7 @@
 			<needsRest>false</needsRest>
 			<hasGenders>false</hasGenders>
 			<foodType>None</foodType>
+			<renderTree>Misc</renderTree>
 			<lifeExpectancy>2500</lifeExpectancy>
 			<baseBodySize>3.0</baseBodySize>
 			<baseHealthScale>5</baseHealthScale>

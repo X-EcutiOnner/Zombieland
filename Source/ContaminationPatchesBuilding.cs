@@ -148,15 +148,15 @@ namespace ZombieLand
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static Thing Spawn(Thing newThing, IntVec3 loc, Map map, Rot4 rot, WipeMode wipeMode, bool respawningAfterLoad, Thing t)
+		static Thing Spawn(Thing newThing, IntVec3 loc, Map map, Rot4 rot, WipeMode wipeMode, bool respawningAfterLoad, bool forbidLeavings, Thing t)
 		{
-			var thing = GenSpawn.Spawn(newThing, loc, map, rot, wipeMode, respawningAfterLoad);
+			var thing = GenSpawn.Spawn(newThing, loc, map, rot, wipeMode, respawningAfterLoad, forbidLeavings);
 			t.TransferContamination(thing);
 			return thing;
 		}
 
 		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-			=> instructions.ExtraArgumentsTranspiler(typeof(GenSpawn), () => Spawn(default, default, default, default, default, default, default), new[] { Ldarg_0 }, 1);
+			=> instructions.ExtraArgumentsTranspiler(typeof(GenSpawn), () => Spawn(default, default, default, default, default, default, default, default), new[] { Ldarg_0 }, 1);
 	}
 
 	[HarmonyPatch(typeof(Building_SubcoreScanner), nameof(Building_SubcoreScanner.Tick))]
@@ -297,17 +297,17 @@ namespace ZombieLand
 
 		static MethodBase TargetMethod()
 		{
-			var m_RepairTick = SymbolExtensions.GetMethodInfo(() => MechRepairUtility.RepairTick(default));
+			var m_RepairTick = SymbolExtensions.GetMethodInfo(() => MechRepairUtility.RepairTick(default, default));
 			return AccessTools.FirstMethod(typeof(JobDriver_RepairMech), method => method.CallsMethod(m_RepairTick));
 		}
 
-		static void RepairTick(Pawn mech, JobDriver_RepairMech jobDriver)
+		static void RepairTick(Pawn mech, int delta, JobDriver_RepairMech jobDriver)
 		{
 			JobDriver_Repair_MakeNewToils_Patch.Equalize(jobDriver.pawn, mech);
-			MechRepairUtility.RepairTick(mech);
+			MechRepairUtility.RepairTick(mech, delta);
 		}
 
 		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-			=> instructions.ExtraArgumentsTranspiler(typeof(MechRepairUtility), () => RepairTick(default, default), new[] { Ldarg_0 }, 1);
+			=> instructions.ExtraArgumentsTranspiler(typeof(MechRepairUtility), () => RepairTick(default, default, default), new[] { Ldarg_0 }, 1);
 	}
 }

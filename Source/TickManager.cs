@@ -252,14 +252,16 @@ namespace ZombieLand
 			}
 		}
 
-		static readonly Mesh headMesh = MeshPool.humanlikeHeadSet.MeshAt(Rot4.South);
+		static Mesh headMesh;
+		static Mesh HeadMesh => headMesh ??= MeshPool.GetMeshSetForWidth(MeshPool.HumanlikeHeadAverageWidth).MeshAt(Rot4.South);
+
 		public override void MapComponentUpdate()
 		{
 			foreach (var head in victimHeads)
 			{
 				var mat = new Material(head.material);
 				head.material.color = new Color(mat.color.r, mat.color.g, mat.color.b, head.alpha);
-				GraphicToolbox.DrawScaledMesh(headMesh, mat, head.Position, head.quat, 0.7f, 0.7f);
+				GraphicToolbox.DrawScaledMesh(HeadMesh, mat, head.Position, head.quat, 0.7f, 0.7f);
 				// don't do the following, it will also remove the original graphic (result: pink texture):
 				// UnityEngine.Object.Destroy(mat);
 			}

@@ -835,12 +835,7 @@ namespace ZombieLand
 
 			if (terrain.modContentPack.IsCoreMod == false)
 			{
-				if (false
-					|| aff.Contains(TerrainAffordanceDefOf.Diggable)
-					|| aff.Contains(TerrainAffordanceDefOf.GrowSoil)
-					)
-					return true;
-				return false;
+				return terrain.IsSoil || aff.Contains(TerrainAffordanceDefOf.SmoothableStone);
 			}
 			return (false
 				|| terrain == TerrainDefOf.Soil
@@ -1124,14 +1119,25 @@ namespace ZombieLand
 					object[] arguments;
 					if (type.GetInterfaces().Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ICollection<>)))
 					{
+						var collectionType = type.GetGenericTypeDefinition();
+						var itemType = type.GenericTypeArguments[0];
 						m_Look = FirstMethod(typeof(Scribe_Collections), method =>
-								method.Name == "Look" && method.GetParameters().Length >= 2 &&
-								method.GetParameters()[0].ParameterType.GetElementType().GetGenericTypeDefinition() == type.GetGenericTypeDefinition() &&
-								method.GetParameters()[1].ParameterType != typeof(bool)
-							).MakeGenericMethod(type.GenericTypeArguments[0]);
-						arguments = new object[] { value, name, LookMode.Value };
-						if (type.GetGenericTypeDefinition() == typeof(List<>))
-							arguments = arguments.Append(Array.Empty<object>()).ToArray();
+						{
+							if (method.Name != "Look")
+								return false;
+							var parameters = method.GetParameters();
+							if (parameters.Length < 3)
+								return false;
+							var firstType = parameters[0].ParameterType.GetElementType();
+							if (firstType == null || firstType.IsGenericType == false || firstType.GetGenericTypeDefinition() != collectionType)
+								return false;
+							return collectionType == typeof(List<>)
+								? parameters.Length == 4 && parameters[1].ParameterType == typeof(string)
+								: parameters.Length == 3 && parameters[1].ParameterType == typeof(string);
+						}).MakeGenericMethod(itemType);
+						arguments = collectionType == typeof(List<>)
+							? new object[] { value, name, LookMode.Value, Array.Empty<object>() }
+							: new object[] { value, name, LookMode.Value };
 					}
 					else
 					{

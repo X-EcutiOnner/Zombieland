@@ -124,7 +124,7 @@ namespace ZombieLand
 				stateUpdater = StateUpdater();
 			}
 
-			if (WorldRendererUtility.WorldRenderedNow == false)
+			if (WorldRendererUtility.WorldRendered == false)
 				DrawDangerous();
 		}
 
@@ -533,7 +533,7 @@ namespace ZombieLand
 				if (newLabel.Length > 28)
 					newLabel = newLabel.Substring(0, 28);
 				if (newLabel != area.Label)
-					area.SetLabel(newLabel);
+					area.RenamableLabel = newLabel;
 			}
 			else
 			{

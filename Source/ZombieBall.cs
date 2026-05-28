@@ -49,6 +49,8 @@ namespace ZombieLand
 				def.projectile.postExplosionSpawnChance,
 				def.projectile.postExplosionSpawnThingCount,
 				def.projectile.postExplosionGasType,
+				null,
+				255,
 				def.projectile.applyDamageToExplosionCellsNeighbors,
 				def.projectile.preExplosionSpawnThingDef,
 				def.projectile.preExplosionSpawnChance,

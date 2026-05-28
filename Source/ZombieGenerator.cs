@@ -236,7 +236,7 @@ namespace ZombieLand
 							return false;
 						if (def == ThingDefOf.Apparel_ShieldBelt)
 							return false;
-						if (def == ThingDefOf.Apparel_SmokepopBelt)
+						if (def == DefDatabase<ThingDef>.GetNamedSilentFail("Apparel_SmokepopBelt"))
 							return false;
 						if (def.thingClass?.Name.Contains("ApparelHolographic") ?? false)
 							return false; // SoS
@@ -253,10 +253,14 @@ namespace ZombieLand
 				.Select(bodyType => (bodyType, pairs: pairs.Where(pair => GraphicFileExist(pair.thing.apparel, bodyType)).ToList()))
 				.ToDictionary(item => item.bodyType, item => item.pairs);
 
+			var headgearDict = dict
+				.Select(pair => (key: pair.Key, pairs: pair.Value.Where(p => PawnApparelGenerator.IsHeadgear(p.thing)).ToList()))
+				.ToDictionary(pair => pair.key, pair => pair.pairs);
+
 			AllApparel = new Dictionary<bool, Dictionary<string, List<ThingStuffPair>>>()
 			{
 				{ false, dict },
-				{ true, dict.Select(pair => (key: pair.Key, pairs: pair.Value.Where(p => PawnApparelGenerator.IsHeadgear(p.thing)).ToList())).ToDictionary(pair => pair.key, pair => pair.pairs) }
+				{ true, headgearDict }
 			};
 		}
 
@@ -292,7 +296,7 @@ namespace ZombieLand
 		static readonly string[] headShapes = { "Normal", "Pointy", "Wide" };
 		static IEnumerator AssignNewGraphicsIterator(Zombie zombie)
 		{
-			zombie.Drawer.renderer.graphics.ResolveAllGraphics();
+			ZombieRenderCompat.ResolveAllGraphics(zombie);
 			yield return null;
 
 			var headPath = FixGlowingEyeOffset(zombie);
@@ -359,7 +363,7 @@ namespace ZombieLand
 						j++;
 					}
 				}
-				zombie.Drawer.renderer.graphics.nakedGraphic = customBodyGraphic;
+				ZombieRenderCompat.SetBodyGraphic(zombie, customBodyGraphic);
 
 				var headRequest = new GraphicRequest(typeof(VariableGraphic), headPath, ShaderDatabase.Cutout, Vector2.one, Color.white, Color.white, null, renderPrecedence, new List<ShaderParameter>(), null);
 				var customHeadGraphic = new VariableGraphic { bodyColor = color };
@@ -374,7 +378,7 @@ namespace ZombieLand
 						j++;
 					}
 				}
-				zombie.Drawer.renderer.graphics.headGraphic = customHeadGraphic;
+				ZombieRenderCompat.SetHeadGraphic(zombie, customHeadGraphic);
 				// zombie.Drawer.renderer.graphics.headGraphic = zombie.story.headType.GetGraphic(specialColor ?? color.HexColor(), false, true);
 			}
 		}

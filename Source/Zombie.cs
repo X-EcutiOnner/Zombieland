@@ -345,13 +345,7 @@ namespace ZombieLand
 				worldPawns.RemovePawn(this);
 
 			// our graphics
-			var head = Drawer.renderer.graphics.headGraphic as VariableGraphic;
-			head?.Dispose();
-			Drawer.renderer.graphics.headGraphic = null;
-
-			var naked = Drawer.renderer.graphics.nakedGraphic as VariableGraphic;
-			naked?.Dispose();
-			Drawer.renderer.graphics.nakedGraphic = null;
+			ZombieRenderCompat.SetDirty(this);
 
 			// vanilla graphics
 			// Drawer.renderer.graphics.furCoveredGraphic.UnCache();
@@ -387,7 +381,7 @@ namespace ZombieLand
 				bombTickingInterval = -1f;
 				bombWillGoOff = false;
 				hasTankyShield = -1f;
-				_ = Drawer.renderer.graphics.apparelGraphics.RemoveAll(record => record.sourceApparel?.def == CustomDefs.Apparel_BombVest);
+				ZombieRenderCompat.RemoveApparelGraphic(this, CustomDefs.Apparel_BombVest);
 				Map.GetComponent<TickManager>()?.AddExplosion(Position);
 			}
 
@@ -661,7 +655,7 @@ namespace ZombieLand
 				if (isToxicSplasher)
 				{
 					var gasAmount = Mathf.CeilToInt(BodySize * 1.15f * ZombieLand.Tools.Difficulty());
-					if (gasAmount > 0)
+					if (gasAmount > 0 && ModLister.BiotechInstalled)
 						GasUtility.AddGas(Position, map, GasType.ToxGas, gasAmount);
 				}
 
@@ -715,7 +709,7 @@ namespace ZombieLand
 			if (progress >= Constants.RUBBLE_EMERGE_DELAY)
 			{
 				var bodyOffset = GenMath.LerpDouble(Constants.RUBBLE_EMERGE_DELAY, 1, -0.45f, 0, progress);
-				renderer.RenderPawnInternal(drawLoc + new Vector3(0, 0, bodyOffset), 0f, true, Rot4.South, renderer.CurRotDrawMode, PawnRenderFlags.DrawNow);
+				ZombieRenderCompat.DrawPawn(this, renderer, drawLoc + new Vector3(0, 0, bodyOffset), Rot4.South, renderer.CurRotDrawMode, PawnRenderFlags.DrawNow);
 			}
 
 			RenderRubble(drawLoc);
