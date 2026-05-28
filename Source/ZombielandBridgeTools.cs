@@ -1273,6 +1273,129 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/heal_wounded_zombie_tick", Description = "Use the real zombie tick loop to verify a healer clears a nearby wounded zombie on its Every12 interval.")]
+		public static object HealWoundedZombieTick(
+			[ToolParameter(Description = "Optional healer zombie id, ThingID, label, or short name. When omitted, a fresh healer is spawned near map center for deterministic tick timing.", Required = false, DefaultValue = "")] string target = "")
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Zombie healer;
+			var spawnedHealer = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var healerCell, out var error) == false)
+					return error;
+
+				healer = ZombieRuntimeActions.SpawnZombie(healerCell, map, ZombieType.Healer, true);
+				spawnedHealer = true;
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				healer = pawn as Zombie;
+			}
+
+			if (healer == null || healer.isHealer == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(healer),
+					error = "Target is not a healer."
+				};
+			}
+
+			if (TryFindAdjacentMoveCell(healer, out var targetCell) == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(healer),
+					error = "No clear adjacent cell was found for the wounded test zombie."
+				};
+			}
+
+			var wounded = ZombieRuntimeActions.SpawnZombie(targetCell, map, ZombieType.Normal, true);
+			if (wounded == null)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(healer),
+					error = "ZombieGenerator.SpawnZombie returned no wounded test zombie."
+				};
+			}
+
+			healer.healInfo.Clear();
+			var wound = HediffMaker.MakeHediff(HediffDefOf.BloodLoss, wounded);
+			wounded.health.AddHediff(wound);
+
+			var healerInfoBefore = healer.healInfo.Count;
+			var hediffsBefore = wounded.health.hediffSet.hediffs.Count;
+			var interval = Zombie.nthTickValues[(int)NthTick.Every12];
+			var maxTicks = interval + 1;
+			var tickHit = -1;
+			var samples = new List<object>();
+
+			for (var tick = 1; tick <= maxTicks; tick++)
+			{
+				AdvanceGameTicks(1);
+				var hediffsNow = wounded.health.hediffSet.hediffs.Count;
+				var queuedNow = healer.healInfo.Any(info => ReferenceEquals(info.pawn, wounded));
+				samples.Add(new
+				{
+					tick,
+					hediffs = hediffsNow,
+					healerInfo = healer.healInfo.Count,
+					queuedHealEffect = queuedNow
+				});
+
+				if (hediffsNow == 0 && queuedNow)
+				{
+					tickHit = tick;
+					break;
+				}
+			}
+
+			var healerInfoAfter = healer.healInfo.Count;
+			var hediffsAfter = wounded.health.hediffSet.hediffs.Count;
+			var queuedHealEffect = healer.healInfo.Any(info => ReferenceEquals(info.pawn, wounded));
+
+			return new
+			{
+				success = hediffsBefore > 0 && hediffsAfter == 0 && healerInfoAfter > healerInfoBefore && queuedHealEffect && tickHit > 0 && tickHit <= maxTicks,
+				spawnedHealer,
+				interval,
+				maxTicks,
+				tickHit,
+				healer = DescribeZombie(healer),
+				wounded = DescribeZombie(wounded),
+				woundedCell = ZombieRuntimeActions.DescribeCell(targetCell),
+				hediffsBefore,
+				hediffsAfter,
+				healerInfoBefore,
+				healerInfoAfter,
+				queuedHealEffect,
+				samples
+			};
+		}
+
 		[Tool("zombieland/emp_electrifier", Description = "Apply real EMP damage to an electrifier zombie and verify the deactivation patch disables its electric state.")]
 		public static object EmpElectrifier(
 			[ToolParameter(Description = "Optional electrifier zombie id, ThingID, label, or short name. When omitted, the first spawned electrifier is used, or one is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
