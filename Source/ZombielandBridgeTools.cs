@@ -71,6 +71,17 @@ namespace ZombieLand
 			};
 		}
 
+		static object DescribeTankyArmor(Zombie zombie)
+		{
+			return zombie == null ? null : new
+			{
+				shield = zombie.hasTankyShield,
+				helmet = zombie.hasTankyHelmet,
+				suit = zombie.hasTankySuit,
+				isTanky = zombie.IsTanky
+			};
+		}
+
 		static object DescribeCorpse(Corpse corpse)
 		{
 			var compRottable = corpse?.TryGetComp<CompRottable>();
@@ -1574,6 +1585,97 @@ namespace ZombieLand
 				explosiveDamage,
 				before,
 				after = DescribeZombie(albino)
+			};
+		}
+
+		[Tool("zombieland/damage_tanky_armor", Description = "Apply real bullet damage to a tanky zombie and verify the tanky armor patch absorbs it by degrading armor.")]
+		public static object DamageTankyArmor(
+			[ToolParameter(Description = "Optional tanky zombie id, ThingID, label, or short name. When omitted, a fresh tanky zombie is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
+			[ToolParameter(Description = "Bullet damage amount used for the absorption sample.", Required = false, DefaultValue = 50)] int damage = 50,
+			[ToolParameter(Description = "Deterministic Rand seed for hit-part selection.", Required = false, DefaultValue = 424242)] int seed = 424242)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Zombie tanky;
+			var spawnedTanky = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+					return error;
+
+				tanky = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.TankyOperator, true);
+				spawnedTanky = true;
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				tanky = pawn as Zombie;
+			}
+
+			if (tanky == null || tanky.IsTanky == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(tanky),
+					error = "Target is not a tanky zombie."
+				};
+			}
+
+			var cappedDamage = Math.Max(1, Math.Min(damage, 500));
+			var before = DescribeZombie(tanky);
+			var armorBefore = DescribeTankyArmor(tanky);
+			var healthBefore = tanky.health.summaryHealth.SummaryHealthPercent;
+			DamageWorker.DamageResult result;
+			Rand.PushState(seed);
+			try
+			{
+				var dinfo = new DamageInfo(DamageDefOf.Bullet, cappedDamage, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+				result = tanky.TakeDamage(dinfo);
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+			var healthAfter = tanky.health.summaryHealth.SummaryHealthPercent;
+
+			var shieldChanged = tanky.hasTankyShield < 1f;
+			var helmetChanged = tanky.hasTankyHelmet < 1f;
+			var suitChanged = tanky.hasTankySuit < 1f;
+			var anyArmorChanged = shieldChanged || helmetChanged || suitChanged;
+
+			return new
+			{
+				success = anyArmorChanged && result.totalDamageDealt <= 0f && healthAfter >= healthBefore,
+				spawnedTanky,
+				seed,
+				damage = cappedDamage,
+				totalDamageDealt = result.totalDamageDealt,
+				healthBefore,
+				healthAfter,
+				armorBefore,
+				armorAfter = DescribeTankyArmor(tanky),
+				shieldChanged,
+				helmetChanged,
+				suitChanged,
+				before,
+				after = DescribeZombie(tanky)
 			};
 		}
 
