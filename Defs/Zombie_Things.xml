@@ -73,7 +73,7 @@
 		<graphicData>
 			<texPath>TarSmoke</texPath>
 			<drawSize>2.5</drawSize>
-			<color>(0,0,0,0.5)</color>
+			<color>(0,0,0,0.85)</color>
 			<graphicClass>Graphic_Single</graphicClass>
 		</graphicData>
 		<altitudeLayer>Gas</altitudeLayer>

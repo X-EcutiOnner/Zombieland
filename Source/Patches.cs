@@ -4176,12 +4176,12 @@ namespace ZombieLand
 					if (map != null && pos.GetGas(map) == null)
 					{
 						var difficulty = Tools.Difficulty();
-						var alpha = GenMath.LerpDoubleClamped(0, 5, 0.25f, 1f, difficulty);
+						var alpha = GenMath.LerpDoubleClamped(0, 5, 0.85f, 1f, difficulty);
 						var min = GenMath.LerpDoubleClamped(0, 5, 2, 60, difficulty);
 						var max = GenMath.LerpDoubleClamped(0, 5, min, 90, difficulty);
 						CustomDefs.TarSmoke.graphicData.color = new Color(0, 0, 0, alpha);
 						CustomDefs.TarSmoke.gas.expireSeconds = new FloatRange(min, max);
-						GenExplosion.DoExplosion(pos, map, 1 + difficulty, DamageDefOf.Smoke, null, (int)(50 * difficulty), -1f, CustomDefs.TarSmokePop, null, null, null, CustomDefs.TarSmoke, 1f, 1, GasType.BlindSmoke, null, 255, false, null, 0f, 1, 0f, false, null, null);
+						GenExplosion.DoExplosion(pos, map, 1 + difficulty, DamageDefOf.Smoke, null, (int)(50 * difficulty), -1f, CustomDefs.TarSmokePop, null, null, null, CustomDefs.TarSmoke, 1f, 1, null, null, 0, false, null, 0f, 1, 0f, false, null, null);
 					}
 				}
 

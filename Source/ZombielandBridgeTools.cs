@@ -234,16 +234,6 @@ namespace ZombieLand
 				.Count(thing => thing.def == thingDef);
 		}
 
-		static int CountGasDensityNear(Map map, IntVec3 center, GasType gasType, float radius)
-		{
-			if (map == null || center.IsValid == false)
-				return 0;
-
-			return GenRadial.RadialCellsAround(center, radius, true)
-				.Where(cell => cell.InBounds(map))
-				.Sum(cell => map.gasGrid.DensityAt(cell, gasType));
-		}
-
 		static void AdvanceGameTicks(int ticks)
 		{
 			var tickManager = Find.TickManager;
@@ -1166,7 +1156,7 @@ namespace ZombieLand
 			};
 		}
 
-		[Tool("zombieland/damage_dark_slimer", Description = "Apply real bullet damage to a dark slimer and verify the damage-worker patch creates TarSmoke gas.")]
+		[Tool("zombieland/damage_dark_slimer", Description = "Apply real bullet damage to a dark slimer and verify the damage-worker patch creates custom TarSmoke.")]
 		public static object DamageDarkSlimer(
 			[ToolParameter(Description = "Optional dark slimer zombie id, ThingID, label, or short name. When omitted, a fresh dark slimer is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
 			[ToolParameter(Description = "Bullet damage amount.", Required = false, DefaultValue = 1)] int damage = 1)
@@ -1221,19 +1211,17 @@ namespace ZombieLand
 			var countRadius = smokeRadius + 1f;
 			var ticksToRun = Math.Max(1, (int)Math.Ceiling(smokeRadius * 1.5f) + 2);
 			var tarSmokeThingsBefore = CountThingsNear(map, position, CustomDefs.TarSmoke, countRadius);
-			var blindSmokeDensityBefore = CountGasDensityNear(map, position, GasType.BlindSmoke, countRadius);
 			var gasAtPositionBefore = position.GetGas(map)?.def?.defName;
 			var before = DescribeZombie(darkSlimer);
 			var dinfo = new DamageInfo(DamageDefOf.Bullet, cappedDamage, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
 			var damageResult = darkSlimer.TakeDamage(dinfo);
 			AdvanceGameTicks(ticksToRun);
 			var tarSmokeThingsAfter = CountThingsNear(map, position, CustomDefs.TarSmoke, countRadius);
-			var blindSmokeDensityAfter = CountGasDensityNear(map, position, GasType.BlindSmoke, countRadius);
 			var gasAtPositionAfter = position.GetGas(map)?.def?.defName;
 
 			return new
 			{
-				success = tarSmokeThingsAfter > tarSmokeThingsBefore || blindSmokeDensityAfter > blindSmokeDensityBefore,
+				success = tarSmokeThingsAfter > tarSmokeThingsBefore && gasAtPositionAfter == CustomDefs.TarSmoke.defName,
 				spawnedDarkSlimer,
 				damage = cappedDamage,
 				damageTotal = damageResult.totalDamageDealt,
@@ -1246,9 +1234,6 @@ namespace ZombieLand
 				tarSmokeThingsBefore,
 				tarSmokeThingsAfter,
 				tarSmokeThingDelta = tarSmokeThingsAfter - tarSmokeThingsBefore,
-				blindSmokeDensityBefore,
-				blindSmokeDensityAfter,
-				blindSmokeDensityDelta = blindSmokeDensityAfter - blindSmokeDensityBefore,
 				before,
 				after = DescribeZombie(darkSlimer)
 			};
