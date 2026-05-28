@@ -68,7 +68,7 @@
 		<defName>TarSmoke</defName>
 		<label>smoke</label>
 		<description>A dark smoke making it hard to see things</description>
-		<thingClass>Gas</thingClass>
+		<thingClass>ZombieLand.TarSmoke</thingClass>
 		<category>Gas</category>
 		<graphicData>
 			<texPath>TarSmoke</texPath>
