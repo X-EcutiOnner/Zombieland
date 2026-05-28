@@ -4181,7 +4181,19 @@ namespace ZombieLand
 						var max = GenMath.LerpDoubleClamped(0, 5, min, 90, difficulty);
 						CustomDefs.TarSmoke.graphicData.color = new Color(0, 0, 0, alpha);
 						CustomDefs.TarSmoke.gas.expireSeconds = new FloatRange(min, max);
-						GenExplosion.DoExplosion(pos, map, 1 + difficulty, DamageDefOf.Smoke, null, (int)(50 * difficulty), -1f, CustomDefs.TarSmokePop, null, null, null, CustomDefs.TarSmoke, 1f, 1, null, null, 0, false, null, 0f, 1, 0f, false, null, null);
+						GenExplosion.DoExplosion(
+							center: pos,
+							map: map,
+							radius: 1 + difficulty,
+							damType: DamageDefOf.Smoke,
+							instigator: null,
+							damAmount: (int)(50 * difficulty),
+							armorPenetration: -1f,
+							explosionSound: CustomDefs.TarSmokePop,
+							postExplosionSpawnThingDef: CustomDefs.TarSmoke,
+							postExplosionSpawnChance: 1f,
+							postExplosionSpawnThingCount: 1,
+							doVisualEffects: false);
 					}
 				}
 
