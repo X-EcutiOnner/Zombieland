@@ -2187,6 +2187,129 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/hack_flickable_with_albino", Description = "Start a real albino sabotage job and verify its 240-tick hacking branch switches off a flickable building.")]
+		public static object HackFlickableWithAlbino()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var albinoCell, out var error) == false)
+				return error;
+
+			var albino = ZombieRuntimeActions.SpawnZombie(albinoCell, map, ZombieType.Albino, true);
+			if (albino == null)
+			{
+				return new
+				{
+					success = false,
+					error = "ZombieGenerator.SpawnZombie returned no albino test zombie."
+				};
+			}
+
+			if (TryFindAdjacentBuildingCell(albino, out var buildingCell) == false)
+			{
+				return new
+				{
+					success = false,
+					albino = DescribeZombie(albino),
+					error = "No clear adjacent building cell was found for the albino hacking test."
+				};
+			}
+
+			var lampDef = DefDatabase<ThingDef>.GetNamed("StandingLamp", false);
+			if (lampDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "ThingDef StandingLamp was not found."
+				};
+			}
+
+			var lamp = GenSpawn.Spawn(ThingMaker.MakeThing(lampDef), buildingCell, map, WipeMode.Vanish) as Building;
+			lamp?.SetFaction(Faction.OfPlayer);
+			var flickable = lamp?.TryGetComp<CompFlickable>();
+			if (lamp == null || flickable == null)
+			{
+				return new
+				{
+					success = false,
+					albino = DescribeZombie(albino),
+					buildingCell = ZombieRuntimeActions.DescribeCell(buildingCell),
+					error = "The spawned StandingLamp did not provide a flickable building."
+				};
+			}
+
+			flickable.SwitchIsOn = true;
+			var switchBefore = flickable.SwitchIsOn;
+			albino.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Sabotage), JobCondition.InterruptForced, null, true, true);
+			AdvanceGameTicks(1);
+
+			var driver = albino.jobs.curDriver as JobDriver_Sabotage;
+			if (driver == null)
+			{
+				return new
+				{
+					success = false,
+					albino = DescribeZombie(albino),
+					building = lamp.LabelCap,
+					error = "Albino did not enter the sabotage job driver."
+				};
+			}
+
+			albino.pather?.StopDead();
+			driver.destination = IntVec3.Invalid;
+			driver.door = null;
+			driver.hackTarget = lamp;
+			driver.waitCounter = 0;
+			driver.hackCounter = 0;
+			albino.scream = -1;
+
+			var hackStartTick = 1;
+			var hackActionTicks = 240;
+			var totalTicks = hackStartTick + hackActionTicks;
+			var samples = new List<object>();
+			for (var tick = 1; tick <= totalTicks; tick++)
+			{
+				AdvanceGameTicks(1);
+				if (tick == 1 || tick == totalTicks || tick % 60 == 0)
+				{
+					samples.Add(new
+					{
+						tick,
+						driver.hackCounter,
+						switchIsOn = flickable.SwitchIsOn,
+						hackTarget = driver.hackTarget?.ThingID
+					});
+				}
+			}
+
+			var switchAfter = flickable.SwitchIsOn;
+
+			return new
+			{
+				success = switchBefore && switchAfter == false && driver.hackCounter == 0 && driver.hackTarget == null,
+				totalTicks,
+				hackActionTicks,
+				albino = DescribeZombie(albino),
+				building = lamp.LabelCap,
+				buildingCell = ZombieRuntimeActions.DescribeCell(buildingCell),
+				switchBefore,
+				switchAfter,
+				hackCounterAfter = driver.hackCounter,
+				hackTargetAfter = driver.hackTarget?.ThingID,
+				samples
+			};
+		}
+
 		[Tool("zombieland/damage_tanky_armor", Description = "Apply real bullet damage to a tanky zombie and verify the tanky armor patch absorbs it by degrading armor.")]
 		public static object DamageTankyArmor(
 			[ToolParameter(Description = "Optional tanky zombie id, ThingID, label, or short name. When omitted, a fresh tanky zombie is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
