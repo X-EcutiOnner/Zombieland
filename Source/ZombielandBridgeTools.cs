@@ -1495,6 +1495,104 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/electrify_powered_building", Description = "Place an active electrifier next to a real power conduit and verify the electrify handler disables it.")]
+		public static object ElectrifyPoweredBuilding()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var electrifierCell, out var error) == false)
+				return error;
+
+			var electrifier = ZombieRuntimeActions.SpawnZombie(electrifierCell, map, ZombieType.Electrifier, true);
+			if (electrifier == null)
+			{
+				return new
+				{
+					success = false,
+					error = "ZombieGenerator.SpawnZombie returned no electrifier test zombie."
+				};
+			}
+
+			if (TryFindAdjacentBuildingCell(electrifier, out var buildingCell) == false)
+			{
+				return new
+				{
+					success = false,
+					electrifier = DescribeZombie(electrifier),
+					error = "No clear adjacent building cell was found for the electrifier test."
+				};
+			}
+
+			var conduitDef = DefDatabase<ThingDef>.GetNamed("PowerConduit", false);
+			var lampDef = DefDatabase<ThingDef>.GetNamed("StandingLamp", false);
+			if (conduitDef == null || lampDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "ThingDef PowerConduit or StandingLamp was not found."
+				};
+			}
+
+			var conduit = GenSpawn.Spawn(ThingMaker.MakeThing(conduitDef), buildingCell, map, WipeMode.Vanish) as Building;
+			var lamp = GenSpawn.Spawn(ThingMaker.MakeThing(lampDef), buildingCell, map, WipeMode.Vanish) as Building;
+			conduit?.SetFaction(Faction.OfPlayer);
+			lamp?.SetFaction(Faction.OfPlayer);
+			var conduitPower = conduit?.GetComp<CompPower>();
+			var lampPower = lamp?.GetComp<CompPowerTrader>();
+			if (conduitPower != null)
+			{
+				map.powerNetManager.Notify_TransmitterSpawned(conduitPower);
+				map.powerNetManager.UpdatePowerNetsAndConnections_First();
+			}
+			if (lampPower?.PowerNet == null && conduitPower != null)
+				lampPower.ConnectToTransmitter(conduitPower);
+			var powerNetBefore = lampPower?.PowerNet;
+			electrifier.electricDisabledUntil = GenTicks.TicksGame - 1;
+			var activeBefore = electrifier.IsActiveElectric;
+			var disabledUntilBefore = electrifier.electricDisabledUntil;
+			var ticksGameBefore = GenTicks.TicksGame;
+			var fireBefore = CountThingsNear(map, buildingCell, ThingDefOf.Fire, 1.5f);
+
+			ZombieStateHandler.Electrify(electrifier);
+
+			var fireAfter = CountThingsNear(map, buildingCell, ThingDefOf.Fire, 1.5f);
+			var disabledUntilAfter = electrifier.electricDisabledUntil;
+			var activeAfter = electrifier.IsActiveElectric;
+			var expectedMinimumDisableUntil = ticksGameBefore + GenDate.TicksPerHour / 4;
+
+			return new
+			{
+				success = conduit != null && lamp != null && powerNetBefore != null && activeBefore && activeAfter == false && disabledUntilAfter >= expectedMinimumDisableUntil,
+				electrifier = DescribeZombie(electrifier),
+				electrifierCell = ZombieRuntimeActions.DescribeCell(electrifierCell),
+				buildingCell = ZombieRuntimeActions.DescribeCell(buildingCell),
+				buildingDef = lamp?.def?.defName,
+				conduitDef = conduit?.def?.defName,
+				hadConduitPower = conduitPower != null,
+				hadConduitPowerNet = conduitPower?.PowerNet != null,
+				hadPowerNet = powerNetBefore != null,
+				activeBefore,
+				activeAfter,
+				ticksGameBefore,
+				disabledUntilBefore,
+				disabledUntilAfter,
+				expectedMinimumDisableUntil,
+				fireBefore,
+				fireAfter,
+				fireDelta = fireAfter - fireBefore
+			};
+		}
+
 		[Tool("zombieland/damage_dark_slimer", Description = "Apply real bullet damage to a dark slimer and verify the damage-worker patch creates custom TarSmoke.")]
 		public static object DamageDarkSlimer(
 			[ToolParameter(Description = "Optional dark slimer zombie id, ThingID, label, or short name. When omitted, a fresh dark slimer is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
