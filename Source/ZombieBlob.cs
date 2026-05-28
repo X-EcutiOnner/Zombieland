@@ -26,9 +26,9 @@ namespace ZombieLand
 			public Vector4 color;
 		}
 
-		readonly HashSet<IntVec3> cells = [];
+		HashSet<IntVec3> cells = [];
 		readonly List<Metaball> metaballs = [];
-		readonly ComputeBuffer metaballBuffer = new(MAX_METABALLS, Marshal.SizeOf(typeof(Metaball)));
+		ComputeBuffer metaballBuffer;
 
 		Mesh mesh = null;
 		Material metaballMaterial;
@@ -39,11 +39,8 @@ namespace ZombieLand
 		{
 			var blob = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieBlob, null) as ZombieBlob;
 			blob.Position = cell;
-			blob.metaballMaterial = new Material(Assets.MetaballShader);
-			blob.radius = elementRadius * 9f;
-			blob.power = elementPower;
 			blob.cells.Add(IntVec3.Zero);
-
+			blob.EnsureRenderResources();
 			blob.UpdateAll();
 
 			blob.SetFactionDirect(Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies));
@@ -72,7 +69,7 @@ namespace ZombieLand
 		~ZombieBlob()
 		{
 			Object.Destroy(metaballMaterial);
-			metaballBuffer.Dispose();
+			metaballBuffer?.Dispose();
 
 			Object.Destroy(mesh);
 		}
@@ -85,6 +82,8 @@ namespace ZombieLand
 
 		void UpdateAll()
 		{
+			EnsureRenderResources();
+
 			var min_x = cells.Min(c => c.x) - 1f;
 			var min_z = cells.Min(c => c.z) - 1f;
 			var max_x = cells.Max(c => c.x) + 1f;
@@ -140,8 +139,27 @@ namespace ZombieLand
 				metaballs[i] = mb;
 			}
 
-			metaballBuffer.SetData(metaballs, 0, 0, metaballs.Count);
-			metaballMaterial.SetBuffer("_MetaballBuffer", metaballBuffer);
+			metaballBuffer?.SetData(metaballs, 0, 0, metaballs.Count);
+			metaballMaterial?.SetBuffer("_MetaballBuffer", metaballBuffer);
+		}
+
+		void EnsureBlobDefaults()
+		{
+			cells ??= [];
+			if (cells.Count == 0)
+				cells.Add(IntVec3.Zero);
+			if (radius <= 0f)
+				radius = elementRadius * 9f;
+			if (power <= 0f)
+				power = elementPower;
+		}
+
+		void EnsureRenderResources()
+		{
+			EnsureBlobDefaults();
+			metaballBuffer ??= new ComputeBuffer(MAX_METABALLS, Marshal.SizeOf(typeof(Metaball)));
+			if (metaballMaterial == null && Assets.MetaballShader != null)
+				metaballMaterial = new Material(Assets.MetaballShader);
 		}
 
 		float GetSize(IntVec3 cell)
@@ -161,6 +179,11 @@ namespace ZombieLand
 
 		public override void DrawAt(Vector3 drawLoc, bool flip = false)
 		{
+			if (mesh == null || metaballMaterial == null)
+				UpdateAll();
+			if (mesh == null || metaballMaterial == null)
+				return;
+
 			var offset = new Vector3(centerX, 0, centerZ);
 			Graphics.DrawMesh(mesh, drawLoc + offset, Quaternion.identity, metaballMaterial, 0);
 		}
@@ -173,6 +196,11 @@ namespace ZombieLand
 		public override void ExposeData()
 		{
 			base.ExposeData();
+			Scribe_Collections.Look(ref cells, "cells", LookMode.Value);
+			Scribe_Values.Look(ref radius, "radius", elementRadius * 9f);
+			Scribe_Values.Look(ref power, "power", elementPower);
+			if (Scribe.mode == LoadSaveMode.PostLoadInit)
+				EnsureBlobDefaults();
 		}
 	}
 }
