@@ -16,8 +16,8 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 ## Current Unit
 
 - Target: validate special zombie pawn rendering on a native RimWorld 1.6 map.
-- Completed: compile baseline, deployment baseline, Unity bundle validation, GABS startup/play-data baseline, native 1.6 debug-map creation, and first special-zombie visual fixture. As of 2026-05-28, GABS starts RimWorld with Core, Harmony, RimBridgeServer, and Zombieland; a native 1.6 save named `ZombielandVisualLineup` contains Electrifier, Suicide Bomber, Healer, Dark Slimer, Albino, Tanky, Toxic Splasher, and Miner zombies in a compact comparison pattern.
-- Next blocker cluster: fix the one-frame unresolved render-tree errors on save load, then validate infection, corpse conversion, and special zombie behaviors beyond visuals.
+- Completed: compile baseline, deployment baseline, Unity bundle validation, GABS startup/play-data baseline, native 1.6 debug-map creation, and first special-zombie visual fixture. As of 2026-05-28, GABS starts RimWorld with Core, Harmony, RimBridgeServer, and Zombieland; a native 1.6 save named `ZombielandVisualLineup` contains Electrifier, Suicide Bomber, Healer, Dark Slimer, Albino, Tanky, Toxic Splasher, and Miner zombies in a compact comparison pattern. Loading that save now reaches visual-ready state without the previous unresolved render-tree errors.
+- Next blocker cluster: validate infection, corpse conversion, and special zombie behaviors beyond visuals.
 
 ## Decisions
 
@@ -36,8 +36,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 ## Known Risks
 
 - RimWorld 1.6 pawn rendering was significantly refactored. Any Harmony patch touching pawn graphics should be treated as suspicious even after it compiles.
-- `Source/ZombieRenderCompat.cs` is a compile-enabling compatibility layer for old `PawnRenderer.graphics` usage. It currently dirties the 1.6 render tree instead of fully rebuilding custom head/body/apparel render nodes, so zombie visuals and special apparel are the next high-risk runtime validation area.
-- Loading `ZombielandVisualLineup` currently emits one `Attempted to draw <zombie> without a resolved render tree` error per saved zombie before settling into a usable visual-ready state. Do not reintroduce graphics preparation in `PawnRenderer.ParallelPreRenderPawnAt`; that path touches map pawn lists off the main thread. Find a main-thread pre-init or render-tree setup path instead.
+- `Source/ZombieRenderCompat.cs` is a compile-enabling compatibility layer for old `PawnRenderer.graphics` usage. Custom body/head assignment now re-resolves each zombie render tree after dirtying it, which fixes the one-frame `Attempted to draw <zombie> without a resolved render tree` errors on `ZombielandVisualLineup` load. Do not reintroduce graphics preparation in `PawnRenderer.ParallelPreRenderPawnAt`; that path touches map pawn lists off the main thread.
 - Suicide bomber bomb vests are restored for the visual baseline through an explicit overlay draw in `RenderExtras`. The old `PawnGraphicSet.ResolveApparelGraphics` injection does not participate in RimWorld 1.6 render-tree apparel drawing and still needs a cleaner render-node redesign later.
 - The old `PathFinder.FindPathNow` cost-injection transpiler is disabled for the runtime-load baseline because RimWorld 1.6 moved map pathing to the new `Verse.PathFinder` job/data model. Redesign zombie avoidance costs against 1.6 path grid customization instead of reviving the old `PathFinderNodeFast.knownCost` patch.
 - The cosmetic Zombieland main-menu button atlas patch is disabled because `Widgets.ButtonTextWorker` no longer contains the old draw call shape. This is not gameplay-critical.

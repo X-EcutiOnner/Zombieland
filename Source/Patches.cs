@@ -2851,18 +2851,8 @@ namespace ZombieLand
 
 				if (zombie.needsGraphics)
 				{
-					var tickManager = zombie.Map?.GetComponent<TickManager>();
-					if (tickManager != null)
-						tickManager.AllZombies().DoIf(z => z.needsGraphics, z =>
-						{
-							z.needsGraphics = false;
-							ZombieGenerator.AssignNewGraphics(z);
-						});
-					else
-					{
-						zombie.needsGraphics = false;
-						ZombieGenerator.AssignNewGraphics(zombie);
-					}
+					zombie.needsGraphics = false;
+					ZombieGenerator.AssignNewGraphics(zombie);
 				}
 
 				return zombie;

@@ -381,6 +381,8 @@ namespace ZombieLand
 				ZombieRenderCompat.SetHeadGraphic(zombie, customHeadGraphic);
 				// zombie.Drawer.renderer.graphics.headGraphic = zombie.story.headType.GetGraphic(specialColor ?? color.HexColor(), false, true);
 			}
+
+			ZombieRenderCompat.ResolveAllGraphics(zombie);
 		}
 
 		static bool GraphicFileExist(ApparelProperties apparel, string bodyTypeDefName)
