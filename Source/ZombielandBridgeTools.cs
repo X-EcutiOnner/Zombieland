@@ -234,6 +234,23 @@ namespace ZombieLand
 				.Count(thing => thing.def == thingDef);
 		}
 
+		static int CountGasDensityNear(Map map, IntVec3 center, GasType gasType, float radius)
+		{
+			if (map == null || center.IsValid == false)
+				return 0;
+
+			return GenRadial.RadialCellsAround(center, radius, true)
+				.Where(cell => cell.InBounds(map))
+				.Sum(cell => map.gasGrid.DensityAt(cell, gasType));
+		}
+
+		static void AdvanceGameTicks(int ticks)
+		{
+			var tickManager = Find.TickManager;
+			for (var i = 0; i < ticks; i++)
+				tickManager.DoSingleTick();
+		}
+
 		static bool TryFindAdjacentMoveCell(Pawn pawn, out IntVec3 cell)
 		{
 			cell = IntVec3.Invalid;
@@ -1146,6 +1163,94 @@ namespace ZombieLand
 				damageTotal = damageResult.totalDamageDealt,
 				before,
 				after = DescribeZombie(electrifier)
+			};
+		}
+
+		[Tool("zombieland/damage_dark_slimer", Description = "Apply real bullet damage to a dark slimer and verify the damage-worker patch creates TarSmoke gas.")]
+		public static object DamageDarkSlimer(
+			[ToolParameter(Description = "Optional dark slimer zombie id, ThingID, label, or short name. When omitted, a fresh dark slimer is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
+			[ToolParameter(Description = "Bullet damage amount.", Required = false, DefaultValue = 1)] int damage = 1)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Zombie darkSlimer;
+			var spawnedDarkSlimer = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+					return error;
+
+				darkSlimer = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.DarkSlimer, true);
+				spawnedDarkSlimer = true;
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				darkSlimer = pawn as Zombie;
+			}
+
+			if (darkSlimer == null || darkSlimer.isDarkSlimer == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(darkSlimer),
+					error = "Target is not a dark slimer."
+				};
+			}
+
+			var cappedDamage = Math.Max(1, Math.Min(damage, 20));
+			var position = darkSlimer.Position;
+			var smokeRadius = 1f + Tools.Difficulty();
+			var countRadius = smokeRadius + 1f;
+			var ticksToRun = Math.Max(1, (int)Math.Ceiling(smokeRadius * 1.5f) + 2);
+			var tarSmokeThingsBefore = CountThingsNear(map, position, CustomDefs.TarSmoke, countRadius);
+			var blindSmokeDensityBefore = CountGasDensityNear(map, position, GasType.BlindSmoke, countRadius);
+			var gasAtPositionBefore = position.GetGas(map)?.def?.defName;
+			var before = DescribeZombie(darkSlimer);
+			var dinfo = new DamageInfo(DamageDefOf.Bullet, cappedDamage, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+			var damageResult = darkSlimer.TakeDamage(dinfo);
+			AdvanceGameTicks(ticksToRun);
+			var tarSmokeThingsAfter = CountThingsNear(map, position, CustomDefs.TarSmoke, countRadius);
+			var blindSmokeDensityAfter = CountGasDensityNear(map, position, GasType.BlindSmoke, countRadius);
+			var gasAtPositionAfter = position.GetGas(map)?.def?.defName;
+
+			return new
+			{
+				success = tarSmokeThingsAfter > tarSmokeThingsBefore || blindSmokeDensityAfter > blindSmokeDensityBefore,
+				spawnedDarkSlimer,
+				damage = cappedDamage,
+				damageTotal = damageResult.totalDamageDealt,
+				smokeRadius,
+				countRadius,
+				ticksToRun,
+				position = ZombieRuntimeActions.DescribeCell(position),
+				gasAtPositionBefore,
+				gasAtPositionAfter,
+				tarSmokeThingsBefore,
+				tarSmokeThingsAfter,
+				tarSmokeThingDelta = tarSmokeThingsAfter - tarSmokeThingsBefore,
+				blindSmokeDensityBefore,
+				blindSmokeDensityAfter,
+				blindSmokeDensityDelta = blindSmokeDensityAfter - blindSmokeDensityBefore,
+				before,
+				after = DescribeZombie(darkSlimer)
 			};
 		}
 
