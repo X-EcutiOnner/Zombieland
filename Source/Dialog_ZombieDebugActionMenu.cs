@@ -22,67 +22,67 @@ namespace ZombieLand
 			_ = ZombieRuntimeActions.SpawnZombie(cell, map, type, appearDirectly);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Zombie (dig out)")]
+		[DebugAction("Zombieland", "Spawn: Zombie (dig out)", actionType = DebugActionType.ToolMap)]
 		private static void SpawnZombieDigOut()
 		{
 			SpawnZombie(ZombieType.Normal, false);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Zombie (standing)")]
+		[DebugAction("Zombieland", "Spawn: Zombie (standing)", actionType = DebugActionType.ToolMap)]
 		private static void SpawnZombieStanding()
 		{
 			SpawnZombie(ZombieType.Normal, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Suicide bomber")]
+		[DebugAction("Zombieland", "Spawn: Suicide bomber", actionType = DebugActionType.ToolMap)]
 		private static void SpawnSuicideBomber()
 		{
 			SpawnZombie(ZombieType.SuicideBomber, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Toxic Splasher")]
+		[DebugAction("Zombieland", "Spawn: Toxic Splasher", actionType = DebugActionType.ToolMap)]
 		private static void SpawnToxicSplasher()
 		{
 			SpawnZombie(ZombieType.ToxicSplasher, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Tanky Operator")]
+		[DebugAction("Zombieland", "Spawn: Tanky Operator", actionType = DebugActionType.ToolMap)]
 		private static void SpawnTankyOperator()
 		{
 			SpawnZombie(ZombieType.TankyOperator, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Miner")]
+		[DebugAction("Zombieland", "Spawn: Miner", actionType = DebugActionType.ToolMap)]
 		private static void SpawnMiner()
 		{
 			SpawnZombie(ZombieType.Miner, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Electrifier")]
+		[DebugAction("Zombieland", "Spawn: Electrifier", actionType = DebugActionType.ToolMap)]
 		private static void SpawnElectrifier()
 		{
 			SpawnZombie(ZombieType.Electrifier, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Albino")]
+		[DebugAction("Zombieland", "Spawn: Albino", actionType = DebugActionType.ToolMap)]
 		private static void SpawnAlbino()
 		{
 			SpawnZombie(ZombieType.Albino, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Dark Slimer")]
+		[DebugAction("Zombieland", "Spawn: Dark Slimer", actionType = DebugActionType.ToolMap)]
 		private static void SpawnDarkSlimer()
 		{
 			SpawnZombie(ZombieType.DarkSlimer, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Healer")]
+		[DebugAction("Zombieland", "Spawn: Healer", actionType = DebugActionType.ToolMap)]
 		private static void SpawnHealer()
 		{
 			SpawnZombie(ZombieType.Healer, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Random zombie")]
+		[DebugAction("Zombieland", "Spawn: Random zombie", actionType = DebugActionType.ToolMap)]
 		private static void SpawnRandomZombie()
 		{
 			SpawnZombie(ZombieType.Random, true);
@@ -107,43 +107,43 @@ namespace ZombieLand
 			ZombieSpitter.Spawn(Find.CurrentMap);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Incident (4)")]
+		[DebugAction("Zombieland", "Spawn: Incident (4)", actionType = DebugActionType.ToolMap)]
 		private static void SpawnZombieIncident_4()
 		{
 			_ = ZombiesRising.TryExecute(Find.CurrentMap, 4, UI.MouseCell(), false, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Incident (25)")]
+		[DebugAction("Zombieland", "Spawn: Incident (25)", actionType = DebugActionType.ToolMap)]
 		private static void SpawnZombieIncident_25()
 		{
 			_ = ZombiesRising.TryExecute(Find.CurrentMap, 25, UI.MouseCell(), false, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Incident (100)")]
+		[DebugAction("Zombieland", "Spawn: Incident (100)", actionType = DebugActionType.ToolMap)]
 		private static void SpawnZombieIncident_100()
 		{
 			_ = ZombiesRising.TryExecute(Find.CurrentMap, 100, UI.MouseCell(), false, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Incident (200)")]
+		[DebugAction("Zombieland", "Spawn: Incident (200)", actionType = DebugActionType.ToolMap)]
 		private static void SpawnZombieIncident_200()
 		{
 			_ = ZombiesRising.TryExecute(Find.CurrentMap, 200, UI.MouseCell(), false, true);
 		}
 
-		[DebugAction("Zombieland", "Spawn: Zombie Blob")]
+		[DebugAction("Zombieland", "Spawn: Zombie Blob", actionType = DebugActionType.ToolMap)]
 		private static void SpawnZombieBlob()
 		{
 			ZombieBlob.Spawn(Find.CurrentMap, UI.MouseCell());
 		}
 
-		[DebugAction("Zombieland", "Spawn: Add Blob Cell")]
+		[DebugAction("Zombieland", "Spawn: Add Blob Cell", actionType = DebugActionType.ToolMap)]
 		private static void AddBlobCell()
 		{
 			ZombieBlob.AddCell(Find.CurrentMap, UI.MouseCell());
 		}
 
-		[DebugAction("Zombieland", "Spawn: Zombie Spitter")]
+		[DebugAction("Zombieland", "Spawn: Zombie Spitter", actionType = DebugActionType.ToolMap)]
 		private static void SpawnZombieSpitterOnCell()
 		{
 			ZombieSpitter.Spawn(Find.CurrentMap, UI.MouseCell());
@@ -155,7 +155,7 @@ namespace ZombieLand
 			_ = ZombieRuntimeActions.DestroyZombies(Find.CurrentMap);
 		}
 
-		[DebugAction("Zombieland", "Convert: Make Zombie")]
+		[DebugAction("Zombieland", "Convert: Make Zombie", actionType = DebugActionType.ToolMap)]
 		private static void ConvertToZombie()
 		{
 			var map = Find.CurrentMap;
@@ -167,7 +167,7 @@ namespace ZombieLand
 			}
 		}
 
-		[DebugAction("Zombieland", "Apply: Trigger rotting")]
+		[DebugAction("Zombieland", "Apply: Trigger rotting", actionType = DebugActionType.ToolMap)]
 		private static void ApplyTriggerRotting()
 		{
 			foreach (var thing in Find.CurrentMap.thingGrid.ThingsAt(UI.MouseCell()))
@@ -178,7 +178,7 @@ namespace ZombieLand
 			}
 		}
 
-		[DebugAction("Zombieland", "Apply: Add zombie bite")]
+		[DebugAction("Zombieland", "Apply: Add zombie bite", actionType = DebugActionType.ToolMap)]
 		private static void ApplyAddZombieBite()
 		{
 			foreach (var thing in Find.CurrentMap.thingGrid.ThingsAt(UI.MouseCell()))
@@ -189,7 +189,7 @@ namespace ZombieLand
 			}
 		}
 
-		[DebugAction("Zombieland", "Apply: Remove infections")]
+		[DebugAction("Zombieland", "Apply: Remove infections", actionType = DebugActionType.ToolMap)]
 		private static void ApplyRemoveInfections()
 		{
 			foreach (var thing in Find.CurrentMap.thingGrid.ThingsAt(UI.MouseCell()))
@@ -200,7 +200,7 @@ namespace ZombieLand
 			}
 		}
 
-		[DebugAction("Zombieland", "Apply: Zombie raging")]
+		[DebugAction("Zombieland", "Apply: Zombie raging", actionType = DebugActionType.ToolMap)]
 		private static void ApplyZombieRaging()
 		{
 			foreach (var thing in Find.CurrentMap.thingGrid.ThingsAt(UI.MouseCell()))
@@ -211,7 +211,7 @@ namespace ZombieLand
 			}
 		}
 
-		[DebugAction("Zombieland", "Apply: Add 1% bloodloss")]
+		[DebugAction("Zombieland", "Apply: Add 1% bloodloss", actionType = DebugActionType.ToolMap)]
 		private static void ApplyHalfConsciousness()
 		{
 			foreach (var thing in Find.CurrentMap.thingGrid.ThingsAt(UI.MouseCell()))
@@ -267,25 +267,25 @@ namespace ZombieLand
 			}
 		}
 
-		[DebugAction("Zombieland", "Apply: Add 0.01 contamination")]
+		[DebugAction("Zombieland", "Apply: Add 0.01 contamination", actionType = DebugActionType.ToolMap)]
 		private static void AddVeryLittleContamination()
 		{
 			FloodFillContamination(UI.MouseCell(), 0.01f, 500);
 		}
 
-		[DebugAction("Zombieland", "Apply: Add 0.1 contamination")]
+		[DebugAction("Zombieland", "Apply: Add 0.1 contamination", actionType = DebugActionType.ToolMap)]
 		private static void AddLittleContamination()
 		{
 			FloodFillContamination(UI.MouseCell(), 0.1f, 500);
 		}
 
-		[DebugAction("Zombieland", "Apply: Add 1.0 contamination")]
+		[DebugAction("Zombieland", "Apply: Add 1.0 contamination", actionType = DebugActionType.ToolMap)]
 		private static void AddSomeContamination()
 		{
 			FloodFillContamination(UI.MouseCell(), 1f, 500);
 		}
 
-		[DebugAction("Zombieland", "Apply: Clear contamination")]
+		[DebugAction("Zombieland", "Apply: Clear contamination", actionType = DebugActionType.ToolMap)]
 		private static void ClearContamination()
 		{
 			var cell = UI.MouseCell();
@@ -294,7 +294,7 @@ namespace ZombieLand
 				map.thingGrid.ThingsAt(cell).Do(thing => thing.ClearContamination());
 		}
 
-		[DebugAction("Zombieland", "Apply: Add 0.1 floor contamination")]
+		[DebugAction("Zombieland", "Apply: Add 0.1 floor contamination", actionType = DebugActionType.ToolMap)]
 		private static void AddSomeFloorContamination()
 		{
 			var cell = UI.MouseCell();
@@ -306,7 +306,7 @@ namespace ZombieLand
 			}
 		}
 
-		[DebugAction("Zombieland", "Apply: Clear floor contamination")]
+		[DebugAction("Zombieland", "Apply: Clear floor contamination", actionType = DebugActionType.ToolMap)]
 		private static void ClearFloorContamination()
 		{
 			var cell = UI.MouseCell();
@@ -315,7 +315,7 @@ namespace ZombieLand
 				map.SetContamination(cell, 0);
 		}
 
-		[DebugAction("Zombieland", "Apply: Contamination effect")]
+		[DebugAction("Zombieland", "Apply: Contamination effect", actionType = DebugActionType.ToolMap)]
 		private static void ContaminationEffect()
 		{
 			var map = Find.CurrentMap;
