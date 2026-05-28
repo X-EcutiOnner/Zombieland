@@ -239,6 +239,84 @@ namespace ZombieLand
 			return false;
 		}
 
+		static bool TryFindOrSpawnSpitter(Map map, string target, out ZombieSpitter spitter, out bool spawnedSpitter, out object error)
+		{
+			spitter = null;
+			spawnedSpitter = false;
+			error = null;
+
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out error) == false)
+					return false;
+
+				var existing = CurrentZombies(map).OfType<ZombieSpitter>()
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				ZombieSpitter.Spawn(map, cell);
+				spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+					.FirstOrDefault(candidate => existing.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+					?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
+				spawnedSpitter = spitter != null;
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var findError) == false)
+			{
+				error = new
+				{
+					success = false,
+					error = findError
+				};
+				return false;
+			}
+			else
+			{
+				spitter = pawn as ZombieSpitter;
+			}
+
+			if (spitter != null)
+				return true;
+
+			error = new
+			{
+				success = false,
+				error = "Target is not a zombie spitter."
+			};
+			return false;
+		}
+
+		static ZombieBall ForceSpitterShot(Map map, ZombieSpitter spitter, int seed)
+		{
+			if (spitter.CurJobDef != CustomDefs.Spitter)
+				spitter.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Spitter));
+
+			var existing = map.listerThings.AllThings
+				.Where(thing => thing.def == CustomDefs.ZombieBall)
+				.Select(thing => thing.ThingID)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+			Rand.PushState(seed);
+			try
+			{
+				spitter.aggressive = true;
+				spitter.waves = Math.Max(1, spitter.waves);
+				spitter.remainingZombies = 1;
+				spitter.spitInterval = 4;
+				spitter.tickCounter = spitter.spitInterval;
+				spitter.state = SpitterState.Spitting;
+				AdvanceGameTicks(1);
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			return map.listerThings.AllThings
+				.OfType<ZombieBall>()
+				.FirstOrDefault(projectile => existing.Contains(projectile.ThingID) == false)
+				?? map.listerThings.AllThings.OfType<ZombieBall>().FirstOrDefault();
+		}
+
 		static int CountThingsNear(Map map, IntVec3 center, ThingDef thingDef, float radius)
 		{
 			if (map == null || center.IsValid == false || thingDef == null)
@@ -1699,66 +1777,13 @@ namespace ZombieLand
 				};
 			}
 
-			ZombieSpitter spitter;
-			var spawnedSpitter = false;
-			if (string.IsNullOrWhiteSpace(target))
-			{
-				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
-				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
-					return error;
-
-				var existing = CurrentZombies(map).OfType<ZombieSpitter>()
-					.Select(ZombieRuntimeActions.StableThingId)
-					.ToHashSet(StringComparer.OrdinalIgnoreCase);
-				ZombieSpitter.Spawn(map, cell);
-				spitter = CurrentZombies(map).OfType<ZombieSpitter>()
-					.FirstOrDefault(candidate => existing.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
-					?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
-				spawnedSpitter = spitter != null;
-			}
-			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
-			{
-				return new
-				{
-					success = false,
-					error
-				};
-			}
-			else
-			{
-				spitter = pawn as ZombieSpitter;
-			}
-
-			if (spitter == null)
-			{
-				return new
-				{
-					success = false,
-					error = "Target is not a zombie spitter."
-				};
-			}
-
-			if (spitter.CurJobDef != CustomDefs.Spitter)
-				spitter.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Spitter));
+			if (TryFindOrSpawnSpitter(map, target, out var spitter, out var spawnedSpitter, out var error) == false)
+				return error;
 
 			var before = DescribeZombie(spitter);
 			var zombieBallsBefore = map.listerThings.AllThings.Count(thing => thing.def == CustomDefs.ZombieBall);
 			var zombieCountBefore = CurrentZombies(map).Length;
-			Rand.PushState(seed);
-			try
-			{
-				spitter.aggressive = true;
-				spitter.waves = Math.Max(1, spitter.waves);
-				spitter.remainingZombies = 1;
-				spitter.spitInterval = 4;
-				spitter.tickCounter = spitter.spitInterval;
-				spitter.state = SpitterState.Spitting;
-				AdvanceGameTicks(1);
-			}
-			finally
-			{
-				Rand.PopState();
-			}
+			_ = ForceSpitterShot(map, spitter, seed);
 
 			var zombieBallsAfter = map.listerThings.AllThings.Count(thing => thing.def == CustomDefs.ZombieBall);
 			var zombieCountAfter = CurrentZombies(map).Length;
@@ -1785,6 +1810,105 @@ namespace ZombieLand
 				before,
 				after = DescribeZombie(spitter),
 				zombieBalls
+			};
+		}
+
+		[Tool("zombieland/impact_zombie_ball", Description = "Launch a real ZombieBall projectile from a spitter and verify its impact path spawns a zombie.")]
+		public static object ImpactZombieBall(
+			[ToolParameter(Description = "Optional spitter id, ThingID, label, or short name. When omitted, a fresh spitter is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
+			[ToolParameter(Description = "Deterministic Rand seed for target selection and projectile launch setup.", Required = false, DefaultValue = 616161)] int seed = 616161)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			if (TryFindOrSpawnSpitter(map, target, out var spitter, out var spawnedSpitter, out var error) == false)
+				return error;
+
+			var before = DescribeZombie(spitter);
+			var zombieCountBefore = CurrentZombies(map).Length;
+			var zombieBallsBefore = map.listerThings.AllThings.Count(thing => thing.def == CustomDefs.ZombieBall);
+			var projectileTarget = GenRadial.RadialCellsAround(spitter.Position, 8f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.DistanceTo(spitter.Position) >= 3f)
+				.Where(cell => map.roofGrid.RoofAt(cell)?.isThickRoof != true)
+				.DefaultIfEmpty(IntVec3.Invalid)
+				.First();
+			if (projectileTarget.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					spawnedSpitter,
+					before,
+					after = DescribeZombie(spitter),
+					error = "No nearby clear projectile target was found."
+				};
+			}
+
+			ZombieBall projectile;
+			Rand.PushState(seed);
+			try
+			{
+				projectile = GenSpawn.Spawn(CustomDefs.ZombieBall, spitter.Position, map, WipeMode.Vanish) as ZombieBall;
+				projectile?.Launch(spitter, spitter.DrawPos + new UnityEngine.Vector3(0, 0, 0.5f), projectileTarget, projectileTarget, ProjectileHitFlags.IntendedTarget);
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			if (projectile == null)
+			{
+				return new
+				{
+					success = false,
+					spawnedSpitter,
+					before,
+					after = DescribeZombie(spitter),
+					error = "Spawning ZombieBall did not produce a projectile."
+				};
+			}
+
+			var projectileStart = projectile.Position;
+			var speed = Math.Max(0.001f, projectile.def.projectile.SpeedTilesPerTick);
+			var projectileUpdateRateTicks = Math.Max(1, projectile.UpdateRateTicks);
+			projectile.Impact(null);
+
+			var zombieCountAfter = CurrentZombies(map).Length;
+			var zombieBallsAfter = map.listerThings.AllThings.Count(thing => thing.def == CustomDefs.ZombieBall);
+			var spawnedZombies = CurrentZombies(map)
+				.Where(pawn => pawn is Zombie)
+				.OrderBy(pawn => pawn.Position.DistanceToSquared(projectileTarget))
+				.Take(5)
+				.Select(DescribeZombie)
+				.ToArray();
+
+			return new
+			{
+				success = zombieCountAfter > zombieCountBefore && zombieBallsAfter <= zombieBallsBefore,
+				spawnedSpitter,
+				seed,
+				projectileStart = ZombieRuntimeActions.DescribeCell(projectileStart),
+				projectileTarget = ZombieRuntimeActions.DescribeCell(projectileTarget),
+				speedTilesPerTick = speed,
+				projectileUpdateRateTicks,
+				impactCalledDirectly = true,
+				zombieBallsBefore,
+				zombieBallsAfter,
+				zombieCountBefore,
+				zombieCountAfter,
+				before,
+				after = DescribeZombie(spitter),
+				nearestSpawnedZombies = spawnedZombies
 			};
 		}
 
