@@ -259,6 +259,53 @@ namespace ZombieLand
 			return false;
 		}
 
+		static bool TryFindClearSpawnCell(Map map, IntVec3 root, float radius, out IntVec3 cell, out object error)
+		{
+			cell = IntVec3.Invalid;
+			error = null;
+			if (map == null)
+			{
+				error = new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+				return false;
+			}
+
+			if (root.InBounds(map) == false)
+			{
+				error = new
+				{
+					success = false,
+					error = $"Cell ({root.x}, {root.z}) is outside the current map."
+				};
+				return false;
+			}
+
+			foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+			{
+				if (candidate.InBounds(map) == false)
+					continue;
+				if (candidate.Standable(map) == false)
+					continue;
+				if (candidate.Fogged(map))
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+					continue;
+
+				cell = candidate;
+				return true;
+			}
+
+			error = new
+			{
+				success = false,
+				error = $"No clear standable unfogged cell was found near ({root.x}, {root.z})."
+			};
+			return false;
+		}
+
 		[Tool("zombieland/get_status", Description = "Read a compact live Zombieland status summary for the current RimWorld session.")]
 		public static object GetStatus()
 		{
@@ -923,6 +970,103 @@ namespace ZombieLand
 				tarSlimeBefore,
 				tarSlimeAfter,
 				tarSlimeDelta = tarSlimeAfter - tarSlimeBefore
+			};
+		}
+
+		[Tool("zombieland/heal_wounded_zombie", Description = "Use a healer zombie to clear a nearby wounded zombie's hediffs and verify the heal effect queue.")]
+		public static object HealWoundedZombie(
+			[ToolParameter(Description = "Optional healer zombie id, ThingID, label, or short name. When omitted, the first spawned healer is used, or one is spawned near map center.", Required = false, DefaultValue = "")] string target = "")
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Zombie healer;
+			var spawnedHealer = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				healer = CurrentZombies(map).OfType<Zombie>().FirstOrDefault(zombie => zombie.isHealer);
+				if (healer == null)
+				{
+					var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+					if (TryFindClearSpawnCell(map, root, 16f, out var healerCell, out var error) == false)
+						return error;
+
+					healer = ZombieRuntimeActions.SpawnZombie(healerCell, map, ZombieType.Healer, true);
+					spawnedHealer = true;
+				}
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				healer = pawn as Zombie;
+			}
+
+			if (healer == null || healer.isHealer == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(healer),
+					error = "Target is not a healer."
+				};
+			}
+
+			if (TryFindAdjacentMoveCell(healer, out var targetCell) == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(healer),
+					error = "No clear adjacent cell was found for the wounded test zombie."
+				};
+			}
+
+			var wounded = ZombieRuntimeActions.SpawnZombie(targetCell, map, ZombieType.Normal, true);
+			if (wounded == null)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(healer),
+					error = "ZombieGenerator.SpawnZombie returned no wounded test zombie."
+				};
+			}
+
+			var wound = HediffMaker.MakeHediff(HediffDefOf.BloodLoss, wounded);
+			wounded.health.AddHediff(wound);
+			var healerInfoBefore = healer.healInfo.Count;
+			var hediffsBefore = wounded.health.hediffSet.hediffs.Count;
+			healer.CustomTick(1f);
+			var healerInfoAfter = healer.healInfo.Count;
+			var hediffsAfter = wounded.health.hediffSet.hediffs.Count;
+			var queuedHealEffect = healer.healInfo.Any(info => ReferenceEquals(info.pawn, wounded));
+
+			return new
+			{
+				success = hediffsBefore > 0 && hediffsAfter == 0 && healerInfoAfter > healerInfoBefore && queuedHealEffect,
+				spawnedHealer,
+				healer = DescribeZombie(healer),
+				wounded = DescribeZombie(wounded),
+				woundedCell = ZombieRuntimeActions.DescribeCell(targetCell),
+				hediffsBefore,
+				hediffsAfter,
+				healerInfoBefore,
+				healerInfoAfter,
+				queuedHealEffect
 			};
 		}
 
