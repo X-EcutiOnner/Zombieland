@@ -282,13 +282,20 @@ namespace ZombieLand
 				driver.destination = IntVec3.Invalid;
 				return false;
 			}
+			if (zombie.HasValidDestination(driver.destination) == false)
+			{
+				driver.destination = IntVec3.Invalid;
+				return false;
+			}
 			var pather = zombie.pather;
+			if (pather.Moving && pather.Destination.Cell == driver.destination)
+				return true;
 			if (pather.curPath == null || pather.curPath.Found == false || pather.curPath.NodesLeftCount == 0)
 			{
 				driver.destination = IntVec3.Invalid;
 				return false;
 			}
-			return zombie.HasValidDestination(driver.destination);
+			return true;
 		}
 
 		// attack nearby enemies ====================================================================
