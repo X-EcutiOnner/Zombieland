@@ -1529,6 +1529,138 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/mine_with_miner_job", Description = "Put a mineable in a miner's wander direction and verify the real Stumble job mines it.")]
+		public static object MineWithMinerJob(
+			[ToolParameter(Description = "Optional miner zombie id, ThingID, label, or short name. When omitted, a fresh miner is spawned near map center.", Required = false, DefaultValue = "")] string target = "")
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Zombie miner;
+			var spawnedMiner = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+					return error;
+
+				miner = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Miner, true);
+				spawnedMiner = true;
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				miner = pawn as Zombie;
+			}
+
+			if (miner == null || miner.isMiner == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(miner),
+					error = "Target is not a miner."
+				};
+			}
+
+			if (TryFindAdjacentClearCell(miner, out var mineableCell) == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(miner),
+					error = "No clear adjacent cell was found for the mineable test block."
+				};
+			}
+
+			var mineable = GenSpawn.Spawn(ThingDefOf.MineableSteel, mineableCell, map, WipeMode.Vanish) as Mineable;
+			if (mineable == null)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(miner),
+					cell = ZombieRuntimeActions.DescribeCell(mineableCell),
+					error = "Spawning MineableSteel did not produce a Mineable."
+				};
+			}
+
+			var bodyTypeBefore = miner.story?.bodyType?.defName;
+			if (miner.story != null)
+				miner.story.bodyType = BodyTypeDefOf.Male;
+			miner.pather?.StopDead();
+			miner.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+			miner.state = ZombieState.Wandering;
+			miner.wanderDestination = mineableCell;
+			miner.miningCounter = 0;
+			var clearedPheromoneRadius = 2f;
+			ClearPheromones(map, miner.Position, clearedPheromoneRadius);
+
+			var before = DescribeZombie(miner);
+			var hitPointsBefore = mineable.HitPoints;
+			var samples = new List<object>();
+			miner.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
+			if (miner.jobs.curDriver is JobDriver_Stumble stumbleDriver)
+				stumbleDriver.destination = IntVec3.Invalid;
+
+			for (var i = 0; i < 2; i++)
+			{
+				AdvanceGameTicks(1);
+				var currentJob = miner.CurJobDef?.defName;
+				var stumbleDestination = miner.jobs.curDriver is JobDriver_Stumble currentStumbleDriver
+					? currentStumbleDriver.destination
+					: IntVec3.Invalid;
+				samples.Add(new
+				{
+					tick = i + 1,
+					currentJob,
+					stumbleDestination = ZombieRuntimeActions.DescribeCell(stumbleDestination),
+					mineableDestroyed = mineable.Destroyed,
+					mineableHitPoints = mineable.Destroyed ? 0 : mineable.HitPoints,
+					miner.miningCounter
+				});
+				if (mineable.Destroyed || mineable.HitPoints < hitPointsBefore)
+					break;
+			}
+
+			var mineableDestroyed = mineable.Destroyed;
+			var hitPointsAfter = mineableDestroyed ? 0 : mineable.HitPoints;
+
+			return new
+			{
+				success = (mineableDestroyed || hitPointsAfter < hitPointsBefore) && miner.miningCounter > 0,
+				spawnedMiner,
+				bodyTypeBefore,
+				bodyTypeDuringTest = miner.story?.bodyType?.defName,
+				clearedPheromoneRadius,
+				minerCell = ZombieRuntimeActions.DescribeCell(miner.Position),
+				mineableCell = ZombieRuntimeActions.DescribeCell(mineableCell),
+				mineableDef = mineable.def.defName,
+				mineableDestroyed,
+				hitPointsBefore,
+				hitPointsAfter,
+				hitPointDelta = hitPointsAfter - hitPointsBefore,
+				miningCounterAfter = miner.miningCounter,
+				before,
+				after = DescribeZombie(miner),
+				samples
+			};
+		}
+
 		[Tool("zombieland/move_tanky", Description = "Move a tanky zombie one valid adjacent cell and verify that it leaves a pheromone trace for other zombies.")]
 		public static object MoveTanky(
 			[ToolParameter(Description = "Optional tanky zombie id, ThingID, label, or short name. When omitted, a fresh tanky zombie is spawned near map center.", Required = false, DefaultValue = "")] string target = "")
