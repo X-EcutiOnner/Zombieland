@@ -234,6 +234,31 @@ namespace ZombieLand
 				.Count(thing => thing.def == thingDef);
 		}
 
+		static bool TryFindAdjacentMoveCell(Pawn pawn, out IntVec3 cell)
+		{
+			cell = IntVec3.Invalid;
+			var map = pawn?.Map;
+			if (map == null)
+				return false;
+
+			foreach (var offset in GenAdj.AdjacentCells)
+			{
+				var candidate = pawn.Position + offset;
+				if (candidate.InBounds(map) == false)
+					continue;
+				if (candidate.Standable(map) == false)
+					continue;
+				if (pawn.HasValidDestination(candidate) == false)
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn && thing != pawn))
+					continue;
+
+				cell = candidate;
+				return true;
+			}
+			return false;
+		}
+
 		[Tool("zombieland/get_status", Description = "Read a compact live Zombieland status summary for the current RimWorld session.")]
 		public static object GetStatus()
 		{
@@ -816,6 +841,88 @@ namespace ZombieLand
 				stickyGooDelta = stickyGooAfter - stickyGooBefore,
 				beforeZombieCount,
 				afterZombieCount
+			};
+		}
+
+		[Tool("zombieland/move_dark_slimer", Description = "Move a dark slimer one valid adjacent cell and verify that it leaves TarSlime through the position-change patch.")]
+		public static object MoveDarkSlimer(
+			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned dark slimer is used.", Required = false, DefaultValue = "")] string target = "",
+			[ToolParameter(Description = "Radius around the start cell used to count TarSlime before and after the move.", Required = false, DefaultValue = 4)] int radius = 4)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Pawn pawn;
+			string error;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				pawn = CurrentZombies(map).OfType<Zombie>().FirstOrDefault(zombie => zombie.isDarkSlimer);
+				if (pawn == null)
+				{
+					return new
+					{
+						success = false,
+						error = "No spawned dark slimer was found."
+					};
+				}
+			}
+			else if (TryFindZombie(map, target, out pawn, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+
+			if (pawn is not Zombie zombie || zombie.isDarkSlimer == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(pawn),
+					error = "Target is not a dark slimer."
+				};
+			}
+
+			if (TryFindAdjacentMoveCell(zombie, out var destination) == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(zombie),
+					error = "No valid adjacent move cell was found."
+				};
+			}
+
+			var cappedRadius = Math.Max(1, Math.Min(radius, 12));
+			var before = DescribeZombie(zombie);
+			var origin = zombie.Position;
+			var tarSlimeBefore = CountThingsNear(map, origin, CustomDefs.TarSlime, cappedRadius);
+			zombie.pather?.StopDead();
+			zombie.Position = destination;
+			zombie.Notify_Teleported(false, false);
+			var tarSlimeAfter = CountThingsNear(map, origin, CustomDefs.TarSlime, cappedRadius);
+			var after = DescribeZombie(zombie);
+
+			return new
+			{
+				success = zombie.Position == destination && tarSlimeAfter > tarSlimeBefore,
+				radius = cappedRadius,
+				origin = ZombieRuntimeActions.DescribeCell(origin),
+				destination = ZombieRuntimeActions.DescribeCell(destination),
+				before,
+				after,
+				tarSlimeBefore,
+				tarSlimeAfter,
+				tarSlimeDelta = tarSlimeAfter - tarSlimeBefore
 			};
 		}
 
