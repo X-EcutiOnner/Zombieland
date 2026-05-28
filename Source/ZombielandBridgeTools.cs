@@ -194,6 +194,35 @@ namespace ZombieLand
 				.ToArray();
 		}
 
+		static bool TryFindZombie(Map map, string target, out Pawn pawn, out string error)
+		{
+			pawn = null;
+			error = null;
+			if (map == null)
+			{
+				error = "No current map is loaded.";
+				return false;
+			}
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				error = "A zombie id, ThingID, label, or short name is required.";
+				return false;
+			}
+
+			var query = target.Trim();
+			pawn = CurrentZombies(map).FirstOrDefault(candidate =>
+				string.Equals(ZombieRuntimeActions.StableThingId(candidate), query, StringComparison.OrdinalIgnoreCase)
+				|| string.Equals(candidate.ThingID, query, StringComparison.OrdinalIgnoreCase)
+				|| string.Equals(candidate.LabelShortCap, query, StringComparison.OrdinalIgnoreCase)
+				|| string.Equals(candidate.Name?.ToStringShort, query, StringComparison.OrdinalIgnoreCase)
+				|| string.Equals(candidate.Name?.ToStringFull, query, StringComparison.OrdinalIgnoreCase));
+			if (pawn != null)
+				return true;
+
+			error = $"No spawned Zombieland pawn matched '{target}'.";
+			return false;
+		}
+
 		[Tool("zombieland/get_status", Description = "Read a compact live Zombieland status summary for the current RimWorld session.")]
 		public static object GetStatus()
 		{
@@ -618,6 +647,91 @@ namespace ZombieLand
 				afterCount = after.Length,
 				newZombieCount = newZombies.Length,
 				newZombies
+			};
+		}
+
+		[Tool("zombieland/detonate_suicide_bomber", Description = "Kill a suicide bomber through Zombie.Kill, verify it queued a Zombieland explosion, then execute the explosion.")]
+		public static object DetonateSuicideBomber(
+			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned suicide bomber is used.", Required = false, DefaultValue = "")] string target = "")
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Pawn pawn;
+			string error;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				pawn = CurrentZombies(map).OfType<Zombie>().FirstOrDefault(zombie => zombie.IsSuicideBomber);
+				if (pawn == null)
+				{
+					return new
+					{
+						success = false,
+						error = "No spawned suicide bomber was found."
+					};
+				}
+			}
+			else if (TryFindZombie(map, target, out pawn, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+
+			if (pawn is not Zombie zombie || zombie.IsSuicideBomber == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(pawn),
+					error = "Target is not a suicide bomber."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(zombie),
+					error = "The current map has no Zombieland tick manager."
+				};
+			}
+
+			var beforeZombieCount = CurrentZombies(map).Length;
+			var before = DescribeZombie(zombie);
+			var position = zombie.Position;
+			var queuedBeforeKill = tickManager.explosions?.Count ?? 0;
+			zombie.Kill(null);
+			var queuedAfterKill = tickManager.explosions?.Count ?? 0;
+			tickManager.ExecuteExplosions();
+			var queuedAfterExecute = tickManager.explosions?.Count ?? 0;
+			var afterZombieCount = CurrentZombies(map).Length;
+
+			return new
+			{
+				success = zombie.Dead && queuedAfterKill == queuedBeforeKill + 1 && queuedAfterExecute == 0,
+				position = ZombieRuntimeActions.DescribeCell(position),
+				before,
+				dead = zombie.Dead,
+				destroyed = zombie.Destroyed,
+				queuedBeforeKill,
+				queuedAfterKill,
+				queuedAfterExecute,
+				beforeZombieCount,
+				afterZombieCount,
+				explosionQueued = queuedAfterKill == queuedBeforeKill + 1,
+				explosionExecuted = queuedAfterExecute == 0
 			};
 		}
 
