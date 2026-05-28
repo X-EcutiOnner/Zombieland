@@ -16,8 +16,8 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 ## Current Unit
 
 - Target: validate special zombie pawn rendering on a native RimWorld 1.6 map.
-- Completed: compile baseline, deployment baseline, Unity bundle validation, GABS startup/play-data baseline, native 1.6 debug-map creation, and first special-zombie visual fixture. As of 2026-05-28, GABS starts RimWorld with Core, Harmony, RimBridgeServer, and Zombieland; a native 1.6 save named `ZombielandVisualLineup` contains Electrifier, Suicide Bomber, Healer, Dark Slimer, Albino, Tanky, Toxic Splasher, and Miner zombies in a compact comparison pattern. Loading that save now reaches visual-ready state without the previous unresolved render-tree errors.
-- Next blocker cluster: validate infection, corpse conversion, and special zombie behaviors beyond visuals.
+- Completed: compile baseline, deployment baseline, Unity bundle validation, GABS startup/play-data baseline, native 1.6 debug-map creation, first special-zombie visual fixture, shared debug/bridge runtime actions, and the first infection bridge smoke. As of 2026-05-28, GABS starts RimWorld with Core, Harmony, RimBridgeServer, and Zombieland; a native 1.6 save named `ZombielandVisualLineup` contains Electrifier, Suicide Bomber, Healer, Dark Slimer, Albino, Tanky, Toxic Splasher, and Miner zombies in a compact comparison pattern. Loading that save now reaches visual-ready state without the previous unresolved render-tree errors, and reloading it from an already-loaded map no longer crashes in `ZombieWanderer`.
+- Next blocker cluster: validate corpse conversion and special zombie behaviors beyond visuals.
 
 ## Decisions
 
@@ -31,7 +31,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 - Use GABS `games_start`/`games_stop`/RimBridge tools for runtime testing. Do not fall back to direct app launches when GABS startup fails; fix the GABS path or stop and report the blocker.
 - Use native 1.6 saves for runtime fixtures. Do not load RimWorld 1.4 saves in 1.6; use `/Users/ap/Documents/OlderRimWorlds/RimWorldMac1.4-UserData/Saves/Test.rws` only as a visual/source reference.
 - GABS process matching can be confused by a simultaneously running older RimWorld process because the executable name is still `RimWorld by Ludeon Studios`. Confirm the active 1.6 GABS connection before runtime tests.
-- `Source/ZombielandBridgeTools.cs` exposes repeatable Zombieland bridge actions. Prefer `zombieland/spawn_reference_lineup` over repeated manual debug-action/UI spawning for the eight-type visual fixture.
+- `Source/ZombielandBridgeTools.cs` exposes repeatable Zombieland bridge actions. Prefer `zombieland/spawn_reference_lineup` over repeated manual debug-action/UI spawning for the eight-type visual fixture. Debug actions and bridge endpoints share `Source/ZombieRuntimeActions.cs` for zombie spawn/remove and bite/infection operations; keep future test-only runtime mutations there instead of duplicating menu and bridge logic.
 
 ## Known Risks
 
@@ -39,6 +39,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 - `Source/ZombieRenderCompat.cs` is a compile-enabling compatibility layer for old `PawnRenderer.graphics` usage. Custom body/head assignment now re-resolves each zombie render tree after dirtying it, which fixes the one-frame `Attempted to draw <zombie> without a resolved render tree` errors on `ZombielandVisualLineup` load. Do not reintroduce graphics preparation in `PawnRenderer.ParallelPreRenderPawnAt`; that path touches map pawn lists off the main thread.
 - Suicide bomber bomb vests are restored for the visual baseline through an explicit overlay draw in `RenderExtras`. The old `PawnGraphicSet.ResolveApparelGraphics` injection does not participate in RimWorld 1.6 render-tree apparel drawing and still needs a cleaner render-node redesign later.
 - The old `PathFinder.FindPathNow` cost-injection transpiler is disabled for the runtime-load baseline because RimWorld 1.6 moved map pathing to the new `Verse.PathFinder` job/data model. Redesign zombie avoidance costs against 1.6 path grid customization instead of reviving the old `PathFinderNodeFast.knownCost` patch.
+- `ZombieWanderer.processor` is a static coroutine that can keep running across yields while RimWorld starts a long-event save load. It must stay guarded by `LongEventHandler.AnyEventNowOrWaiting` / `ShouldWaitForEvent` and by per-map validity checks; without those guards, loading a save from an already-loaded Zombieland map can crash in `MapInfo.ValidFloodCell -> PathGrid.WalkableFast`.
 - The cosmetic Zombieland main-menu button atlas patch is disabled because `Widgets.ButtonTextWorker` no longer contains the old draw call shape. This is not gameplay-critical.
 - Compile success is not runtime success. The first runtime phase must validate mod load, map start, zombie spawning, pawn rendering, infection, corpse conversion, and special zombie behaviors.
 - Generated logs and build output can consume context quickly. Keep artifacts on disk and summarize.

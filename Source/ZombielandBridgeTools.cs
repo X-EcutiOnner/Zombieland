@@ -36,23 +36,6 @@ namespace ZombieLand
 
 		static Map CurrentMap => Find.CurrentMap;
 
-		static string StableThingId(Thing thing)
-		{
-			return thing == null ? null : $"Thing_{thing.ThingID}";
-		}
-
-		static object DescribeCell(IntVec3 cell)
-		{
-			if (cell.IsValid == false)
-				return null;
-
-			return new
-			{
-				x = cell.x,
-				z = cell.z
-			};
-		}
-
 		static object DescribeZombie(Pawn pawn)
 		{
 			var zombie = pawn as Zombie;
@@ -61,7 +44,7 @@ namespace ZombieLand
 
 			return new
 			{
-				pawnId = StableThingId(pawn),
+				pawnId = ZombieRuntimeActions.StableThingId(pawn),
 				thingId = pawn?.ThingID,
 				defName = pawn?.def?.defName,
 				kindDef = pawn?.kindDef?.defName,
@@ -70,7 +53,7 @@ namespace ZombieLand
 				dead = pawn?.Dead ?? false,
 				downed = pawn?.Downed ?? false,
 				faction = pawn?.Faction?.Name,
-				position = pawn == null ? null : DescribeCell(pawn.Position),
+				position = pawn == null ? null : ZombieRuntimeActions.DescribeCell(pawn.Position),
 				state = zombie?.state.ToString() ?? spitter?.state.ToString(),
 				raging = zombie?.raging ?? 0,
 				kind = DescribeZombieKind(zombie, blob, spitter),
@@ -190,37 +173,6 @@ namespace ZombieLand
 				.ToArray();
 		}
 
-		static Zombie SpawnZombieAt(IntVec3 cell, Map map, ZombieType zombieType, bool appearDirectly)
-		{
-			var zombie = ZombieGenerator.SpawnZombie(cell, map, zombieType);
-			if (zombie == null)
-				return null;
-
-			if (appearDirectly && Current.ProgramState == ProgramState.Playing)
-			{
-				zombie.rubbleCounter = Constants.RUBBLE_AMOUNT;
-				zombie.state = ZombieState.Wandering;
-			}
-			zombie.Rotation = Rot4.South;
-
-			var tickManager = map.GetComponent<TickManager>();
-			_ = tickManager?.allZombiesCached?.Add(zombie);
-			return zombie;
-		}
-
-		static int DestroyZombies(Map map)
-		{
-			var things = map.listerThings.AllThings
-				.Where(thing => thing is Zombie || thing is ZombieBlob || thing is ZombieSpitter)
-				.ToArray();
-			foreach (var thing in things)
-				thing.Destroy();
-
-			var tickManager = map.GetComponent<TickManager>();
-			tickManager?.allZombiesCached?.Clear();
-			return things.Length;
-		}
-
 		[Tool("zombieland/get_status", Description = "Read a compact live Zombieland status summary for the current RimWorld session.")]
 		public static object GetStatus()
 		{
@@ -311,7 +263,7 @@ namespace ZombieLand
 			if (TryFindSpawnCell(x, z, out var map, out var cell, out var error) == false)
 				return error;
 
-			var zombie = SpawnZombieAt(cell, map, zombieType, appearDirectly);
+			var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, zombieType, appearDirectly);
 			if (zombie == null)
 			{
 				return new
@@ -325,8 +277,8 @@ namespace ZombieLand
 			return new
 			{
 				success = zombie.Spawned,
-				requestedCell = DescribeCell(new IntVec3(x, 0, z)),
-				spawnCell = DescribeCell(cell),
+				requestedCell = ZombieRuntimeActions.DescribeCell(new IntVec3(x, 0, z)),
+				spawnCell = ZombieRuntimeActions.DescribeCell(cell),
 				appearDirectly,
 				zombie = DescribeZombie(zombie),
 				tickManagerCached = tickManager?.allZombiesCached?.Contains(zombie) ?? false
@@ -360,7 +312,7 @@ namespace ZombieLand
 				};
 			}
 
-			var destroyed = clearExisting ? DestroyZombies(map) : 0;
+			var destroyed = clearExisting ? ZombieRuntimeActions.DestroyZombies(map) : 0;
 			var success = true;
 			var results = referenceLineup.Select<LineupEntry, object>(entry =>
 			{
@@ -372,21 +324,21 @@ namespace ZombieLand
 					{
 						success = false,
 						type = entry.type.ToString(),
-						requestedCell = DescribeCell(requestedCell),
+						requestedCell = ZombieRuntimeActions.DescribeCell(requestedCell),
 						spawnCell = (object)null,
 						error,
 						zombie = (object)null
 					};
 				}
 
-				var zombie = SpawnZombieAt(cell, spawnMap, entry.type, appearDirectly);
+				var zombie = ZombieRuntimeActions.SpawnZombie(cell, spawnMap, entry.type, appearDirectly);
 				success &= zombie?.Spawned ?? false;
 				return new
 				{
 					success = zombie?.Spawned ?? false,
 					type = entry.type.ToString(),
-					requestedCell = DescribeCell(requestedCell),
-					spawnCell = DescribeCell(cell),
+					requestedCell = ZombieRuntimeActions.DescribeCell(requestedCell),
+					spawnCell = ZombieRuntimeActions.DescribeCell(cell),
 					error = zombie == null ? "ZombieGenerator.SpawnZombie returned no zombie." : null,
 					zombie = DescribeZombie(zombie)
 				};
@@ -395,7 +347,7 @@ namespace ZombieLand
 			return new
 			{
 				success,
-				origin = DescribeCell(origin),
+				origin = ZombieRuntimeActions.DescribeCell(origin),
 				destroyed,
 				appearDirectly,
 				count = results.Length,
@@ -419,8 +371,83 @@ namespace ZombieLand
 			return new
 			{
 				success = true,
-				destroyed = DestroyZombies(map)
+				destroyed = ZombieRuntimeActions.DestroyZombies(map)
 			};
 		}
+
+		[Tool("zombieland/get_pawn_infection", Description = "Read compact zombie bite and infection state for a spawned non-zombie pawn.")]
+		public static object GetPawnInfection([ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target)
+		{
+			var map = CurrentMap;
+			if (ZombieRuntimeActions.TryFindPawn(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+
+			return new
+			{
+				success = true,
+				infection = ZombieRuntimeActions.DescribePawnInfection(pawn)
+			};
+		}
+
+		[Tool("zombieland/apply_zombie_bite", Description = "Apply a Zombieland bite to a spawned pawn and return the resulting infection state.")]
+		public static object ApplyZombieBite(
+			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
+			[ToolParameter(Description = "Bite state to apply: harmful, final, or harmless.", Required = false, DefaultValue = "harmful")] string stage = "harmful")
+		{
+			var map = CurrentMap;
+			if (ZombieRuntimeActions.TryFindPawn(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+
+			if (ZombieRuntimeActions.AddZombieBite(pawn, stage, out var bite, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+
+			return new
+			{
+				success = true,
+				biteLabel = bite.LabelCap,
+				stage = stage ?? "harmful",
+				infection = ZombieRuntimeActions.DescribePawnInfection(pawn)
+			};
+		}
+
+		[Tool("zombieland/remove_pawn_infections", Description = "Make zombie bites harmless and remove active Zombieland infection hediffs from a spawned pawn.")]
+		public static object RemovePawnInfections([ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target)
+		{
+			var map = CurrentMap;
+			if (ZombieRuntimeActions.TryFindPawn(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+
+			return new
+			{
+				success = true,
+				removedInfectionHediffs = ZombieRuntimeActions.RemoveZombieInfections(pawn),
+				infection = ZombieRuntimeActions.DescribePawnInfection(pawn)
+			};
+		}
+
 	}
 }

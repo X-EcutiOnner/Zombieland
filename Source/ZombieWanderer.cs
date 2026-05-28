@@ -12,6 +12,7 @@ namespace ZombieLand
 {
 	public class MapInfo
 	{
+		readonly Map map;
 		readonly byte[][] vecGrids;
 		int publicIndex;
 		int privateIndex = 1;
@@ -55,8 +56,10 @@ namespace ZombieLand
 		};
 
 		public static TraverseParms traverseParms = TraverseParms.For(TraverseMode.NoPassClosedDoorsOrWater, Danger.Deadly, true, false, true);
+
 		public MapInfo(Map map)
 		{
+			this.map = map;
 			mapSizeX = map.Size.x;
 			mapSizeZ = map.Size.z;
 			mapSize = mapSizeX * mapSizeZ;
@@ -71,7 +74,15 @@ namespace ZombieLand
 
 		public bool IsInValidState()
 		{
+			if (LongEventHandler.AnyEventNowOrWaiting || LongEventHandler.ShouldWaitForEvent)
+				return false;
+			if (Current.Game == null || Current.ProgramState != ProgramState.Playing || Scribe.mode != LoadSaveMode.Inactive)
+				return false;
+			if (map == null || Find.Maps?.Contains(map) != true)
+				return false;
 			if (mapSize == 0)
+				return false;
+			if (map.Size.x != mapSizeX || map.Size.z != mapSizeZ)
 				return false;
 			if (pathGrid == null)
 				return false;
@@ -170,6 +181,8 @@ namespace ZombieLand
 
 		bool BlocksDiagonalMovement(int x, int z)
 		{
+			if (x < 0 || x >= mapSizeX || z < 0 || z >= mapSizeZ)
+				return true;
 			var idx = x + mapSizeX * z;
 			return pathGrid.WalkableFast(idx) == false || (edificeGrid != null && edificeGrid[idx] is Building_Door);
 		}
@@ -186,6 +199,9 @@ namespace ZombieLand
 			// used by the main thread
 			try
 			{
+				if (IsInValidState() == false)
+					return false;
+
 				if (pathGrid.WalkableFast(cell) == false)
 				{
 					if (ignoreBuildings)
@@ -211,8 +227,12 @@ namespace ZombieLand
 		}
 
 		static readonly Stopwatch watch = new();
+
 		IEnumerator Recalculate(IntVec3[] positions, bool ignoreBuildings)
 		{
+			if (IsInValidState() == false)
+				yield break;
+
 			positions
 				.Where(cell => GetDirectInternal(cell, ignoreBuildings, false) == 0)
 				.Do(c =>
@@ -227,6 +247,9 @@ namespace ZombieLand
 
 			while (highPrioSet.Count + lowPrioSet.Count > 0)
 			{
+				if (IsInValidState() == false)
+					yield break;
+
 				if (highPrioSet.Count == 0)
 					while (lowPrioSet.Count > 0)
 						highPrioSet.Enqueue(lowPrioSet.Dequeue());
@@ -264,6 +287,9 @@ namespace ZombieLand
 
 		public IEnumerator RecalculateAll(IntVec3[] positions, IEnumerable<Zombie> zombies)
 		{
+			if (IsInValidState() == false)
+				yield break;
+
 			if (dirtyCells)
 			{
 				ClearCells();
@@ -275,7 +301,11 @@ namespace ZombieLand
 				dirtyCells = true;
 				var it1 = Recalculate(positions, false);
 				while (it1.MoveNext())
+				{
+					if (IsInValidState() == false)
+						yield break;
 					yield return null;
+				}
 			}
 
 			var tankys = zombies.Where(zombie => zombie.IsTanky);
@@ -288,7 +318,11 @@ namespace ZombieLand
 				dirtyCells = true;
 				var it2 = Recalculate(positions, true);
 				while (it2.MoveNext())
+				{
+					if (IsInValidState() == false)
+						yield break;
 					yield return null;
+				}
 			}
 
 			publicIndex = privateIndex;
@@ -320,6 +354,7 @@ namespace ZombieLand
 				if (Current.Game != null && Current.ProgramState == ProgramState.Playing && Scribe.mode == LoadSaveMode.Inactive)
 				{
 					var maps = Find.Maps.ToArray();
+					grids.Keys.Where(map => maps.Contains(map) == false).ToArray().Do(map => grids.Remove(map));
 					foreach (var map in maps)
 					{
 						if (Current.Game == null || Current.ProgramState != ProgramState.Playing || Scribe.mode != LoadSaveMode.Inactive)
@@ -338,11 +373,17 @@ namespace ZombieLand
 								.Select(pawn => pawn.Position).ToArray();
 							didNothing = false;
 							yield return null;
+							if (info.IsInValidState() == false)
+								continue;
 							if (colonistPositions.Any())
 							{
 								var it = info.RecalculateAll(colonistPositions, mapPawns.OfType<Zombie>());
 								while (it.MoveNext())
+								{
+									if (info.IsInValidState() == false)
+										break;
 									yield return null;
+								}
 							}
 						}
 					}

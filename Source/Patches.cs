@@ -409,6 +409,9 @@ namespace ZombieLand
 		{
 			static void Prefix(Verse.TickManager __instance)
 			{
+				if (LongEventHandler.AnyEventNowOrWaiting || LongEventHandler.ShouldWaitForEvent)
+					return;
+
 				_ = ZombieWanderer.processor.MoveNext();
 				if (Find.TickManager.Paused)
 					return;

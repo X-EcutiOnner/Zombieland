@@ -19,19 +19,7 @@ namespace ZombieLand
 			if (cell.InBounds(map) == false)
 				return;
 
-			var zombie = ZombieGenerator.SpawnZombie(cell, map, type);
-			if (Current.ProgramState != ProgramState.Playing)
-				return;
-
-			if (appearDirectly)
-			{
-				zombie.rubbleCounter = Constants.RUBBLE_AMOUNT;
-				zombie.state = ZombieState.Wandering;
-			}
-			zombie.Rotation = Rot4.South;
-
-			var tickManager = Find.CurrentMap.GetComponent<TickManager>();
-			_ = tickManager.allZombiesCached.Add(zombie);
+			_ = ZombieRuntimeActions.SpawnZombie(cell, map, type, appearDirectly);
 		}
 
 		[DebugAction("Zombieland", "Spawn: Zombie (dig out)")]
@@ -164,12 +152,7 @@ namespace ZombieLand
 		[DebugAction("Zombieland", "Remove: All Zombies")]
 		private static void RemoveAllZombies()
 		{
-			var things = Find.CurrentMap.listerThings.AllThings.ToArray();
-			foreach (var thing in things)
-			{
-				if (thing is Zombie || thing is ZombieBlob || thing is ZombieSpitter)
-					thing.Destroy();
-			}
+			_ = ZombieRuntimeActions.DestroyZombies(Find.CurrentMap);
 		}
 
 		[DebugAction("Zombieland", "Convert: Make Zombie")]
@@ -180,7 +163,7 @@ namespace ZombieLand
 			{
 				if (thing is not Pawn pawn || pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
 					continue;
-				Tools.ConvertToZombie(pawn, map, true);
+				ZombieRuntimeActions.ConvertPawnToZombie(pawn, map, true);
 			}
 		}
 
@@ -202,44 +185,18 @@ namespace ZombieLand
 			{
 				if (thing is not Pawn pawn || pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
 					continue;
-
-				var bodyPart = pawn.health.hediffSet
-						  .GetNotMissingParts(BodyPartHeight.Undefined, BodyPartDepth.Outside, null, null)
-					.Where(r => r.def.IsSolid(r, pawn.health.hediffSet.hediffs) == false)
-					.SafeRandomElement();
-				if (bodyPart == null)
-					continue;
-
-				var def = HediffDef.Named("ZombieBite");
-				var bite = (Hediff_Injury_ZombieBite)HediffMaker.MakeHediff(def, pawn, bodyPart);
-				if (bite.TendDuration?.ZombieInfector == null)
-					continue;
-
-				bite.mayBecomeZombieWhenDead = true;
-				bite.TendDuration.ZombieInfector.MakeHarmfull();
-				var damageInfo = new DamageInfo(CustomDefs.ZombieBite, 2);
-				pawn.health.AddHediff(bite, bodyPart, damageInfo);
+				_ = ZombieRuntimeActions.AddZombieBite(pawn, "harmful", out _, out _);
 			}
 		}
 
 		[DebugAction("Zombieland", "Apply: Remove infections")]
 		private static void ApplyRemoveInfections()
 		{
-			var tmpHediffInjuryZombieBites = new List<Hediff_Injury_ZombieBite>();
 			foreach (var thing in Find.CurrentMap.thingGrid.ThingsAt(UI.MouseCell()))
 			{
 				if (thing is not Pawn pawn || pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
 					continue;
-				tmpHediffInjuryZombieBites.Clear();
-				pawn.health.hediffSet.GetHediffs(ref tmpHediffInjuryZombieBites);
-				tmpHediffInjuryZombieBites.Do(bite =>
-					{
-						bite.mayBecomeZombieWhenDead = false;
-						var tendDuration = bite.TryGetComp<HediffComp_Zombie_TendDuration>();
-						tendDuration.ZombieInfector.MakeHarmless();
-					});
-
-				_ = pawn.health.hediffSet.hediffs.RemoveAll(hediff => hediff is Hediff_ZombieInfection);
+				_ = ZombieRuntimeActions.RemoveZombieInfections(pawn);
 			}
 		}
 
