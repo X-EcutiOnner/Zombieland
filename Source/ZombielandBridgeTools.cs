@@ -1489,5 +1489,93 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/damage_albino", Description = "Apply real bullet and explosive damage to an albino zombie and verify its damage filter blocks only non-explosive hits.")]
+		public static object DamageAlbino(
+			[ToolParameter(Description = "Optional albino zombie id, ThingID, label, or short name. When omitted, a fresh albino zombie is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
+			[ToolParameter(Description = "Deterministic Rand seed for the repeated bullet damage sample.", Required = false, DefaultValue = 31337)] int seed = 31337,
+			[ToolParameter(Description = "Number of one-damage bullet attempts to sample.", Required = false, DefaultValue = 20)] int bulletAttempts = 20)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Zombie albino;
+			var spawnedAlbino = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+					return error;
+
+				albino = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Albino, true);
+				spawnedAlbino = true;
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				albino = pawn as Zombie;
+			}
+
+			if (albino == null || albino.isAlbino == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(albino),
+					error = "Target is not an albino zombie."
+				};
+			}
+
+			var cappedAttempts = Math.Max(4, Math.Min(bulletAttempts, 60));
+			var before = DescribeZombie(albino);
+			var bulletDamageTotals = new float[cappedAttempts];
+			Rand.PushState(seed);
+			try
+			{
+				for (var i = 0; i < cappedAttempts; i++)
+				{
+					var dinfo = new DamageInfo(DamageDefOf.Bullet, 1f, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+					bulletDamageTotals[i] = albino.TakeDamage(dinfo).totalDamageDealt;
+				}
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			var explosiveInfo = new DamageInfo(DamageDefOf.Bomb, 1f, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+			var explosiveDamage = albino.TakeDamage(explosiveInfo).totalDamageDealt;
+			var bulletHits = bulletDamageTotals.Count(total => total > 0f);
+			var bulletBlocked = bulletDamageTotals.Count(total => total <= 0f);
+
+			return new
+			{
+				success = bulletHits > 0 && bulletBlocked > 0 && explosiveDamage > 0f,
+				spawnedAlbino,
+				seed,
+				bulletAttempts = cappedAttempts,
+				bulletHits,
+				bulletBlocked,
+				bulletDamageTotal = bulletDamageTotals.Sum(),
+				bulletDamageTotals,
+				explosiveDamage,
+				before,
+				after = DescribeZombie(albino)
+			};
+		}
+
 	}
 }
