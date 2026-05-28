@@ -16,8 +16,6 @@ namespace ZombieLand
 		static readonly float[] elementSizes = [2.5f, 2.4f, 1.6f, 1.2f, 1f, 0.9f, 0.9f, 1f, 1f];
 		// static readonly float[] elementSizes = [1f, 1f, 1f, 1f, 1f, 1f, 1f, 1f, 1f];
 
-		static readonly Material debugMaterial = SolidColorMaterials.SimpleSolidColorMaterial(Color.red.ToTransparent(0.2f));
-
 		struct Metaball
 		{
 			public float radius;
@@ -34,8 +32,6 @@ namespace ZombieLand
 
 		Mesh mesh = null;
 		Material metaballMaterial;
-
-		Mesh debugMesh = null;
 
 		float radius, power, centerX, centerZ;
 
@@ -79,7 +75,6 @@ namespace ZombieLand
 			metaballBuffer.Dispose();
 
 			Object.Destroy(mesh);
-			Object.Destroy(debugMesh);
 		}
 
 		void AddCell(IntVec3 newCell)
@@ -117,10 +112,6 @@ namespace ZombieLand
 			if (mesh != null)
 				Object.Destroy(mesh);
 			mesh = MeshMakerPlanes.NewPlaneMesh(size2, false, false, false);
-
-			if (debugMesh != null)
-				Object.Destroy(debugMesh);
-			debugMesh = MeshMakerPlanes.NewPlaneMesh(size2, false, false, false);
 
 			var allCells = cells.ToArray();
 			var cellCount = allCells.Length;
@@ -171,7 +162,6 @@ namespace ZombieLand
 		public override void DrawAt(Vector3 drawLoc, bool flip = false)
 		{
 			var offset = new Vector3(centerX, 0, centerZ);
-			Graphics.DrawMesh(debugMesh, drawLoc + offset + new Vector3(0, -0.0001f, 0), Quaternion.identity, debugMaterial, 0);
 			Graphics.DrawMesh(mesh, drawLoc + offset, Quaternion.identity, metaballMaterial, 0);
 		}
 

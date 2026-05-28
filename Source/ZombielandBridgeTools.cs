@@ -1912,5 +1912,46 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/spawn_blob", Description = "Spawn a ZombieBlob through its runtime spawn path and verify it enters the map with the blob job.")]
+		public static object SpawnBlob(
+			[ToolParameter(Description = "Target x coordinate. Use -1 with z -1 to spawn near map center.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Target z coordinate. Use -1 with x -1 to spawn near map center.", Required = false, DefaultValue = -1)] int z = -1)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = x >= 0 && z >= 0 ? new IntVec3(x, 0, z) : new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+				return error;
+
+			var existing = CurrentZombies(map).OfType<ZombieBlob>()
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			ZombieBlob.Spawn(map, cell);
+			var blob = CurrentZombies(map).OfType<ZombieBlob>()
+				.FirstOrDefault(candidate => existing.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
+
+			return new
+			{
+				success = blob?.Spawned == true && blob.CurJobDef == CustomDefs.Blob,
+				requestedCell = ZombieRuntimeActions.DescribeCell(root),
+				spawnCell = ZombieRuntimeActions.DescribeCell(cell),
+				blob = DescribeZombie(blob),
+				assets = new
+				{
+					Assets.initialized,
+					hasMetaballShader = Assets.MetaballShader != null
+				}
+			};
+		}
+
 	}
 }
