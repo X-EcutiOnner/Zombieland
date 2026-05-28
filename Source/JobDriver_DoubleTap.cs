@@ -47,7 +47,7 @@ namespace ZombieLand
 			});
 
 			_ = this.FailOnDespawnedOrNull(TargetIndex.A);
-			yield return Toils_Goto.GotoThing(TargetIndex.A, PathEndMode.OnCell);
+			yield return Toils_Goto.GotoThing(TargetIndex.A, PathEndMode.ClosestTouch);
 
 			var doubleTap = new Toil
 			{
@@ -106,7 +106,7 @@ namespace ZombieLand
 			};
 
 			_ = doubleTap.FailOnDespawnedOrNull(TargetIndex.A);
-			_ = doubleTap.FailOnCannotTouch(TargetIndex.A, PathEndMode.OnCell);
+			_ = doubleTap.FailOnCannotTouch(TargetIndex.A, PathEndMode.ClosestTouch);
 
 			doubleTap.AddEndCondition(delegate
 			{

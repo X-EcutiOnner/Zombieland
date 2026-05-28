@@ -956,6 +956,164 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/double_tap_infected_corpse", Description = "Run the real DoubleTap job on an infected corpse and verify the missing brain prevents corpse conversion.")]
+		public static object DoubleTapInfectedCorpse()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var zombieCorpses = map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray();
+			foreach (var zombieCorpse in zombieCorpses)
+				zombieCorpse.Destroy();
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+			actor.workSettings?.DisableAll();
+			if (TryFindAdjacentClearCell(actor, out var victimCell) == false
+				&& TryFindClearSpawnCell(map, actor.Position, 8f, out victimCell, out var spawnError) == false)
+				return spawnError;
+
+			var victim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(victim, victimCell, map, WipeMode.Vanish);
+			if (ZombieRuntimeActions.AddZombieBite(victim, "final", out var bite, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					victim = DescribePawn(victim),
+					error
+				};
+			}
+
+			if (ZombieRuntimeActions.KillPawnToCorpse(victim, out var corpse, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					victim = DescribePawn(victim),
+					biteLabel = bite.LabelCap,
+					error
+				};
+			}
+
+			var oldHours = ZombieSettings.Values.hoursAfterDeathToBecomeZombie;
+			ZombieSettings.Values.hoursAfterDeathToBecomeZombie = Math.Max(1, oldHours);
+			try
+			{
+				actor.pather?.StopDead();
+				actor.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+
+				var workGiver = new WorkGiver_DoubleTap();
+				var hasForcedJob = workGiver.HasJobOnThing(actor, corpse, true);
+				var job = workGiver.JobOnThing(actor, corpse, true);
+				if (hasForcedJob == false || job == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						corpse = DescribeCorpse(corpse),
+						hasForcedJob,
+						jobDef = job?.def?.defName,
+						error = "WorkGiver_DoubleTap did not create a forced DoubleTap job."
+					};
+				}
+
+				var meleeDps = Math.Max(0.1f, actor.GetStatValue(StatDefOf.MeleeDPS, true));
+				var maxHitWindows = (int)Math.Ceiling(100f / (meleeDps * 4f)) + 1;
+				var maxTicks = 2 + maxHitWindows * 80;
+				var samples = new List<object>();
+				var brainBefore = corpse.InnerPawn?.health?.hediffSet?.GetBrain()?.def?.defName;
+				job.playerForced = true;
+				var jobDefName = job.def?.defName;
+				actor.jobs.StartJob(job, JobCondition.InterruptForced, null, true, true);
+				var startedJob = actor.CurJobDef?.defName;
+
+				var tickHit = -1;
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					var brainMissing = corpse.InnerPawn?.health?.hediffSet?.GetBrain() == null;
+					if (tick == 1 || tick == maxTicks || tick % 80 == 0 || brainMissing)
+					{
+						samples.Add(new
+						{
+							tick,
+							actorJob = actor.CurJobDef?.defName,
+							brainMissing,
+							corpseSpawned = corpse.Spawned,
+							corpseDestroyed = corpse.Destroyed
+						});
+					}
+
+					if (brainMissing)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var brainMissingAfter = corpse.InnerPawn?.health?.hediffSet?.GetBrain() == null;
+				var queue = map.GetComponent<TickManager>()?.colonistsToConvert;
+				var queueCountBeforeRot = queue?.Count ?? -1;
+				var queuedBeforeRot = queue?.Contains(corpse) ?? false;
+				var rotTriggered = ZombieRuntimeActions.TriggerCorpseRotStageChanged(corpse, out var rotStageBefore, out var rotStageAfter, out error);
+				var queueCountAfterRot = queue?.Count ?? -1;
+				var queuedAfterRot = queue?.Contains(corpse) ?? false;
+
+				return new
+				{
+					success = brainBefore != null
+						&& brainMissingAfter
+						&& tickHit > 0
+						&& rotTriggered
+						&& queuedBeforeRot == false
+						&& queuedAfterRot == false,
+					destroyedZombies,
+					destroyedZombieCorpses = zombieCorpses.Length,
+					actor = DescribePawn(actor),
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					corpse = DescribeCorpse(corpse),
+					victimCell = ZombieRuntimeActions.DescribeCell(victimCell),
+					biteLabel = bite.LabelCap,
+					restoredHoursAfterDeathToBecomeZombie = oldHours,
+					hasForcedJob,
+					jobDef = jobDefName,
+					startedJob,
+					meleeDps,
+					maxHitWindows,
+					maxTicks,
+					tickHit,
+					brainBefore,
+					brainMissingAfter,
+					rotTriggered,
+					rotStageBefore = rotStageBefore.ToString(),
+					rotStageAfter = rotStageAfter.ToString(),
+					rotError = error,
+					queueCountBeforeRot,
+					queueCountAfterRot,
+					queuedBeforeRot,
+					queuedAfterRot,
+					samples
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.hoursAfterDeathToBecomeZombie = oldHours;
+			}
+		}
+
 		[Tool("zombieland/detonate_suicide_bomber", Description = "Kill a suicide bomber through Zombie.Kill, verify it queued a Zombieland explosion, then execute the explosion.")]
 		public static object DetonateSuicideBomber(
 			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned suicide bomber is used.", Required = false, DefaultValue = "")] string target = "")
