@@ -266,6 +266,33 @@ namespace ZombieLand
 			return false;
 		}
 
+		static bool TryFindAdjacentClearCell(Pawn pawn, out IntVec3 cell)
+		{
+			cell = IntVec3.Invalid;
+			var map = pawn?.Map;
+			if (map == null)
+				return false;
+
+			foreach (var offset in GenAdj.AdjacentCells)
+			{
+				var candidate = pawn.Position + offset;
+				if (candidate.InBounds(map) == false)
+					continue;
+				if (candidate.Standable(map) == false)
+					continue;
+				if (candidate.Fogged(map))
+					continue;
+				if (candidate.GetFirstThing<Mineable>(map) != null)
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+					continue;
+
+				cell = candidate;
+				return true;
+			}
+			return false;
+		}
+
 		static bool TryFindClearSpawnCell(Map map, IntVec3 root, float radius, out IntVec3 cell, out object error)
 		{
 			cell = IntVec3.Invalid;
@@ -1236,6 +1263,100 @@ namespace ZombieLand
 				tarSmokeThingDelta = tarSmokeThingsAfter - tarSmokeThingsBefore,
 				before,
 				after = DescribeZombie(darkSlimer)
+			};
+		}
+
+		[Tool("zombieland/mine_with_miner", Description = "Place a mineable block next to a miner zombie and verify Zombieland's mining code damages it.")]
+		public static object MineWithMiner(
+			[ToolParameter(Description = "Optional miner zombie id, ThingID, label, or short name. When omitted, a fresh miner is spawned near map center.", Required = false, DefaultValue = "")] string target = "")
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Zombie miner;
+			var spawnedMiner = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+					return error;
+
+				miner = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Miner, true);
+				spawnedMiner = true;
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				miner = pawn as Zombie;
+			}
+
+			if (miner == null || miner.isMiner == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(miner),
+					error = "Target is not a miner."
+				};
+			}
+
+			if (TryFindAdjacentClearCell(miner, out var mineableCell) == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(miner),
+					error = "No clear adjacent cell was found for the mineable test block."
+				};
+			}
+
+			var mineable = GenSpawn.Spawn(ThingDefOf.MineableSteel, mineableCell, map, WipeMode.Vanish) as Mineable;
+			if (mineable == null)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(miner),
+					cell = ZombieRuntimeActions.DescribeCell(mineableCell),
+					error = "Spawning MineableSteel did not produce a Mineable."
+				};
+			}
+
+			var hitPointsBefore = mineable.HitPoints;
+			var miningCounterBefore = miner.miningCounter;
+			var mined = ZombieStateHandler.Mine(null, miner, true);
+			var mineableDestroyed = mineable.Destroyed;
+			var hitPointsAfter = mineableDestroyed ? 0 : mineable.HitPoints;
+			var miningCounterAfter = miner.miningCounter;
+
+			return new
+			{
+				success = mined && hitPointsAfter < hitPointsBefore && miningCounterAfter > miningCounterBefore,
+				spawnedMiner,
+				mined,
+				miner = DescribeZombie(miner),
+				mineableCell = ZombieRuntimeActions.DescribeCell(mineableCell),
+				mineableDef = mineable.def.defName,
+				mineableDestroyed,
+				hitPointsBefore,
+				hitPointsAfter,
+				hitPointDelta = hitPointsAfter - hitPointsBefore,
+				miningCounterBefore,
+				miningCounterAfter
 			};
 		}
 
