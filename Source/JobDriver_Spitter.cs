@@ -223,10 +223,14 @@ namespace ZombieLand
 
 		public override string GetReport()
 		{
-			var modeStr = spitter.aggressive ? "Aggressive".Translate() : "Calm".Translate();
-			var waveStr = spitter.waves < 1 ? "" : $"{spitter.waves} {"Waves".Translate()}";
-			var stateStr = ("SpitterState" + Enum.GetName(typeof(SpitterState), spitter.state)).Translate();
-			var zombieStr = spitter.state != SpitterState.Spitting ? "" : $", {spitter.remainingZombies} zombies";
+			var reportSpitter = spitter ?? pawn as ZombieSpitter;
+			if (reportSpitter == null)
+				return "zombie spitter";
+
+			var modeStr = reportSpitter.aggressive ? "Aggressive".Translate() : "Calm".Translate();
+			var waveStr = reportSpitter.waves < 1 ? "" : $"{reportSpitter.waves} {"Waves".Translate()}";
+			var stateStr = ("SpitterState" + Enum.GetName(typeof(SpitterState), reportSpitter.state)).Translate();
+			var zombieStr = reportSpitter.state != SpitterState.Spitting ? "" : $", {reportSpitter.remainingZombies} zombies";
 			return $"{modeStr}, {waveStr}, {stateStr}{zombieStr}";
 		}
 

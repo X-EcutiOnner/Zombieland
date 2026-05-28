@@ -66,6 +66,11 @@ namespace ZombieLand
 				isAlbino = zombie?.isAlbino ?? false,
 				isDarkSlimer = zombie?.isDarkSlimer ?? false,
 				isHealer = zombie?.isHealer ?? false,
+				spitterAggressive = spitter?.aggressive,
+				spitterWaves = spitter?.waves,
+				spitterRemainingZombies = spitter?.remainingZombies,
+				spitterSpitInterval = spitter?.spitInterval,
+				spitterTickCounter = spitter?.tickCounter,
 				currentJob = pawn?.CurJobDef?.defName,
 				currentJobReport = pawn?.CurJob?.GetReport(pawn)
 			};
@@ -1676,6 +1681,110 @@ namespace ZombieLand
 				suitChanged,
 				before,
 				after = DescribeZombie(tanky)
+			};
+		}
+
+		[Tool("zombieland/spit_zombie_ball", Description = "Put a spitter into its firing state and verify the real job-driver shoot path spawns a ZombieBall projectile.")]
+		public static object SpitZombieBall(
+			[ToolParameter(Description = "Optional spitter id, ThingID, label, or short name. When omitted, a fresh spitter is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
+			[ToolParameter(Description = "Deterministic Rand seed for target selection and projectile launch setup.", Required = false, DefaultValue = 515151)] int seed = 515151)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			ZombieSpitter spitter;
+			var spawnedSpitter = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+					return error;
+
+				var existing = CurrentZombies(map).OfType<ZombieSpitter>()
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				ZombieSpitter.Spawn(map, cell);
+				spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+					.FirstOrDefault(candidate => existing.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+					?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
+				spawnedSpitter = spitter != null;
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				spitter = pawn as ZombieSpitter;
+			}
+
+			if (spitter == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Target is not a zombie spitter."
+				};
+			}
+
+			if (spitter.CurJobDef != CustomDefs.Spitter)
+				spitter.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Spitter));
+
+			var before = DescribeZombie(spitter);
+			var zombieBallsBefore = map.listerThings.AllThings.Count(thing => thing.def == CustomDefs.ZombieBall);
+			var zombieCountBefore = CurrentZombies(map).Length;
+			Rand.PushState(seed);
+			try
+			{
+				spitter.aggressive = true;
+				spitter.waves = Math.Max(1, spitter.waves);
+				spitter.remainingZombies = 1;
+				spitter.spitInterval = 4;
+				spitter.tickCounter = spitter.spitInterval;
+				spitter.state = SpitterState.Spitting;
+				AdvanceGameTicks(1);
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			var zombieBallsAfter = map.listerThings.AllThings.Count(thing => thing.def == CustomDefs.ZombieBall);
+			var zombieCountAfter = CurrentZombies(map).Length;
+			var zombieBalls = map.listerThings.AllThings
+				.Where(thing => thing.def == CustomDefs.ZombieBall)
+				.Select(thing => new
+				{
+					thingId = thing.ThingID,
+					position = ZombieRuntimeActions.DescribeCell(thing.Position),
+					spawned = thing.Spawned
+				})
+				.ToArray();
+
+			return new
+			{
+				success = zombieBallsAfter > zombieBallsBefore && spitter.remainingZombies == 0,
+				spawnedSpitter,
+				seed,
+				zombieBallsBefore,
+				zombieBallsAfter,
+				zombieBallDelta = zombieBallsAfter - zombieBallsBefore,
+				zombieCountBefore,
+				zombieCountAfter,
+				before,
+				after = DescribeZombie(spitter),
+				zombieBalls
 			};
 		}
 
