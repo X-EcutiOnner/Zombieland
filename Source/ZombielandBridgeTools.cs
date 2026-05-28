@@ -1375,6 +1375,94 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/rope_zombie_job", Description = "Run the real RopeZombie job from a colonist to a live zombie and verify the zombie becomes roped.")]
+		public static object RopeZombieJob()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+			actor.workSettings?.DisableAll();
+
+			if (TryFindAdjacentClearCell(actor, out var zombieCell) == false
+				&& TryFindClearSpawnCell(map, actor.Position, 8f, out zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "ZombieGenerator.SpawnZombie returned no zombie."
+				};
+			}
+
+			var job = JobMaker.MakeJob(CustomDefs.RopeZombie, zombie);
+			job.playerForced = true;
+			var canReserveAndReach = actor.CanReach(zombie, PathEndMode.Touch, Danger.Deadly)
+				&& zombie.ropedBy == null;
+			actor.drafter.Drafted = true;
+			_ = actor.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
+			var startedJob = actor.CurJobDef?.defName;
+			var maxTicks = 180;
+			var tickHit = -1;
+			var samples = new List<object>();
+
+			for (var tick = 1; tick <= maxTicks; tick++)
+			{
+				AdvanceGameTicks(1);
+				var roped = ReferenceEquals(zombie.ropedBy, actor);
+				if (tick == 1 || tick == maxTicks || tick % 30 == 0 || roped)
+				{
+					samples.Add(new
+					{
+						tick,
+						actorJob = actor.CurJobDef?.defName,
+						zombieRopedBy = zombie.ropedBy?.ThingID,
+						zombie.IsRopedOrConfused
+					});
+				}
+
+				if (roped)
+				{
+					tickHit = tick;
+					break;
+				}
+			}
+
+			return new
+			{
+				success = canReserveAndReach && tickHit > 0 && ReferenceEquals(zombie.ropedBy, actor) && zombie.IsRopedOrConfused,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				zombie = DescribeZombie(zombie),
+				actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+				zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+				canReserveAndReach,
+				startedJob,
+				maxTicks,
+				tickHit,
+				ropedBy = zombie.ropedBy?.ThingID,
+				isRopedOrConfused = zombie.IsRopedOrConfused,
+				samples
+			};
+		}
+
 		[Tool("zombieland/detonate_suicide_bomber", Description = "Kill a suicide bomber through Zombie.Kill, verify it queued a Zombieland explosion, then execute the explosion.")]
 		public static object DetonateSuicideBomber(
 			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned suicide bomber is used.", Required = false, DefaultValue = "")] string target = "")
