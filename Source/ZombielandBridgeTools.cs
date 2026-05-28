@@ -1114,6 +1114,150 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/extract_serum_from_zombie_corpse", Description = "Kill a real zombie into a ZombieCorpse, run the ExtractZombieSerum job, and verify extract is produced.")]
+		public static object ExtractSerumFromZombieCorpse()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldAmount = ZombieSettings.Values.corpsesExtractAmount;
+			ZombieSettings.Values.corpsesExtractAmount = Math.Max(1f, oldAmount);
+			try
+			{
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+				foreach (var existingCorpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+					existingCorpse.Destroy();
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+				actor.workSettings?.DisableAll();
+
+				if (TryFindAdjacentClearCell(actor, out var zombieCell) == false
+					&& TryFindClearSpawnCell(map, actor.Position, 8f, out zombieCell, out var zombieSpawnError) == false)
+					return zombieSpawnError;
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "ZombieGenerator.SpawnZombie returned no zombie."
+					};
+				}
+
+				zombie.Kill(null);
+				var corpse = zombie.Corpse as ZombieCorpse
+					?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(zombieCell)).FirstOrDefault();
+				if (corpse == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						zombie = DescribeZombie(zombie),
+						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+						error = "Killing the zombie did not leave a ZombieCorpse."
+					};
+				}
+
+				var tickManager = map.GetComponent<TickManager>();
+				if (tickManager?.allZombieCorpses?.Contains(corpse) == false)
+					tickManager.allZombieCorpses.Add(corpse);
+
+				var workGiver = new WorkGiver_ExtractZombieSerum();
+				var hasForcedJob = workGiver.HasJobOnThing(actor, corpse, true);
+				var job = workGiver.JobOnThing(actor, corpse, true);
+				if (hasForcedJob == false || job == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						corpse = DescribeCorpse(corpse),
+						hasForcedJob,
+						jobDef = job?.def?.defName,
+						error = "WorkGiver_ExtractZombieSerum did not create a forced extract job."
+					};
+				}
+
+				var extractBefore = map.listerThings.AllThings.Where(thing => thing.def == CustomDefs.ZombieExtract).Sum(thing => thing.stackCount);
+				var tendSpeed = Math.Max(0.1f, actor.GetStatValue(StatDefOf.MedicalTendSpeed, true));
+				var maxTicks = 120 + (int)Math.Ceiling(100f / (tendSpeed / 2f));
+				var samples = new List<object>();
+				job.playerForced = true;
+				var jobDefName = job.def?.defName;
+				actor.jobs.StartJob(job, JobCondition.InterruptForced, null, true, true);
+				var startedJob = actor.CurJobDef?.defName;
+				var tickHit = -1;
+
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					var extractNow = map.listerThings.AllThings.Where(thing => thing.def == CustomDefs.ZombieExtract).Sum(thing => thing.stackCount);
+					var corpseGone = corpse.Destroyed || corpse.Spawned == false;
+					if (tick == 1 || tick == maxTicks || tick % 80 == 0 || corpseGone || extractNow > extractBefore)
+					{
+						samples.Add(new
+						{
+							tick,
+							actorJob = actor.CurJobDef?.defName,
+							corpseGone,
+							extractNow
+						});
+					}
+
+					if (corpseGone && extractNow > extractBefore)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var extractAfter = map.listerThings.AllThings.Where(thing => thing.def == CustomDefs.ZombieExtract).Sum(thing => thing.stackCount);
+				var corpseDestroyed = corpse.Destroyed || corpse.Spawned == false;
+
+				return new
+				{
+					success = corpseDestroyed && extractAfter > extractBefore && tickHit > 0,
+					actor = DescribePawn(actor),
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					corpse = DescribeCorpse(corpse),
+					restoredCorpsesExtractAmount = oldAmount,
+					hasForcedJob,
+					jobDef = jobDefName,
+					startedJob,
+					tendSpeed,
+					maxTicks,
+					tickHit,
+					extractBefore,
+					extractAfter,
+					extractDelta = extractAfter - extractBefore,
+					expectedExtractPerZombie = Tools.ExtractPerZombie(),
+					corpseDestroyed,
+					trackedCorpseCount = tickManager?.allZombieCorpses?.Count ?? -1,
+					samples
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.corpsesExtractAmount = oldAmount;
+			}
+		}
+
 		[Tool("zombieland/detonate_suicide_bomber", Description = "Kill a suicide bomber through Zombie.Kill, verify it queued a Zombieland explosion, then execute the explosion.")]
 		public static object DetonateSuicideBomber(
 			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned suicide bomber is used.", Required = false, DefaultValue = "")] string target = "")
