@@ -1,6 +1,7 @@
 using RimBridgeServer.Annotations;
 using RimWorld;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Verse;
 
@@ -446,6 +447,57 @@ namespace ZombieLand
 				success = true,
 				removedInfectionHediffs = ZombieRuntimeActions.RemoveZombieInfections(pawn),
 				infection = ZombieRuntimeActions.DescribePawnInfection(pawn)
+			};
+		}
+
+		[Tool("zombieland/convert_pawn_to_zombie", Description = "Convert a spawned non-zombie pawn to a Zombieland zombie and return before/after state for smoke tests.")]
+		public static object ConvertPawnToZombie(
+			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
+			[ToolParameter(Description = "Pass true to force conversion even if the pawn normally would not convert.", Required = false, DefaultValue = true)] bool force = true)
+		{
+			var map = CurrentMap;
+			if (ZombieRuntimeActions.TryFindPawn(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			if (pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
+			{
+				return new
+				{
+					success = false,
+					error = "Target is already a Zombieland pawn."
+				};
+			}
+
+			var before = CurrentZombies(map);
+			var beforeIds = new HashSet<string>(before.Select(ZombieRuntimeActions.StableThingId));
+			var targetId = ZombieRuntimeActions.StableThingId(pawn);
+			var targetThingId = pawn.ThingID;
+			var targetLabel = pawn.LabelCap;
+
+			ZombieRuntimeActions.ConvertPawnToZombie(pawn, map, force);
+
+			var after = CurrentZombies(map);
+			var newZombies = after
+				.Where(zombie => beforeIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+				.Select(DescribeZombie)
+				.ToArray();
+
+			return new
+			{
+				success = newZombies.Length > 0,
+				targetId,
+				targetThingId,
+				targetLabel,
+				force,
+				beforeCount = before.Length,
+				afterCount = after.Length,
+				newZombieCount = newZombies.Length,
+				newZombies
 			};
 		}
 

@@ -16,8 +16,8 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 ## Current Unit
 
 - Target: validate special zombie pawn rendering on a native RimWorld 1.6 map.
-- Completed: compile baseline, deployment baseline, Unity bundle validation, GABS startup/play-data baseline, native 1.6 debug-map creation, first special-zombie visual fixture, shared debug/bridge runtime actions, and the first infection bridge smoke. As of 2026-05-28, GABS starts RimWorld with Core, Harmony, RimBridgeServer, and Zombieland; a native 1.6 save named `ZombielandVisualLineup` contains Electrifier, Suicide Bomber, Healer, Dark Slimer, Albino, Tanky, Toxic Splasher, and Miner zombies in a compact comparison pattern. Loading that save now reaches visual-ready state without the previous unresolved render-tree errors, and reloading it from an already-loaded map no longer crashes in `ZombieWanderer`.
-- Next blocker cluster: validate corpse conversion and special zombie behaviors beyond visuals.
+- Completed: compile baseline, deployment baseline, Unity bundle validation, GABS startup/play-data baseline, native 1.6 debug-map creation, first special-zombie visual fixture, shared debug/bridge runtime actions, infection bridge smoke, and direct pawn conversion bridge smoke. As of 2026-05-28, GABS starts RimWorld with Core, Harmony, RimBridgeServer, and Zombieland; a native 1.6 save named `ZombielandVisualLineup` contains Electrifier, Suicide Bomber, Healer, Dark Slimer, Albino, Tanky, Toxic Splasher, and Miner zombies in a compact comparison pattern. Loading that save now reaches visual-ready state without the previous unresolved render-tree errors, and reloading it from an already-loaded map no longer crashes in `ZombieWanderer`.
+- Next blocker cluster: validate corpse-driven conversion and special zombie behaviors beyond visuals.
 
 ## Decisions
 
@@ -31,7 +31,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 - Use GABS `games_start`/`games_stop`/RimBridge tools for runtime testing. Do not fall back to direct app launches when GABS startup fails; fix the GABS path or stop and report the blocker.
 - Use native 1.6 saves for runtime fixtures. Do not load RimWorld 1.4 saves in 1.6; use `/Users/ap/Documents/OlderRimWorlds/RimWorldMac1.4-UserData/Saves/Test.rws` only as a visual/source reference.
 - GABS process matching can be confused by a simultaneously running older RimWorld process because the executable name is still `RimWorld by Ludeon Studios`. Confirm the active 1.6 GABS connection before runtime tests.
-- `Source/ZombielandBridgeTools.cs` exposes repeatable Zombieland bridge actions. Prefer `zombieland/spawn_reference_lineup` over repeated manual debug-action/UI spawning for the eight-type visual fixture. Debug actions and bridge endpoints share `Source/ZombieRuntimeActions.cs` for zombie spawn/remove and bite/infection operations; keep future test-only runtime mutations there instead of duplicating menu and bridge logic.
+- `Source/ZombielandBridgeTools.cs` exposes repeatable Zombieland bridge actions. Prefer `zombieland/spawn_reference_lineup` over repeated manual debug-action/UI spawning for the eight-type visual fixture. Debug actions and bridge endpoints share `Source/ZombieRuntimeActions.cs` for zombie spawn/remove, bite/infection, and direct pawn conversion operations; keep future test-only runtime mutations there instead of duplicating menu and bridge logic.
 - The in-game bottom-right Menu tab uses `ListableOption_Zombieland` for the Zombieland settings option. It draws `ZombieButtonBackground` directly at the option level; avoid reviving the old global `Widgets.ButtonTextWorker` texture transpiler.
 
 ## Known Risks
