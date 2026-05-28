@@ -146,6 +146,102 @@ namespace ZombieLand
 			Tools.ConvertToZombie(pawn, map, force);
 		}
 
+		public static bool KillPawnToCorpse(Pawn pawn, out Corpse corpse, out string error)
+		{
+			corpse = null;
+			error = null;
+			if (pawn == null || pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
+			{
+				error = "Target must be a non-zombie pawn.";
+				return false;
+			}
+
+			if (pawn.Dead == false)
+			{
+				var previousProgramState = Current.ProgramState;
+				try
+				{
+					Current.ProgramState = ProgramState.Entry;
+					pawn.Kill(null);
+				}
+				finally
+				{
+					Current.ProgramState = previousProgramState;
+				}
+				Find.ColonistBar.MarkColonistsDirty();
+			}
+
+			corpse = pawn.Corpse;
+			if (corpse == null || corpse.Destroyed)
+			{
+				error = "Killing the pawn did not leave a live corpse.";
+				return false;
+			}
+			return true;
+		}
+
+		public static bool TriggerCorpseRotStageChanged(Corpse corpse, out RotStage before, out RotStage after, out string error)
+		{
+			before = RotStage.Fresh;
+			after = RotStage.Fresh;
+			error = null;
+			if (corpse == null || corpse.Destroyed)
+			{
+				error = "Target corpse is missing or destroyed.";
+				return false;
+			}
+
+			var compRottable = corpse.TryGetComp<CompRottable>();
+			if (compRottable == null)
+			{
+				error = "Target corpse has no rottable comp.";
+				return false;
+			}
+
+			before = corpse.GetRotStage();
+			compRottable.RotProgress = Math.Max(compRottable.RotProgress, compRottable.PropsRot.TicksToRotStart);
+			corpse.RotStageChanged();
+			after = corpse.GetRotStage();
+			return true;
+		}
+
+		public static bool RunQueuedConversion(Map map, ThingWithComps target, out int queueCountBefore, out int queueCountAfter, out string error)
+		{
+			queueCountBefore = 0;
+			queueCountAfter = 0;
+			error = null;
+			var queue = map?.GetComponent<TickManager>()?.colonistsToConvert;
+			if (queue == null)
+			{
+				error = "The current map has no Zombieland conversion queue.";
+				return false;
+			}
+
+			queueCountBefore = queue.Count;
+			var queued = false;
+			var items = queue.ToArray();
+			queue.Clear();
+			foreach (var item in items)
+			{
+				if (queued == false && ReferenceEquals(item, target))
+				{
+					queued = true;
+					continue;
+				}
+				queue.Enqueue(item);
+			}
+
+			queueCountAfter = queue.Count;
+			if (queued == false)
+			{
+				error = "The target was not queued for zombie conversion.";
+				return false;
+			}
+
+			Tools.ConvertToZombie(target, map);
+			return true;
+		}
+
 		public static void ApplyBiteStage(Hediff_Injury_ZombieBite bite, string stage)
 		{
 			var infector = bite.TendDuration?.ZombieInfector;

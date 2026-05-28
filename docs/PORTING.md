@@ -6,7 +6,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 
 1. Read `AGENTS.md` and this file before starting a new work unit.
 2. Pick one narrow compile/runtime cluster and record the target in Current Unit.
-3. Use `scripts/build-quiet.sh` for compile passes. Do not paste full compiler logs into notes.
+3. Use `scripts/build-quiet.sh` for compile passes. For live GABS testing on this machine, deploy with `RIMWORLD_MOD_DIR="$HOME/Library/Application Support/Steam/steamapps/common/RimWorld/RimWorldMac.app/Mods" scripts/build-quiet.sh`; the active local Zombieland root is inside the Steam app bundle, not the sibling `common/RimWorld/Mods` directory. Do not paste full compiler logs into notes.
 4. Use `scripts/validate-unity-assets.sh` before runtime tests that depend on Unity bundles. It loads deployed bundles with Unity `2022.3.62f3` from a temporary project copy.
 5. Use `scripts/export-unity-assets.sh` only after the missing source assets for the deployed bundle are recovered. It exports from a temporary copy so the tracked Unity `Library` does not churn.
 6. When runtime testing begins, summarize `Player.log` with `scripts/summarize-rimworld-log.sh` before inspecting raw logs.
@@ -15,9 +15,9 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 
 ## Current Unit
 
-- Target: validate special zombie pawn rendering on a native RimWorld 1.6 map.
-- Completed: compile baseline, deployment baseline, Unity bundle validation, GABS startup/play-data baseline, native 1.6 debug-map creation, first special-zombie visual fixture, shared debug/bridge runtime actions, infection bridge smoke, and direct pawn conversion bridge smoke. As of 2026-05-28, GABS starts RimWorld with Core, Harmony, RimBridgeServer, and Zombieland; a native 1.6 save named `ZombielandVisualLineup` contains Electrifier, Suicide Bomber, Healer, Dark Slimer, Albino, Tanky, Toxic Splasher, and Miner zombies in a compact comparison pattern. Loading that save now reaches visual-ready state without the previous unresolved render-tree errors, and reloading it from an already-loaded map no longer crashes in `ZombieWanderer`.
-- Next blocker cluster: validate corpse-driven conversion and special zombie behaviors beyond visuals.
+- Target: validate special zombie visuals and behavior on a native RimWorld 1.6 map.
+- Completed: compile baseline, deployment baseline, Unity bundle validation, GABS startup/play-data baseline, native 1.6 debug-map creation, first special-zombie visual fixture, shared debug/bridge runtime actions, infection bridge smoke, direct pawn conversion bridge smoke, and corpse-driven conversion bridge smoke. As of 2026-05-28, GABS starts RimWorld with Core, Harmony, RimBridgeServer, and Zombieland; a native 1.6 save named `ZombielandVisualLineup` contains Electrifier, Suicide Bomber, Healer, Dark Slimer, Albino, Tanky, Toxic Splasher, and Miner zombies in a compact comparison pattern. Loading that save now reaches visual-ready state without the previous unresolved render-tree errors, and reloading it from an already-loaded map no longer crashes in `ZombieWanderer`. `zombieland/convert_infected_corpse_to_zombie` verifies that a bitten pawn can die into a corpse, transition from Fresh to Rotting through `Corpse.RotStageChanged`, enter `TickManager.colonistsToConvert`, and convert into a normal wandering zombie while the game is paused.
+- Next blocker cluster: validate special zombie behaviors beyond visuals.
 
 ## Decisions
 

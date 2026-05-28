@@ -71,6 +71,26 @@ namespace ZombieLand
 			};
 		}
 
+		static object DescribeCorpse(Corpse corpse)
+		{
+			var compRottable = corpse?.TryGetComp<CompRottable>();
+			var innerPawn = corpse?.InnerPawn;
+			return new
+			{
+				corpseId = ZombieRuntimeActions.StableThingId(corpse),
+				thingId = corpse?.ThingID,
+				label = corpse?.LabelCap,
+				spawned = corpse?.Spawned ?? false,
+				destroyed = corpse?.Destroyed ?? true,
+				position = corpse == null || corpse.Spawned == false ? null : ZombieRuntimeActions.DescribeCell(corpse.Position),
+				rotStage = corpse == null || corpse.Destroyed ? null : corpse.GetRotStage().ToString(),
+				rotProgress = compRottable?.RotProgress ?? 0f,
+				innerPawnId = ZombieRuntimeActions.StableThingId(innerPawn),
+				innerPawnThingId = innerPawn?.ThingID,
+				innerPawnLabel = innerPawn?.LabelCap
+			};
+		}
+
 		static string DescribeZombieKind(Zombie zombie, ZombieBlob blob, ZombieSpitter spitter)
 		{
 			if (blob != null)
@@ -494,6 +514,106 @@ namespace ZombieLand
 				targetThingId,
 				targetLabel,
 				force,
+				beforeCount = before.Length,
+				afterCount = after.Length,
+				newZombieCount = newZombies.Length,
+				newZombies
+			};
+		}
+
+		[Tool("zombieland/convert_infected_corpse_to_zombie", Description = "Create an infected rotting corpse from a spawned pawn, verify Corpse.RotStageChanged queued it, then run that queued conversion.")]
+		public static object ConvertInfectedCorpseToZombie(
+			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
+			[ToolParameter(Description = "Bite state to apply before death: harmful, final, or harmless.", Required = false, DefaultValue = "final")] string stage = "final")
+		{
+			var map = CurrentMap;
+			if (ZombieRuntimeActions.TryFindPawn(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			if (pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
+			{
+				return new
+				{
+					success = false,
+					error = "Target is already a Zombieland pawn."
+				};
+			}
+
+			var before = CurrentZombies(map);
+			var beforeIds = new HashSet<string>(before.Select(ZombieRuntimeActions.StableThingId));
+			var targetId = ZombieRuntimeActions.StableThingId(pawn);
+			var targetThingId = pawn.ThingID;
+			var targetLabel = pawn.LabelCap;
+
+			if (ZombieRuntimeActions.AddZombieBite(pawn, stage, out var bite, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					targetId,
+					targetThingId,
+					targetLabel,
+					error
+				};
+			}
+
+			if (ZombieRuntimeActions.KillPawnToCorpse(pawn, out var corpse, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					targetId,
+					targetThingId,
+					targetLabel,
+					biteLabel = bite.LabelCap,
+					error
+				};
+			}
+
+			var corpseBeforeRot = DescribeCorpse(corpse);
+			if (ZombieRuntimeActions.TriggerCorpseRotStageChanged(corpse, out var rotStageBefore, out var rotStageAfter, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					targetId,
+					targetThingId,
+					targetLabel,
+					biteLabel = bite.LabelCap,
+					corpse = corpseBeforeRot,
+					error
+				};
+			}
+
+			var corpseAfterRot = DescribeCorpse(corpse);
+			var convertedQueuedCorpse = ZombieRuntimeActions.RunQueuedConversion(map, corpse, out var queueCountBeforeRun, out var queueCountAfterRun, out error);
+			var after = CurrentZombies(map);
+			var newZombies = after
+				.Where(zombie => beforeIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+				.Select(DescribeZombie)
+				.ToArray();
+
+			return new
+			{
+				success = convertedQueuedCorpse && newZombies.Length > 0,
+				targetId,
+				targetThingId,
+				targetLabel,
+				stage = stage ?? "final",
+				biteLabel = bite.LabelCap,
+				rotStageBefore = rotStageBefore.ToString(),
+				rotStageAfter = rotStageAfter.ToString(),
+				corpseBeforeRot,
+				corpseAfterRot,
+				queuedConversionFound = convertedQueuedCorpse,
+				queueCountBeforeRun,
+				queueCountAfterRun,
+				error,
 				beforeCount = before.Length,
 				afterCount = after.Length,
 				newZombieCount = newZombies.Length,
