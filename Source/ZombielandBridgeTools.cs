@@ -234,6 +234,54 @@ namespace ZombieLand
 				.Count(thing => thing.def == thingDef);
 		}
 
+		static Dictionary<IntVec3, long> SnapshotPheromones(Map map, IntVec3 center, float radius)
+		{
+			var grid = map.GetGrid();
+			return GenRadial.RadialCellsAround(center, radius, true)
+				.Where(cell => cell.InBounds(map))
+				.ToDictionary(cell => cell, cell => grid.GetTimestamp(cell));
+		}
+
+		static void ClearPheromones(Map map, IntVec3 center, float radius)
+		{
+			var grid = map.GetGrid();
+			foreach (var cell in GenRadial.RadialCellsAround(center, radius, true))
+				if (cell.InBounds(map))
+					grid.SetTimestamp(cell, 0);
+		}
+
+		static object DescribePheromoneChange(Map map, Dictionary<IntVec3, long> before, out int changedCount)
+		{
+			var grid = map.GetGrid();
+			var changed = before
+				.Select(pair => new
+				{
+					cell = pair.Key,
+					before = pair.Value,
+					after = grid.GetTimestamp(pair.Key)
+				})
+				.Where(item => item.after > item.before)
+				.ToArray();
+
+			changedCount = changed.Length;
+			return new
+			{
+				changedCount = changed.Length,
+				maxDelta = changed.Length == 0 ? 0 : changed.Max(item => item.after - item.before),
+				changedCells = changed
+					.OrderByDescending(item => item.after - item.before)
+					.Take(12)
+					.Select(item => new
+					{
+						cell = ZombieRuntimeActions.DescribeCell(item.cell),
+						item.before,
+						item.after,
+						delta = item.after - item.before
+					})
+					.ToArray()
+			};
+		}
+
 		static void AdvanceGameTicks(int ticks)
 		{
 			var tickManager = Find.TickManager;
@@ -1357,6 +1405,87 @@ namespace ZombieLand
 				hitPointDelta = hitPointsAfter - hitPointsBefore,
 				miningCounterBefore,
 				miningCounterAfter
+			};
+		}
+
+		[Tool("zombieland/move_tanky", Description = "Move a tanky zombie one valid adjacent cell and verify that it leaves a pheromone trace for other zombies.")]
+		public static object MoveTanky(
+			[ToolParameter(Description = "Optional tanky zombie id, ThingID, label, or short name. When omitted, a fresh tanky zombie is spawned near map center.", Required = false, DefaultValue = "")] string target = "")
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Zombie tanky;
+			var spawnedTanky = false;
+			if (string.IsNullOrWhiteSpace(target))
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+					return error;
+
+				tanky = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.TankyOperator, true);
+				spawnedTanky = true;
+			}
+			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			else
+			{
+				tanky = pawn as Zombie;
+			}
+
+			if (tanky == null || tanky.IsTanky == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(tanky),
+					error = "Target is not a tanky zombie."
+				};
+			}
+
+			if (TryFindAdjacentMoveCell(tanky, out var destination) == false)
+			{
+				return new
+				{
+					success = false,
+					target = DescribeZombie(tanky),
+					error = "No valid adjacent move cell was found."
+				};
+			}
+
+			var radius = Constants.TANKY_PHEROMONE_RADIUS + 1f;
+			var before = DescribeZombie(tanky);
+			var origin = tanky.Position;
+			ClearPheromones(map, destination, radius);
+			var pheromonesBefore = SnapshotPheromones(map, destination, radius);
+			tanky.pather?.StopDead();
+			tanky.Position = destination;
+			tanky.Notify_Teleported(false, false);
+			var pheromoneChange = DescribePheromoneChange(map, pheromonesBefore, out var changedCount);
+
+			return new
+			{
+				success = tanky.Position == destination && changedCount > 0,
+				spawnedTanky,
+				radius,
+				origin = ZombieRuntimeActions.DescribeCell(origin),
+				destination = ZombieRuntimeActions.DescribeCell(destination),
+				before,
+				after = DescribeZombie(tanky),
+				pheromoneChange
 			};
 		}
 
