@@ -3183,6 +3183,69 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/zombie_fire_attachment_state_contract", Description = "Verify real fire attachment add/remove keeps Zombie.isOnFire synchronized.")]
+		public static object ZombieFireAttachmentStateContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var spawnError) == false)
+				return spawnError;
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					cell = ZombieRuntimeActions.DescribeCell(cell),
+					error = "Could not spawn a normal zombie for fire attachment state."
+				};
+			}
+
+			var initialHasFire = zombie.HasAttachment(ThingDefOf.Fire);
+			var initialIsOnFire = zombie.isOnFire;
+			FireUtility.TryAttachFire(zombie, 1f, null);
+			var fire = zombie.GetAttachment(ThingDefOf.Fire) as Fire;
+			var afterAttachHasFire = zombie.HasAttachment(ThingDefOf.Fire);
+			var afterAttachIsOnFire = zombie.isOnFire;
+
+			var comp = zombie.TryGetComp<CompAttachBase>();
+			if (fire != null)
+				comp?.RemoveAttachment(fire);
+			var afterRemoveHasFire = zombie.HasAttachment(ThingDefOf.Fire);
+			var afterRemoveIsOnFire = zombie.isOnFire;
+			if (fire != null && fire.Destroyed == false)
+				fire.Destroy(DestroyMode.Vanish);
+
+			return new
+			{
+				success = initialHasFire == false
+					&& initialIsOnFire == false
+					&& fire != null
+					&& afterAttachHasFire
+					&& afterAttachIsOnFire
+					&& afterRemoveHasFire == false
+					&& afterRemoveIsOnFire == false,
+				zombie = DescribeZombie(zombie),
+				fire = ZombieRuntimeActions.StableThingId(fire),
+				initialHasFire,
+				initialIsOnFire,
+				afterAttachHasFire,
+				afterAttachIsOnFire,
+				afterRemoveHasFire,
+				afterRemoveIsOnFire
+			};
+		}
+
 		[Tool("zombieland/convert_infected_corpse_to_zombie", Description = "Create an infected rotting corpse from a spawned pawn, verify Corpse.RotStageChanged queued it, then run that queued conversion.")]
 		public static object ConvertInfectedCorpseToZombie(
 			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
