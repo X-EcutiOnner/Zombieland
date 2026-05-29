@@ -3,6 +3,8 @@ using RimWorld;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using UnityEngine;
 using Verse;
 using Verse.AI;
 
@@ -588,6 +590,55 @@ namespace ZombieLand
 			{
 				success = false,
 				error = $"No clear zombie shocker fixture area was found near ({root.x}, {root.z})."
+			};
+			return false;
+		}
+
+		static bool TryFindClearBuildingFootprint(Map map, ThingDef thingDef, IntVec3 root, float radius, out IntVec3 cell, out object error)
+		{
+			cell = IntVec3.Invalid;
+			error = null;
+			if (map == null)
+			{
+				error = new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+				return false;
+			}
+
+			foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+			{
+				if (candidate.InBounds(map) == false || candidate.Fogged(map))
+					continue;
+
+				var occupied = false;
+				foreach (var footprintCell in GenAdj.OccupiedRect(candidate, Rot4.North, thingDef.size))
+				{
+					if (footprintCell.InBounds(map) == false
+						|| footprintCell.Fogged(map)
+						|| footprintCell.Standable(map) == false
+						|| footprintCell.GetEdifice(map) != null
+						|| footprintCell.GetFirstThing<Mineable>(map) != null
+						|| footprintCell.GetThingList(map).Any(thing => thing is Pawn))
+					{
+						occupied = true;
+						break;
+					}
+				}
+
+				if (occupied)
+					continue;
+
+				cell = candidate;
+				return true;
+			}
+
+			error = new
+			{
+				success = false,
+				error = $"No clear footprint for {thingDef?.defName ?? "building"} was found near ({root.x}, {root.z})."
 			};
 			return false;
 		}
@@ -2397,6 +2448,132 @@ namespace ZombieLand
 				storedEnergyBefore,
 				storedEnergyAfter,
 				storedEnergyDelta = storedEnergyBefore - storedEnergyAfter,
+				samples
+			};
+		}
+
+		[Tool("zombieland/thumper_impact_cycle", Description = "Spawn and fuel a real Zombie Thumper, run its source-derived cycle to impact, and verify fuel is consumed.")]
+		public static object ThumperImpactCycle()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearBuildingFootprint(map, CustomDefs.Thumper, root, 24f, out var thumperCell, out var footprintError) == false)
+				return footprintError;
+
+			var thumper = ThingMaker.MakeThing(CustomDefs.Thumper) as ZombieThumper;
+			if (thumper == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create ZombieThumper."
+				};
+			}
+
+			thumper.SetFactionDirect(Faction.OfPlayer);
+			GenSpawn.Spawn(thumper, thumperCell, map, Rot4.North, WipeMode.Vanish, false);
+			var refuelable = thumper.TryGetComp<CompRefuelable>();
+			var switchable = thumper.TryGetComp<CompSwitchable>();
+			var chemfuelDef = ThingDefOf.Chemfuel;
+			if (refuelable == null || chemfuelDef == null)
+			{
+				return new
+				{
+					success = false,
+					thumperCell = ZombieRuntimeActions.DescribeCell(thumperCell),
+					error = "The spawned thumper did not have a refuelable comp or Chemfuel was unavailable."
+				};
+			}
+
+			var fuel = ThingMaker.MakeThing(chemfuelDef);
+			fuel.stackCount = Math.Min(chemfuelDef.stackLimit, refuelable.GetFuelCountToFullyRefuel());
+			GenSpawn.Spawn(fuel, thumperCell + IntVec3.South, map, WipeMode.Vanish);
+			refuelable.Refuel(new List<Thing> { fuel });
+			if (switchable != null)
+				switchable.isActive = true;
+
+			thumper.intensity = 0.05f;
+			thumper.intervalTicks = GenDate.TicksPerHour / 25;
+			var upTicks = Mathf.FloorToInt(ZombieThumper.upwardsTicks * thumper.intensity);
+			var fallTicks = Mathf.FloorToInt(Mathf.Sqrt(upTicks / ZombieThumper.accelerationFactor));
+			var impactByTicks = Math.Max(thumper.intervalTicks, 30 + upTicks) + fallTicks + 3;
+			var fuelBefore = refuelable.Fuel;
+			var isActiveBefore = thumper.IsActive;
+			var radiusBefore = thumper.Radius;
+			var stateField = typeof(ZombieThumper).GetField("state", BindingFlags.Instance | BindingFlags.NonPublic);
+			var stateValueField = typeof(ZombieThumper).GetField("stateValue", BindingFlags.Instance | BindingFlags.NonPublic);
+			var lastImpactTicksField = typeof(ZombieThumper).GetField("lastImpactTicks", BindingFlags.Instance | BindingFlags.NonPublic);
+			var lastImpactBefore = (int)(lastImpactTicksField?.GetValue(thumper) ?? 0);
+			var samples = new List<object>();
+			var tickHit = -1;
+
+			for (var tick = 1; tick <= impactByTicks; tick++)
+			{
+				AdvanceGameTicks(1);
+				var fuelNow = refuelable.Fuel;
+				if (tick == 1 || tick == upTicks + 30 || tick == impactByTicks || tick % 25 == 0 || fuelNow < fuelBefore)
+				{
+					samples.Add(new
+					{
+						tick,
+						state = stateField?.GetValue(thumper)?.ToString(),
+						stateValue = (int)(stateValueField?.GetValue(thumper) ?? 0),
+						fuel = fuelNow,
+						lastImpactTicks = (int)(lastImpactTicksField?.GetValue(thumper) ?? 0)
+					});
+				}
+
+				if (fuelNow < fuelBefore)
+				{
+					tickHit = tick;
+					break;
+				}
+			}
+
+			var fuelAfter = refuelable.Fuel;
+			var lastImpactAfter = (int)(lastImpactTicksField?.GetValue(thumper) ?? 0);
+
+			return new
+			{
+				success = thumper.Spawned
+					&& isActiveBefore
+					&& radiusBefore > 0
+					&& tickHit > 0
+					&& fuelAfter < fuelBefore
+					&& lastImpactAfter > lastImpactBefore,
+				thumper = new
+				{
+					id = ZombieRuntimeActions.StableThingId(thumper),
+					cell = ZombieRuntimeActions.DescribeCell(thumperCell),
+					spawned = thumper.Spawned,
+					hitPoints = thumper.HitPoints,
+					intensity = thumper.intensity,
+					intervalTicks = thumper.intervalTicks,
+					radius = thumper.Radius,
+					isActive = thumper.IsActive,
+					state = stateField?.GetValue(thumper)?.ToString(),
+					stateValue = (int)(stateValueField?.GetValue(thumper) ?? 0)
+				},
+				upTicks,
+				fallTicks,
+				impactByTicks,
+				tickHit,
+				fuelBefore,
+				fuelAfter,
+				fuelDelta = fuelBefore - fuelAfter,
+				lastImpactBefore,
+				lastImpactAfter,
+				lastImpactDelta = lastImpactAfter - lastImpactBefore,
+				hasFuelAfter = refuelable.HasFuel,
 				samples
 			};
 		}
