@@ -1730,6 +1730,74 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/defensive_defaults_contract", Description = "Verify legacy defensive defaults do not throw when old/corrupt enum-style state is encountered.")]
+		public static object DefensiveDefaultsContract()
+		{
+			var brainzStage = new BrainzThought().CurStageIndex;
+			var invalidUnitTicks = new SettingsKeyFrame
+			{
+				amount = 2,
+				unit = (SettingsKeyFrame.Unit)999
+			}.Ticks;
+			var expectedInvalidUnitTicks = 2 * GenDate.TicksPerDay;
+
+			if (TryFindSpawnCell(-1, -1, out var map, out var cell, out var spawnError) == false)
+				return spawnError;
+
+			var faction = Find.FactionManager.AllFactions
+				.FirstOrDefault(candidate => candidate != null && candidate != Faction.OfPlayer && candidate.def != null);
+			if (faction == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No non-player faction was available for the invalid attack-mode hostility check."
+				};
+			}
+
+			var oldAttackMode = ZombieSettings.Values.attackMode;
+			var oldEnemiesAttackZombies = ZombieSettings.Values.enemiesAttackZombies;
+			Zombie zombie = null;
+			try
+			{
+				zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						error = "ZombieGenerator.SpawnZombie returned no defensive-defaults test zombie."
+					};
+				}
+
+				ZombieSettings.Values.attackMode = (AttackMode)999;
+				ZombieSettings.Values.enemiesAttackZombies = true;
+				var invalidAttackModeThreat = GenHostility.IsActiveThreatTo(zombie, faction, false, false);
+
+				var success = brainzStage == 0
+					&& invalidUnitTicks == expectedInvalidUnitTicks
+					&& invalidAttackModeThreat == false;
+				return new
+				{
+					success,
+					brainzStage,
+					invalidUnitTicks,
+					expectedInvalidUnitTicks,
+					faction = faction.def.defName,
+					invalidAttackModeThreat,
+					zombie = DescribeZombie(zombie)
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.attackMode = oldAttackMode;
+				ZombieSettings.Values.enemiesAttackZombies = oldEnemiesAttackZombies;
+				if (zombie != null && zombie.Destroyed == false)
+					zombie.Destroy(DestroyMode.Vanish);
+			}
+		}
+
 		[Tool("zombieland/spawn_zombie", Description = "Spawn one Zombieland zombie near a map cell for runtime smoke tests.")]
 		public static object SpawnZombie(
 			[ToolParameter(Description = "Target x coordinate. Use -1 with z -1 to spawn near map center.", Required = false, DefaultValue = -1)] int x = -1,

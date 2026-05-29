@@ -110,7 +110,7 @@ namespace ZombieLand
 			Unit.Days => amount * GenDate.TicksPerDay,
 			Unit.Seasons => amount * GenDate.TicksPerSeason,
 			Unit.Years => amount * GenDate.TicksPerYear,
-			_ => throw new NotImplementedException()
+			_ => amount * GenDate.TicksPerDay
 		};
 
 		public void ExposeData()

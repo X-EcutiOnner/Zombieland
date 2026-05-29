@@ -1,11 +1,10 @@
 ﻿using RimWorld;
-using System;
 
 namespace ZombieLand
 {
 	public class BrainzThought : Thought
 	{
-		public override int CurStageIndex => throw new NotImplementedException();
+		public override int CurStageIndex => 0;
 
 		public override void ExposeData()
 		{

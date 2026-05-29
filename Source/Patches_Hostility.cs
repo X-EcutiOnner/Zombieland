@@ -554,7 +554,7 @@ namespace ZombieLand
 				AttackMode.Everything => true,
 				AttackMode.OnlyHumans => faction.def.humanlikeFaction,
 				AttackMode.OnlyColonists => false,
-				_ => throw new NotImplementedException(),
+				_ => false,
 			};
 			return false;
 		}
