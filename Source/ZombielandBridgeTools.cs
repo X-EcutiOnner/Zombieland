@@ -3365,6 +3365,112 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_hallucination_contract", Description = "Verify the contamination hallucination effect starts the real job, ghost mote, and source-derived 30-tick movement loop.")]
+		public static object ContaminationHallucinationContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanSpawnError) == false)
+				return humanSpawnError;
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+			human.needs?.AddOrRemoveNeedsAsAppropriate();
+			human.ClearContamination();
+			human.mindState?.mentalStateHandler?.Reset();
+
+			const float hallucinationMin = 0.25f;
+			const float hallucinationMax = 0.50f;
+			const float hallucinationContamination = 0.40f;
+			var factor = Mathf.InverseLerp(hallucinationMin, hallucinationMax, hallucinationContamination);
+			var expectedRecoverAfterTicks = (GenDate.TicksPerHour / 10) * (int)(1 + factor * 7);
+
+			var applied = ContaminationEffect.Hallucination(human, factor);
+			var mentalStateAfterApply = human.mindState?.mentalStateHandler?.CurStateDef?.defName;
+			var jobAfterApply = human.CurJobDef?.defName;
+			var recoverAfterApply = human.mindState?.mentalStateHandler?.CurState?.forceRecoverAfterTicks ?? -1;
+
+			AdvanceGameTicks(1);
+			var driverAfterInit = human.jobs?.curDriver as JobDriver_ContaminationHallucination;
+			var destinationAfterInit = driverAfterInit?.destination ?? IntVec3.Invalid;
+			var ghostAfterInit = driverAfterInit?.ghost;
+			var ghostVecAfterInit = driverAfterInit?.ghostVec ?? Vector3.zero;
+			var movingAfterInit = human.pather?.Moving ?? false;
+			var pathDestinationAfterInit = movingAfterInit ? human.pather.Destination.Cell : IntVec3.Invalid;
+
+			const int sourceDerivedUpdateTicks = 30;
+			AdvanceGameTicks(sourceDerivedUpdateTicks);
+			var driverAfterUpdate = human.jobs?.curDriver as JobDriver_ContaminationHallucination;
+			var destinationAfterUpdate = driverAfterUpdate?.destination ?? IntVec3.Invalid;
+			var ghostAfterUpdate = driverAfterUpdate?.ghost;
+			var ghostVecAfterUpdate = driverAfterUpdate?.ghostVec ?? Vector3.zero;
+			var ghostMoved = (ghostVecAfterUpdate - ghostVecAfterInit).sqrMagnitude > 0.0001f;
+			var jobAfterUpdate = human.CurJobDef?.defName;
+
+			var stateStarted = applied
+				&& mentalStateAfterApply == EffectDefs.ContaminationStateHallucination.defName
+				&& jobAfterApply == EffectDefs.ContaminationJobHallucination.defName
+				&& recoverAfterApply == expectedRecoverAfterTicks;
+			var jobInitialized = driverAfterInit != null
+				&& destinationAfterInit.IsValid
+				&& ghostAfterInit != null
+				&& movingAfterInit
+				&& pathDestinationAfterInit == destinationAfterInit;
+			var periodicLoopRan = driverAfterUpdate != null
+				&& destinationAfterUpdate.IsValid
+				&& ghostAfterUpdate != null
+				&& ghostMoved
+				&& jobAfterUpdate == EffectDefs.ContaminationJobHallucination.defName;
+
+			return new
+			{
+				success = stateStarted && jobInitialized && periodicLoopRan,
+				human = DescribePawn(human),
+				humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
+				hallucinationContamination,
+				factor,
+				expectedRecoverAfterTicks,
+				applied,
+				mentalStateAfterApply,
+				expectedMentalState = EffectDefs.ContaminationStateHallucination.defName,
+				jobAfterApply,
+				expectedJob = EffectDefs.ContaminationJobHallucination.defName,
+				recoverAfterApply,
+				destinationAfterInit = destinationAfterInit.IsValid ? ZombieRuntimeActions.DescribeCell(destinationAfterInit) : null,
+				ghostAfterInit = ghostAfterInit != null,
+				ghostVecAfterInit = DescribeVector(ghostVecAfterInit),
+				movingAfterInit,
+				pathDestinationAfterInit = pathDestinationAfterInit.IsValid ? ZombieRuntimeActions.DescribeCell(pathDestinationAfterInit) : null,
+				sourceDerivedUpdateTicks,
+				destinationAfterUpdate = destinationAfterUpdate.IsValid ? ZombieRuntimeActions.DescribeCell(destinationAfterUpdate) : null,
+				ghostAfterUpdate = ghostAfterUpdate != null,
+				ghostVecAfterUpdate = DescribeVector(ghostVecAfterUpdate),
+				ghostMoved,
+				jobAfterUpdate,
+				stateStarted,
+				jobInitialized,
+				periodicLoopRan
+			};
+		}
+
 		[Tool("zombieland/contamination_ingestion_contract", Description = "Verify ingesting contaminated stack food transfers the source-derived partial-stack contamination to the eater.")]
 		public static object ContaminationIngestionContract()
 		{

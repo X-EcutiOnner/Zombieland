@@ -57,6 +57,9 @@ namespace ZombieLand
 
 		void TickAction()
 		{
+			if (ghost == null || ghost.Destroyed)
+				ghost = MoteMaker.MakeStaticMote(ghostVec, Map, CustomDefs.Ghost, 1f, false);
+
 			ghostVec += (pawn.DrawPos - ghostVec) / 50f;
 			ghost.exactPosition = ghostVec;
 			ghost.Maintain();
@@ -71,12 +74,14 @@ namespace ZombieLand
 		{
 			base.Notify_PatherArrived();
 			destination = IntVec3.Invalid;
+			UpdateDestination();
 		}
 
 		public override void Notify_PatherFailed()
 		{
 			base.Notify_PatherFailed();
 			destination = IntVec3.Invalid;
+			UpdateDestination();
 		}
 	}
 }

@@ -2463,6 +2463,42 @@ namespace ZombieLand
 
 		// patch to make infected colonists have no mental breaks
 		//
+		[HarmonyPatch(typeof(Pawn_JobTracker), "ShouldStartJobFromThinkTree")]
+		static class Pawn_JobTracker_ShouldStartJobFromThinkTree_Patch
+		{
+			static readonly Type hallucinationDriver = typeof(JobDriver_ContaminationHallucination);
+			static readonly Type sleepwalkDriver = typeof(JobDriver_ContaminationSleepwalk);
+			static readonly Type hoardDriver = typeof(JobDriver_ContaminationHoard);
+			static readonly Type mimicDriver = typeof(JobDriver_ContaminationMimic);
+			static readonly Type breakdownDriver = typeof(JobDriver_ContaminationBreakdown);
+			static readonly Type forceRestDriver = typeof(JobDriver_ContaminationForceRest);
+
+			static bool IsContaminationJob(Job job, JobDriver driver)
+			{
+				if (job == null || driver == null)
+					return false;
+
+				var driverType = driver.GetType();
+				return false
+					|| job.def == EffectDefs.ContaminationJobForceRest && driverType == forceRestDriver
+					|| job.def == EffectDefs.ContaminationJobHallucination && driverType == hallucinationDriver
+					|| job.def == EffectDefs.ContaminationJobSleepwalk && driverType == sleepwalkDriver
+					|| job.def == EffectDefs.ContaminationJobHoard && driverType == hoardDriver
+					|| job.def == EffectDefs.ContaminationJobMimic && driverType == mimicDriver
+					|| job.def == EffectDefs.ContaminationJobBreakdown && driverType == breakdownDriver;
+			}
+
+			static bool Prefix(Job ___curJob, JobDriver ___curDriver, ref bool __result)
+			{
+				if (IsContaminationJob(___curJob, ___curDriver))
+				{
+					__result = false;
+					return false;
+				}
+				return true;
+			}
+		}
+
 		[HarmonyPatch(typeof(MentalStateHandler))]
 		[HarmonyPatch(nameof(MentalStateHandler.TryStartMentalState))]
 		static class MentalStateHandler_TryStartMentalState_Patch
