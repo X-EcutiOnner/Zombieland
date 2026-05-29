@@ -2475,8 +2475,19 @@ namespace ZombieLand
 
 			static bool IsContaminationJob(Job job, JobDriver driver)
 			{
-				if (job == null || driver == null)
+				if (job == null)
 					return false;
+
+				if (job.def != EffectDefs.ContaminationJobForceRest
+					&& job.def != EffectDefs.ContaminationJobHallucination
+					&& job.def != EffectDefs.ContaminationJobSleepwalk
+					&& job.def != EffectDefs.ContaminationJobHoard
+					&& job.def != EffectDefs.ContaminationJobMimic
+					&& job.def != EffectDefs.ContaminationJobBreakdown)
+					return false;
+
+				if (driver == null)
+					return true;
 
 				var driverType = driver.GetType();
 				return false

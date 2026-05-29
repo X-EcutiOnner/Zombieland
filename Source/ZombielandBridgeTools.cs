@@ -3911,8 +3911,7 @@ namespace ZombieLand
 			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
 			if (TryBuildFogRoomFixture(map, root, 32f, out var fixture, out var fixtureError) == false)
 				return fixtureError;
-			if (TryFindClearBuildingFootprint(map, ThingDefOf.Bed, fixture.interiorRect.CenterCell, 4f, out var bedCell, out var bedError) == false)
-				return bedError;
+			var bedCell = fixture.interiorRect.CenterCell;
 
 			var bed = ThingMaker.MakeThing(ThingDefOf.Bed, GenStuff.DefaultStuffFor(ThingDefOf.Bed)) as Building_Bed;
 			if (bed == null)
@@ -3954,7 +3953,6 @@ namespace ZombieLand
 			const float hoardingContamination = 0.54f;
 			var factor = Mathf.InverseLerp(0.45f, 0.60f, hoardingContamination);
 			var applied = ContaminationEffect.Hoarding(hoarder, factor);
-			AdvanceGameTicks(1);
 			var driver = hoarder.jobs?.curDriver as JobDriver_ContaminationHoard;
 			if (applied == false || driver == null)
 			{
