@@ -3186,7 +3186,7 @@ namespace ZombieLand
 				static void DrawBombVest(Zombie zombie, Vector3 drawLoc, Rot4 orientation)
 				{
 					var location = drawLoc;
-					location.y += Altitudes.AltInc / 2f;
+					location.y += 0.04f;
 					if (orientation == Rot4.North)
 						location.y += Altitudes.AltInc / 12f;
 
@@ -3600,32 +3600,6 @@ namespace ZombieLand
 					return false;
 				}
 				return true;
-			}
-		}
-
-		// patch for giving zombies accessories like bomb vests or tanky suits
-		//
-		[HarmonyPatch]
-		static class PawnGraphicSet_ResolveApparelGraphics_Patch
-		{
-			static MethodBase TargetMethod() => AccessTools.Method("Verse.PawnGraphicSet:ResolveApparelGraphics");
-			static bool Prepare() => TargetMethod() != null;
-
-			[HarmonyPriority(Priority.Last)]
-			static void Postfix(object __instance)
-			{
-				var pawn = AccessTools.Field(__instance.GetType(), "pawn")?.GetValue(__instance) as Pawn;
-				if (pawn is not Zombie zombie)
-					return;
-
-				if (zombie.IsSuicideBomber)
-				{
-					var apparel = new Apparel() { def = CustomDefs.Apparel_BombVest };
-					var apparelGraphics = AccessTools.Field(__instance.GetType(), "apparelGraphics")?.GetValue(__instance) as List<ApparelGraphicRecord>;
-					if (apparelGraphics != null && apparelGraphics.Any(a => a.sourceApparel.def == CustomDefs.Apparel_BombVest) == false)
-					if (ApparelGraphicRecordGetter.TryGetGraphicApparel(apparel, BodyTypeDefOf.Hulk, false, out var record))
-							apparelGraphics.Add(record);
-				}
 			}
 		}
 

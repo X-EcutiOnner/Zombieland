@@ -68,11 +68,6 @@ namespace ZombieLand
 				&& (graphic = graphics.Head) != null;
 		}
 
-		public static void RemoveApparelGraphic(Pawn pawn, ThingDef apparelDef)
-		{
-			SetDirty(pawn);
-		}
-
 		public static void DrawPawn(Pawn pawn, PawnRenderer renderer, Vector3 drawLoc, Rot4 facing, RotDrawMode rotDrawMode, PawnRenderFlags flags)
 		{
 			if (pawn == null || renderer?.renderTree == null)

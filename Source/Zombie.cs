@@ -381,7 +381,6 @@ namespace ZombieLand
 				bombTickingInterval = -1f;
 				bombWillGoOff = false;
 				hasTankyShield = -1f;
-				ZombieRenderCompat.RemoveApparelGraphic(this, CustomDefs.Apparel_BombVest);
 				Map.GetComponent<TickManager>()?.AddExplosion(Position);
 			}
 
