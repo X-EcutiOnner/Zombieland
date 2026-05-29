@@ -3699,7 +3699,7 @@ namespace ZombieLand
 				};
 			}
 
-			map.GetComponent<TickManager>().avoidGrid = new AvoidGrid(map);
+			var avoidGrid = map.GetComponent<TickManager>()?.avoidGrid;
 			var existingPawns = map.mapPawns.AllPawnsSpawned.ToArray();
 			var existingZombies = CurrentZombies(map);
 			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
@@ -3712,11 +3712,15 @@ namespace ZombieLand
 					continue;
 				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
 					continue;
+				if (avoidGrid?.ShouldAvoid(map, candidate) == true)
+					continue;
 				if (existingPawns.Any(pawn => pawn.Position.DistanceToSquared(candidate) < 400))
 					continue;
 				if (existingZombies.Any(zombie => zombie.Position.DistanceToSquared(candidate) < 900))
 					continue;
 				if (TryFindClearBuildingFootprint(map, ThingDefOf.Bed, candidate + new IntVec3(8, 0, 0), 12f, out var candidateBedCell, out _) == false)
+					continue;
+				if (avoidGrid?.ShouldAvoid(map, candidateBedCell) == true)
 					continue;
 
 				sleepwalkerCell = candidate;
@@ -3880,6 +3884,129 @@ namespace ZombieLand
 				jobInitialized,
 				survivedThinkTreeWindow,
 				occupantWokenAndFleeing
+			};
+		}
+
+		[Tool("zombieland/contamination_breakdown_contract", Description = "Verify the breakdown contamination effect starts the real job, immediately picks a flee path, and survives RimWorld's 30-tick think-tree pass.")]
+		public static object ContaminationBreakdownContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var avoidGrid = map.GetComponent<TickManager>()?.avoidGrid;
+			var existingPawns = map.mapPawns.AllPawnsSpawned.ToArray();
+			var existingZombies = CurrentZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var pawnCell = IntVec3.Invalid;
+			var searchRadius = Math.Min(70f, Math.Min(map.Size.x, map.Size.z) / 2f - 1f);
+			foreach (var candidate in GenRadial.RadialCellsAround(root, searchRadius, true).OrderByDescending(cell => cell.DistanceToSquared(root)))
+			{
+				if (candidate.InBounds(map) == false || candidate.Standable(map) == false || candidate.Fogged(map))
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+					continue;
+				if (avoidGrid?.ShouldAvoid(map, candidate) == true)
+					continue;
+				if (existingPawns.Any(pawn => pawn.Position.DistanceToSquared(candidate) < 400))
+					continue;
+				if (existingZombies.Any(zombie => zombie.Position.DistanceToSquared(candidate) < 900))
+					continue;
+
+				pawnCell = candidate;
+				break;
+			}
+			if (pawnCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					error = "No isolated breakdown fixture cell was found away from existing pawns and zombies."
+				};
+			}
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+			DisablePawnWork(pawn);
+			pawn.needs?.AddOrRemoveNeedsAsAppropriate();
+			pawn.ClearContamination();
+			pawn.mindState?.mentalStateHandler?.Reset();
+
+			const float breakdownMin = 0.60f;
+			const float breakdownMax = 0.80f;
+			const float breakdownContamination = 0.72f;
+			var factor = Mathf.InverseLerp(breakdownMin, breakdownMax, breakdownContamination);
+			var expectedRecoverAfterTicks = (GenDate.TicksPerHour / 10) * (int)(1 + factor * 7);
+
+			var applied = ContaminationEffect.Breakdown(pawn, factor);
+			var mentalStateAfterApply = pawn.mindState?.mentalStateHandler?.CurStateDef?.defName;
+			var jobAfterApply = pawn.CurJobDef?.defName;
+			var recoverAfterApply = pawn.mindState?.mentalStateHandler?.CurState?.forceRecoverAfterTicks ?? -1;
+
+			AdvanceGameTicks(1);
+			var driverAfterInit = pawn.jobs?.curDriver as JobDriver_ContaminationBreakdown;
+			var movingAfterInit = pawn.pather?.Moving ?? false;
+			var pathDestinationAfterInit = movingAfterInit ? pawn.pather.Destination.Cell : IntVec3.Invalid;
+			var movedAfterInit = pawn.Position != pawnCell;
+
+			const int sourceDerivedThinkTreeWindow = 30;
+			AdvanceGameTicks(sourceDerivedThinkTreeWindow);
+			var driverAfterThinkTreeWindow = pawn.jobs?.curDriver as JobDriver_ContaminationBreakdown;
+			var jobAfterThinkTreeWindow = pawn.CurJobDef?.defName;
+			var movingAfterThinkTreeWindow = pawn.pather?.Moving ?? false;
+			var pathDestinationAfterThinkTreeWindow = movingAfterThinkTreeWindow ? pawn.pather.Destination.Cell : IntVec3.Invalid;
+			var movedAfterThinkTreeWindow = pawn.Position != pawnCell;
+
+			var stateStarted = applied
+				&& mentalStateAfterApply == EffectDefs.ContaminationStateBreakdown.defName
+				&& jobAfterApply == EffectDefs.ContaminationJobBreakdown.defName
+				&& recoverAfterApply == expectedRecoverAfterTicks;
+			var jobInitialized = driverAfterInit != null
+				&& (movingAfterInit || movedAfterInit)
+				&& (pathDestinationAfterInit.IsValid || movedAfterInit);
+			var survivedThinkTreeWindow = driverAfterThinkTreeWindow != null
+				&& jobAfterThinkTreeWindow == EffectDefs.ContaminationJobBreakdown.defName
+				&& (movingAfterThinkTreeWindow || movedAfterThinkTreeWindow);
+
+			return new
+			{
+				success = stateStarted && jobInitialized && survivedThinkTreeWindow,
+				pawn = DescribePawn(pawn),
+				pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+				breakdownContamination,
+				factor,
+				expectedRecoverAfterTicks,
+				applied,
+				mentalStateAfterApply,
+				expectedMentalState = EffectDefs.ContaminationStateBreakdown.defName,
+				jobAfterApply,
+				expectedJob = EffectDefs.ContaminationJobBreakdown.defName,
+				recoverAfterApply,
+				movingAfterInit,
+				pathDestinationAfterInit = pathDestinationAfterInit.IsValid ? ZombieRuntimeActions.DescribeCell(pathDestinationAfterInit) : null,
+				movedAfterInit,
+				sourceDerivedThinkTreeWindow,
+				jobAfterThinkTreeWindow,
+				movingAfterThinkTreeWindow,
+				pathDestinationAfterThinkTreeWindow = pathDestinationAfterThinkTreeWindow.IsValid ? ZombieRuntimeActions.DescribeCell(pathDestinationAfterThinkTreeWindow) : null,
+				movedAfterThinkTreeWindow,
+				stateStarted,
+				jobInitialized,
+				survivedThinkTreeWindow
 			};
 		}
 

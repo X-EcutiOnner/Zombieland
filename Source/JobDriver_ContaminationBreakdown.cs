@@ -36,6 +36,7 @@ namespace ZombieLand
 
 		void InitAction()
 		{
+			Flee();
 		}
 
 		void TickAction()
