@@ -2766,6 +2766,139 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/fog_blocker_removal_spawns_room_zombies", Description = "Build a fogged sealed room, destroy one fog-blocking wall, and verify Zombieland spawns sudden room zombies before vanilla unfogging.")]
+		public static object FogBlockerRemovalSpawnsRoomZombies()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindFogRoomFixtureDoorCell(map, root, 32f, out var doorCell, out var fixtureError) == false)
+				return fixtureError;
+
+			var wallDef = ThingDefOf.Wall;
+			var doorDef = ThingDefOf.Door;
+			var stuffDef = ThingDefOf.WoodLog;
+			var interiorRect = CellRect.FromLimits(doorCell.x - 2, doorCell.z + 1, doorCell.x + 2, doorCell.z + 5);
+			var fixtureRect = CellRect.FromLimits(doorCell.x - 3, doorCell.z, doorCell.x + 3, doorCell.z + 6);
+			var targetWallCell = doorCell + IntVec3.West;
+			Building targetWall = null;
+			foreach (var cell in fixtureRect.EdgeCells)
+			{
+				if (cell == doorCell)
+					continue;
+
+				var wall = ThingMaker.MakeThing(wallDef, stuffDef) as Building;
+				if (wall == null)
+					continue;
+				GenSpawn.Spawn(wall, cell, map, WipeMode.Vanish);
+				wall.SetFaction(Faction.OfPlayer);
+				if (cell == targetWallCell)
+					targetWall = wall;
+			}
+
+			var door = ThingMaker.MakeThing(doorDef, stuffDef) as Building_Door;
+			if (door == null || targetWall == null)
+			{
+				return new
+				{
+					success = false,
+					targetWallCell = ZombieRuntimeActions.DescribeCell(targetWallCell),
+					error = "Could not create the fog-blocker fixture door or target wall."
+				};
+			}
+			GenSpawn.Spawn(door, doorCell, map, WipeMode.Vanish);
+			door.SetFaction(Faction.OfPlayer);
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+
+			map.fogGrid.Refog(interiorRect);
+			map.fogGrid.Unfog(doorCell);
+			map.fogGrid.Unfog(targetWallCell + IntVec3.South);
+			var roomBefore = interiorRect.CenterCell.GetRoom(map);
+			var roomFoggedBefore = roomBefore?.Fogged ?? false;
+			var interiorFoggedBefore = interiorRect.Cells.Count(cell => cell.Fogged(map));
+			var roomCellCount = roomBefore?.CellCount ?? 0;
+			var zombiesBefore = CurrentZombies(map).Length;
+			var oldInfectedRaidsChance = ZombieSettings.Values.infectedRaidsChance;
+			var oldUseDynamicThreatLevel = ZombieSettings.Values.useDynamicThreatLevel;
+			try
+			{
+				ZombieSettings.Values.infectedRaidsChance = 1f;
+				ZombieSettings.Values.useDynamicThreatLevel = false;
+
+				targetWall.Destroy(DestroyMode.Deconstruct);
+				var zombiesAfter = CurrentZombies(map).Length;
+				var roomAfter = interiorRect.CenterCell.GetRoom(map);
+				var roomFoggedAfter = roomAfter?.Fogged ?? false;
+				var interiorFoggedAfter = interiorRect.Cells.Count(cell => cell.Fogged(map));
+				var spawnedZombies = CurrentZombies(map)
+					.OfType<Zombie>()
+					.Where(zombie => interiorRect.Contains(zombie.Position))
+					.Select(DescribeZombie)
+					.ToArray();
+
+				return new
+				{
+					success = roomBefore != null
+						&& targetWall.Destroyed
+						&& targetWall.def.MakeFog
+						&& roomFoggedBefore
+						&& roomCellCount >= 10
+						&& zombiesAfter > zombiesBefore
+						&& spawnedZombies.Length > 0
+						&& roomFoggedAfter == false,
+					destroyedZombies,
+					door = new
+					{
+						id = ZombieRuntimeActions.StableThingId(door),
+						position = ZombieRuntimeActions.DescribeCell(door.Position),
+						door.Open
+					},
+					targetWall = new
+					{
+						id = ZombieRuntimeActions.StableThingId(targetWall),
+						position = ZombieRuntimeActions.DescribeCell(targetWallCell),
+						destroyed = targetWall.Destroyed,
+						defName = targetWall.def?.defName,
+						makeFog = targetWall.def?.MakeFog ?? false
+					},
+					room = new
+					{
+						center = ZombieRuntimeActions.DescribeCell(interiorRect.CenterCell),
+						cellCountBefore = roomCellCount,
+						foggedBefore = roomFoggedBefore,
+						foggedAfter = roomFoggedAfter,
+						interiorCellCount = interiorRect.Area,
+						interiorFoggedBefore,
+						interiorFoggedAfter
+					},
+					settings = new
+					{
+						infectedRaidsChance = ZombieSettings.Values.infectedRaidsChance,
+						useDynamicThreatLevel = ZombieSettings.Values.useDynamicThreatLevel,
+						threatLevel = ZombieWeather.GetThreatLevel(map)
+					},
+					zombiesBefore,
+					zombiesAfter,
+					zombieDelta = zombiesAfter - zombiesBefore,
+					spawnedZombies
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.infectedRaidsChance = oldInfectedRaidsChance;
+				ZombieSettings.Values.useDynamicThreatLevel = oldUseDynamicThreatLevel;
+			}
+		}
+
 		[Tool("zombieland/detonate_suicide_bomber", Description = "Kill a suicide bomber through Zombie.Kill, verify it queued a Zombieland explosion, then execute the explosion.")]
 		public static object DetonateSuicideBomber(
 			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned suicide bomber is used.", Required = false, DefaultValue = "")] string target = "")
