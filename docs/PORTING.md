@@ -28,6 +28,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 - Latest verified: `zombieland/flee_ignores_harmless_zombies` restores the old 1.4 `SelfDefenseUtility.ShouldFleeFrom` semantic on RimWorld 1.6's `FleeUtility.ShouldFleeFrom`: a normal nearby zombie remains a flee threat, but roped, paralyzed/confused, active electrifier, and albino zombies are filtered through `SeesZombieAsThreat` and no longer trigger flee.
 - Latest verified: `zombieland/colonist_avoidance_interrupts_job` generates a real `AvoidGrid` from a nearby tracking zombie, starts a non-forced colonist `Wait_Combat` job, lets `JobDriver.DriverTick` run, and verifies it interrupts into a player-forced `Flee` job whose destination is outside the avoid grid.
 - Latest verified: `zombieland/workgiver_respects_avoid_grid` verifies work assignment gating around zombie danger: a non-forced `WorkGiver_DoubleTap` rejects an infected corpse positioned in the avoid grid while the actor is outside danger, and the same target still creates a forced `DoubleTap` command job.
+- Latest verified: `zombieland/avoid_grid_blocks_door_and_danger` verifies the adjacent avoidance APIs that colonist jobs depend on: `DangerUtility.GetDangerFor` reports an avoided door cell as `Deadly`, `Building_Door.PawnCanOpen` rejects a non-drafted/non-forced colonist for the avoided door, and drafted or player-forced states still bypass the avoid-grid block.
 - Next blocker cluster: validate special zombie behaviors beyond visuals.
 
 ## Decisions

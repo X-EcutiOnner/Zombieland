@@ -375,6 +375,27 @@ namespace ZombieLand
 					grid.SetTimestamp(cell, 0);
 		}
 
+		static AvoidGrid BuildAvoidGridForZombie(Map map, Zombie zombie)
+		{
+			var tickManager = map.GetComponent<TickManager>();
+			var specs = new List<ZombieCostSpecs>
+			{
+				new()
+				{
+					position = zombie.Position,
+					radius = Tools.ZombieAvoidRadius(zombie),
+					maxCosts = TickManager.ZombieMaxCosts(zombie)
+				}
+			};
+			tickManager.avoidGrid = Tools.avoider.UpdateZombiePositionsImmediately(map, specs);
+			return tickManager.avoidGrid;
+		}
+
+		static int AvoidCost(AvoidGrid avoidGrid, Map map, IntVec3 cell)
+		{
+			return avoidGrid.GetCosts()[cell.x + cell.z * map.Size.x];
+		}
+
 		static object DescribePheromoneChange(Map map, Dictionary<IntVec3, long> before, out int changedCount)
 		{
 			var grid = map.GetGrid();
@@ -1734,24 +1755,14 @@ namespace ZombieLand
 				}
 
 				zombie.state = ZombieState.Tracking;
-				var tickManager = map.GetComponent<TickManager>();
-				var specs = new List<ZombieCostSpecs>
-				{
-					new()
-					{
-						position = zombie.Position,
-						radius = Tools.ZombieAvoidRadius(zombie),
-						maxCosts = TickManager.ZombieMaxCosts(zombie)
-					}
-				};
-				tickManager.avoidGrid = Tools.avoider.UpdateZombiePositionsImmediately(map, specs);
-				var actorAvoidCost = tickManager.avoidGrid.GetCosts()[actor.Position.x + actor.Position.z * map.Size.x];
-				var inAvoidDangerBefore = tickManager.avoidGrid.InAvoidDanger(actor);
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var actorAvoidCost = AvoidCost(avoidGrid, map, actor.Position);
+				var inAvoidDangerBefore = avoidGrid.InAvoidDanger(actor);
 				var safeCells = GenRadial.RadialCellsAround(actor.Position, 8f, true)
 					.Where(cell => cell.InBounds(map))
 					.Where(cell => cell.Standable(map))
 					.Where(cell => cell.Fogged(map) == false)
-					.Where(cell => tickManager.avoidGrid.ShouldAvoid(map, cell) == false)
+					.Where(cell => avoidGrid.ShouldAvoid(map, cell) == false)
 					.Take(8)
 					.Select(ZombieRuntimeActions.DescribeCell)
 					.ToArray();
@@ -1788,7 +1799,7 @@ namespace ZombieLand
 
 				var fleeJob = actor.CurJob;
 				var fleeDestination = fleeJob?.targetA.Cell ?? IntVec3.Invalid;
-				var fleeDestinationAvoids = fleeDestination.IsValid && tickManager.avoidGrid.ShouldAvoid(map, fleeDestination) == false;
+				var fleeDestinationAvoids = fleeDestination.IsValid && avoidGrid.ShouldAvoid(map, fleeDestination) == false;
 
 				return new
 				{
@@ -1927,20 +1938,10 @@ namespace ZombieLand
 				}
 
 				zombie.state = ZombieState.Tracking;
-				var tickManager = map.GetComponent<TickManager>();
-				var specs = new List<ZombieCostSpecs>
-				{
-					new()
-					{
-						position = zombie.Position,
-						radius = Tools.ZombieAvoidRadius(zombie),
-						maxCosts = TickManager.ZombieMaxCosts(zombie)
-					}
-				};
-				tickManager.avoidGrid = Tools.avoider.UpdateZombiePositionsImmediately(map, specs);
-				var targetAvoidCost = tickManager.avoidGrid.GetCosts()[corpse.Position.x + corpse.Position.z * map.Size.x];
-				var targetShouldAvoid = tickManager.avoidGrid.ShouldAvoid(map, corpse.Position);
-				var actorShouldAvoid = tickManager.avoidGrid.ShouldAvoid(map, actor.Position);
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var targetAvoidCost = AvoidCost(avoidGrid, map, corpse.Position);
+				var targetShouldAvoid = avoidGrid.ShouldAvoid(map, corpse.Position);
+				var actorShouldAvoid = avoidGrid.ShouldAvoid(map, actor.Position);
 
 				var workGiver = new WorkGiver_DoubleTap();
 				var hasUnforcedJob = workGiver.HasJobOnThing(actor, corpse, false);
@@ -1976,6 +1977,162 @@ namespace ZombieLand
 			{
 				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
 				ZombieSettings.Values.hoursAfterDeathToBecomeZombie = oldHours;
+			}
+		}
+
+		[Tool("zombieland/avoid_grid_blocks_door_and_danger", Description = "Verify avoid-grid danger affects vanilla door and danger checks for normal colonist behavior but not drafted or player-forced commands.")]
+		public static object AvoidGridBlocksDoorAndDanger()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			ZombieSettings.Values.betterZombieAvoidance = true;
+			try
+			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				actor.workSettings?.DisableAll();
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoAvoidZombies = true;
+
+				var doorCell = GenRadial.RadialCellsAround(actor.Position, 14f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetEdifice(map) == null)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(actor.Position) >= 10f)
+					.OrderBy(cell => cell.DistanceToSquared(actor.Position))
+					.FirstOrDefault();
+				if (doorCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "No distant clear door cell was found for the avoid-grid fixture."
+					};
+				}
+
+				var zombieCell = GenRadial.RadialCellsAround(doorCell, 3f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell != doorCell)
+					.OrderBy(cell => cell.DistanceToSquared(doorCell))
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						doorCell = ZombieRuntimeActions.DescribeCell(doorCell),
+						error = "No nearby zombie cell was found for the avoid-grid door fixture."
+					};
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						doorCell = ZombieRuntimeActions.DescribeCell(doorCell),
+						error = "ZombieGenerator.SpawnZombie returned no avoid-grid zombie."
+					};
+				}
+				zombie.state = ZombieState.Tracking;
+
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var doorAvoidCost = AvoidCost(avoidGrid, map, doorCell);
+				var doorShouldAvoid = avoidGrid.ShouldAvoid(map, doorCell);
+				var actorShouldAvoid = avoidGrid.ShouldAvoid(map, actor.Position);
+
+				var door = ThingMaker.MakeThing(ThingDefOf.Door, GenStuff.DefaultStuffFor(ThingDefOf.Door)) as Building_Door;
+				if (door == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						zombie = DescribeZombie(zombie),
+						doorCell = ZombieRuntimeActions.DescribeCell(doorCell),
+						error = "Could not create test door."
+					};
+				}
+				GenSpawn.Spawn(door, doorCell, map, WipeMode.Vanish);
+				door.SetFaction(Faction.OfPlayer);
+				map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+
+				actor.drafter.Drafted = false;
+				actor.jobs.EndCurrentJob(JobCondition.InterruptForced);
+				var normalDoorCanOpen = door.PawnCanOpen(actor);
+				var normalDanger = doorCell.GetDangerFor(actor, map);
+
+				actor.drafter.Drafted = true;
+				var draftedDoorCanOpen = door.PawnCanOpen(actor);
+				actor.drafter.Drafted = false;
+
+				var forcedWait = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				forcedWait.playerForced = true;
+				actor.jobs.StartJob(forcedWait, JobCondition.InterruptForced, null, false, true);
+				var forcedDoorCanOpen = door.PawnCanOpen(actor);
+				var forcedDanger = doorCell.GetDangerFor(actor, map);
+
+				return new
+				{
+					success = doorShouldAvoid
+						&& actorShouldAvoid == false
+						&& normalDoorCanOpen == false
+						&& normalDanger == Danger.Deadly
+						&& draftedDoorCanOpen
+						&& forcedDoorCanOpen
+						&& forcedDanger != Danger.Deadly,
+					destroyedZombies,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					door = new
+					{
+						id = ZombieRuntimeActions.StableThingId(door),
+						defName = door.def?.defName,
+						faction = door.Faction?.Name,
+						position = ZombieRuntimeActions.DescribeCell(door.Position),
+						freePassage = door.FreePassage
+					},
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					doorCell = ZombieRuntimeActions.DescribeCell(doorCell),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					doorAvoidCost,
+					doorShouldAvoid,
+					actorShouldAvoid,
+					normalDoorCanOpen,
+					normalDanger = normalDanger.ToString(),
+					draftedDoorCanOpen,
+					forcedDoorCanOpen,
+					forcedDanger = forcedDanger.ToString(),
+					forcedJob = actor.CurJobDef?.defName,
+					forcedJobPlayerForced = actor.CurJob?.playerForced
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
 			}
 		}
 
