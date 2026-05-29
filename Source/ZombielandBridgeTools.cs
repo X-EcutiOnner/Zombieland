@@ -5011,6 +5011,149 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_carry_tracker_contract", Description = "Verify carried contaminated items equalize into the carrier through real Pawn_CarryTracker.CarryHandsTickInterval.")]
+		public static object ContaminationCarryTrackerContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var pawnCell, out var pawnSpawnError) == false)
+				return pawnSpawnError;
+			if (TryFindClearSpawnCell(map, pawnCell + IntVec3.East, 8f, out var itemCell, out var itemSpawnError) == false)
+				return itemSpawnError;
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var item = (Thing)null;
+			try
+			{
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+				DisablePawnWork(pawn);
+				pawn.ClearContamination();
+				pawn.jobs?.StopAll(false, true);
+				pawn.pather?.StopDead();
+				if (pawn.drafter != null)
+					pawn.drafter.Drafted = true;
+				var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				waitJob.playerForced = true;
+				pawn.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+
+				item = ThingMaker.MakeThing(ThingDefOf.Steel);
+				item.stackCount = 20;
+				GenSpawn.Spawn(item, itemCell, map, WipeMode.Vanish);
+				const float itemContaminationBefore = 0.7f;
+				item.SetContamination(itemContaminationBefore);
+				var itemSpawnedBeforeCarry = item.Spawned;
+				item.DeSpawn();
+				var startedCarry = pawn.carryTracker.TryStartCarry(item);
+				var carriedThing = pawn.carryTracker.CarriedThing;
+				var carryingExpectedThing = ReferenceEquals(carriedThing, item);
+				var itemSpawnedAfterCarry = item.Spawned;
+				if (startedCarry == false || carryingExpectedThing == false)
+				{
+					return new
+					{
+						success = false,
+						error = "Pawn_CarryTracker.TryStartCarry did not put the contaminated item in the carrier's hands.",
+						pawn = DescribePawn(pawn),
+						item = ZombieRuntimeActions.StableThingId(item),
+						pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+						itemCell = ZombieRuntimeActions.DescribeCell(itemCell),
+						itemSpawnedBeforeCarry,
+						itemSpawnedAfterCarry,
+						startedCarry,
+						carryingExpectedThing
+					};
+				}
+
+				var pawnBefore = pawn.GetContamination(false);
+				var carriedBefore = carriedThing.GetContamination();
+				var carryEqualize = ZombieSettings.Values.contamination.carryEqualize;
+				var expectedPawnAfter = carriedBefore * carryEqualize;
+				var expectedCarriedAfter = carriedBefore * (1f - carryEqualize);
+				var tickStart = Find.TickManager.TicksGame;
+				var cadenceTick = pawn.thingIDNumber % 900;
+				var ticksToCadence = (cadenceTick - tickStart % 900 + 900) % 900;
+				if (ticksToCadence > 0)
+					AdvanceGameTicks(ticksToCadence);
+				var tickAtCall = Find.TickManager.TicksGame;
+				var tickAligned = tickAtCall % 900 == cadenceTick;
+				var pawnAtCadence = pawn.GetContamination(false);
+				var carriedAtCadence = carriedThing.GetContamination();
+				var cadenceTickAlreadyRan = pawnAtCadence > pawnBefore;
+				if (cadenceTickAlreadyRan == false)
+					pawn.carryTracker.CarryHandsTickInterval(1);
+
+				var pawnAfter = pawn.GetContamination(false);
+				var carriedAfter = carriedThing.GetContamination();
+				var carriedStillHeld = ReferenceEquals(pawn.carryTracker.CarriedThing, item);
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var cadenceReached = tickAligned && pawnAfter > pawnBefore;
+				var equalized = cadenceReached
+					&& carriedStillHeld
+					&& CloseFloat(pawnBefore, 0f)
+					&& CloseFloat(carriedBefore, itemContaminationBefore)
+					&& CloseFloat(pawnAfter, expectedPawnAfter)
+					&& CloseFloat(carriedAfter, expectedCarriedAfter);
+
+				return new
+				{
+					success = equalized,
+					pawn = DescribePawn(pawn),
+					item = ZombieRuntimeActions.StableThingId(item),
+					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+					itemCell = ZombieRuntimeActions.DescribeCell(itemCell),
+					itemSpawnedBeforeCarry,
+					itemSpawnedAfterCarry,
+					startedCarry,
+					carryingExpectedThing,
+					carriedStillHeld,
+					tickStart,
+					cadenceTick,
+					ticksToCadence,
+					tickAtCall,
+					tickAligned,
+					cadenceTickAlreadyRan,
+					carryEqualize,
+					pawnBefore,
+					pawnAtCadence,
+					pawnAfter,
+					expectedPawnAfter,
+					carriedBefore,
+					carriedAtCadence,
+					carriedAfter,
+					expectedCarriedAfter,
+					cadenceReached,
+					equalized
+				};
+			}
+			finally
+			{
+				pawn?.ClearContamination();
+				item?.ClearContamination();
+				pawn?.carryTracker?.TryDropCarriedThing(pawn.Position, ThingPlaceMode.Near, out _);
+				if (item is { Destroyed: false, Spawned: true })
+					item.Destroy();
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+			}
+		}
+
 		[Tool("zombieland/contamination_recipe_product_contract", Description = "Verify contamination transfers from spawned recipe ingredients into unspawned recipe products.")]
 		public static object ContaminationRecipeProductContract()
 		{
@@ -5130,6 +5273,160 @@ namespace ZombieLand
 					ingredient.Destroy();
 				if (worker is { Destroyed: false, Spawned: true })
 					worker.Destroy();
+			}
+		}
+
+		[Tool("zombieland/contamination_nutrient_paste_contract", Description = "Verify contaminated hopper feed transfers through real Building_NutrientPasteDispenser.TryDispenseFood into the produced meal.")]
+		public static object ContaminationNutrientPasteContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var dispenserDef = DefDatabase<ThingDef>.GetNamedSilentFail("NutrientPasteDispenser");
+			var hopperDef = DefDatabase<ThingDef>.GetNamedSilentFail("Hopper");
+			var feedDef = ThingDefOf.MealSurvivalPack;
+			if (dispenserDef == null || hopperDef == null || feedDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "NutrientPasteDispenser, Hopper, or MealSurvivalPack is unavailable."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearBuildingFootprint(map, dispenserDef, root, 24f, out var dispenserCell, out var dispenserCellError) == false)
+				return dispenserCellError;
+
+			var dispenser = (Building_NutrientPasteDispenser)null;
+			var hopper = (Thing)null;
+			var feed = (Thing)null;
+			var meal = (Thing)null;
+			try
+			{
+				dispenser = ThingMaker.MakeThing(dispenserDef) as Building_NutrientPasteDispenser;
+				if (dispenser == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not create NutrientPasteDispenser fixture."
+					};
+				}
+				dispenser.SetFactionDirect(Faction.OfPlayer);
+				GenSpawn.Spawn(dispenser, dispenserCell, map, Rot4.North, WipeMode.Vanish, false);
+
+				var hopperCell = dispenser.AdjCellsCardinalInBounds.FirstOrDefault(cell =>
+					cell.InBounds(map)
+					&& cell.Fogged(map) == false
+					&& cell.GetEdifice(map) == null
+					&& cell.GetThingList(map).Any(thing => thing is Pawn || thing is Blueprint || thing is Frame || thing.def.category == ThingCategory.Building) == false);
+				if (hopperCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not find a clear adjacent hopper cell for the dispenser fixture."
+					};
+				}
+
+				hopper = ThingMaker.MakeThing(hopperDef);
+				hopper.SetFactionDirect(Faction.OfPlayer);
+				GenSpawn.Spawn(hopper, hopperCell, map, Rot4.North, WipeMode.Vanish, false);
+
+				feed = ThingMaker.MakeThing(feedDef);
+				feed.stackCount = 2;
+				GenSpawn.Spawn(feed, hopperCell, map, Rot4.North, WipeMode.Vanish, false);
+
+				var powerComp = dispenser.GetComp<CompPowerTrader>();
+				if (powerComp == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Spawned dispenser has no CompPowerTrader."
+					};
+				}
+				powerComp.PowerOn = true;
+
+				const float feedContamination = 0.6f;
+				feed.SetContamination(feedContamination);
+				var feedBefore = feed.GetContamination();
+				var stackBefore = feed.stackCount;
+				var canDispense = dispenser.CanDispenseNow;
+				var transferFactor = ZombieSettings.Values.contamination.dispenseFoodTransfer;
+
+				meal = dispenser.TryDispenseFood();
+
+				var feedAfter = feed.GetContamination();
+				var stackAfter = feed.Destroyed ? 0 : feed.stackCount;
+				var mealContamination = meal?.GetContamination() ?? -1f;
+				var expectedMealContamination = feedContamination * transferFactor;
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var mealProduced = canDispense
+					&& meal != null
+					&& meal.Spawned == false
+					&& meal.def == ThingDefOf.MealNutrientPaste
+					&& stackBefore == 2
+					&& stackAfter == 1;
+				var contaminationTransferred = mealProduced
+					&& CloseFloat(feedBefore, feedContamination)
+					&& CloseFloat(feedAfter, feedContamination)
+					&& CloseFloat(mealContamination, expectedMealContamination);
+
+				return new
+				{
+					success = mealProduced && contaminationTransferred,
+					dispenser = ZombieRuntimeActions.StableThingId(dispenser),
+					dispenserCell = ZombieRuntimeActions.DescribeCell(dispenserCell),
+					hopper = ZombieRuntimeActions.StableThingId(hopper),
+					hopperCell = ZombieRuntimeActions.DescribeCell(hopperCell),
+					powerOn = powerComp.PowerOn,
+					canDispense,
+					feed = ZombieRuntimeActions.StableThingId(feed),
+					feedDef = feed.def.defName,
+					stackBefore,
+					stackAfter,
+					feedBefore,
+					feedAfter,
+					meal = ZombieRuntimeActions.StableThingId(meal),
+					mealDef = meal?.def?.defName,
+					mealSpawned = meal?.Spawned,
+					mealContamination,
+					expectedMealContamination,
+					transferFactor,
+					mealProduced,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				meal?.ClearContamination();
+				if (meal is { Destroyed: false, Spawned: true })
+					meal.Destroy();
+				feed?.ClearContamination();
+				if (feed is { Destroyed: false, Spawned: true })
+					feed.Destroy();
+				if (hopper is { Destroyed: false, Spawned: true })
+					hopper.Destroy();
+				if (dispenser is { Destroyed: false, Spawned: true })
+					dispenser.Destroy();
 			}
 		}
 

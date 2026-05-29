@@ -189,35 +189,56 @@ namespace ZombieLand
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static void Postfix(Thing __result, Thing __instance)
+		internal static void CopyContaminationToSplitOff(Thing result, Thing instance)
 		{
-			if (__result == null || __result == __instance)
+			if (result == null || result == instance)
 				return;
 			if (Tools.IsPlaying() == false)
 				return;
 
-			var contamination = __instance.GetContamination();
+			var contamination = instance.GetContamination();
 			if (contamination == 0)
 				return;
 
-			var savedMapIndex1 = __instance.mapIndexOrState;
-			var savedMapIndex2 = __result.mapIndexOrState;
+			if (Mathf.Abs(result.GetContamination() - contamination) < 0.0001f)
+				return;
+
+			var savedMapIndex1 = instance.mapIndexOrState;
+			var savedMapIndex2 = result.mapIndexOrState;
 			var ownerMapIndex = ThingOwner_TryTransferToContainer_Patch.activeThingOwnerMapIndex;
 			if (savedMapIndex1 < 0 && ownerMapIndex >= 0)
 			{
-				__instance.mapIndexOrState = ownerMapIndex;
-				__result.mapIndexOrState = ownerMapIndex;
-				__result.AddContamination(contamination);
-				__instance.mapIndexOrState = savedMapIndex1;
-				__result.mapIndexOrState = savedMapIndex2;
+				instance.mapIndexOrState = ownerMapIndex;
+				result.mapIndexOrState = ownerMapIndex;
+				result.SetContamination(contamination);
+				instance.mapIndexOrState = savedMapIndex1;
+				result.mapIndexOrState = savedMapIndex2;
 			}
 			else
 			{
-				var savedMapIndex = __result.mapIndexOrState;
-				__result.mapIndexOrState = __instance.mapIndexOrState;
-				__result.AddContamination(contamination);
-				__result.mapIndexOrState = savedMapIndex;
+				var savedMapIndex = result.mapIndexOrState;
+				result.mapIndexOrState = instance.mapIndexOrState;
+				result.SetContamination(contamination);
+				result.mapIndexOrState = savedMapIndex;
 			}
+		}
+
+		static void Postfix(Thing __result, Thing __instance)
+		{
+			CopyContaminationToSplitOff(__result, __instance);
+			Building_NutrientPasteDispenser_TryDispenseFood_Patch.NotifySplitOff(__result);
+		}
+	}
+
+	[HarmonyPatch(typeof(ThingWithComps), nameof(ThingWithComps.SplitOff))]
+	static class ThingWithComps_SplitOff_Patch
+	{
+		static bool Prepare() => Constants.CONTAMINATION;
+
+		static void Postfix(Thing __result, ThingWithComps __instance)
+		{
+			Thing_SplitOff_Patch.CopyContaminationToSplitOff(__result, __instance);
+			Building_NutrientPasteDispenser_TryDispenseFood_Patch.NotifySplitOff(__result);
 		}
 	}
 

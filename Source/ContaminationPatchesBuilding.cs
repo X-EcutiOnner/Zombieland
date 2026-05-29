@@ -268,41 +268,36 @@ namespace ZombieLand
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static Thing AddToThingList(Thing thing, List<Thing> things)
+		[ThreadStatic] static List<Thing> activeFeed;
+
+		static void Prefix()
+			=> activeFeed = new List<Thing>();
+
+		internal static void NotifySplitOff(Thing thing)
 		{
-			things?.Add(thing);
-			return thing;
+			if (activeFeed != null && thing != null && activeFeed.Contains(thing) == false)
+				activeFeed.Add(thing);
 		}
 
-		static Thing MakeThing(ThingDef def, ThingDef stuff, List<Thing> things)
+		static void Postfix(Building_NutrientPasteDispenser __instance, Thing __result)
 		{
-			var result = ThingMaker.MakeThing(def, stuff);
-			things?.TransferContamination(ZombieSettings.Values.contamination.dispenseFoodTransfer, result);
-			return result;
-		}
-
-		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
-		{
-			var thingList = generator.DeclareLocal(typeof(List<Thing>));
-			var thingListConstructor = AccessTools.DeclaredConstructor(thingList.LocalType, Array.Empty<Type>());
-
-			var m_SplitOff = SymbolExtensions.GetMethodInfo((Thing thing) => thing.SplitOff(0));
-			var m_AddToThingList = SymbolExtensions.GetMethodInfo(() => AddToThingList(default, default));
-
-			var from2 = SymbolExtensions.GetMethodInfo(() => ThingMaker.MakeThing(default, default));
-			var to2 = SymbolExtensions.GetMethodInfo(() => MakeThing(default, default, default));
-
-			return new CodeMatcher(instructions)
-				 .MatchStartForward(Newobj)
-				 .Insert(Newobj[thingListConstructor], Stloc[thingList])
-				 .MatchStartForward(new CodeMatch(operand: m_SplitOff))
-				 .Advance(1)
-				 .Insert(Ldloc[thingList], Call[m_AddToThingList])
-				 .MatchStartForward(new CodeMatch(operand: from2))
-				 .ThrowIfInvalid($"Cannot find {from2.FullDescription()}")
-				 .InsertAndAdvance(Ldloc[thingList])
-				 .SetInstruction(Call[to2])
-				 .InstructionEnumeration();
+			try
+			{
+				if (__result != null && activeFeed != null)
+				{
+					var mapIndex = __instance.Map == null ? (sbyte?)null : (sbyte)__instance.Map.Index;
+					var factor = ZombieSettings.Values.contamination.dispenseFoodTransfer;
+					foreach (var thing in activeFeed)
+					{
+						__result.AddContamination(thing.GetContamination(), mapIndex, factor);
+						thing.ClearContamination();
+					}
+				}
+			}
+			finally
+			{
+				activeFeed = null;
+			}
 		}
 	}
 
