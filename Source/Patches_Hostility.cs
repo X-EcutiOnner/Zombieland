@@ -31,8 +31,9 @@ namespace ZombieLand
 			var isAnimal = attackerRace?.Animal ?? false;
 			var isMech = attackerRace?.IsMechanoid ?? false;
 
-			var isPlayer = isAnimal == false && attackerFaction.IsPlayer;
-			var isEnemy = isAnimal == false && attackerFaction.HostileTo(Faction.OfPlayer);
+			var attackerFactionDef = attackerFaction?.def;
+			var isPlayer = isAnimal == false && (attackerFactionDef?.isPlayer ?? false);
+			var isEnemy = isAnimal == false && attackerFactionDef != null && attackerFaction.HostileTo(Faction.OfPlayer);
 			var isFriendly = isAnimal == false && isEnemy == false && isPlayer == false;
 
 			// remove spitter for everyone except player
@@ -285,8 +286,13 @@ namespace ZombieLand
 				return;
 			}
 
+			var attackerFaction = attacker.Faction;
+			var attackerFactionDef = attackerFaction?.def;
+			if (attackerFactionDef == null)
+				return;
+
 			// attacker is player
-			if (attacker.Faction.IsPlayer)
+			if (attackerFactionDef.isPlayer)
 			{
 				validator = (Thing t) =>
 				{
@@ -348,7 +354,8 @@ namespace ZombieLand
 				Thing attacker = searcher as Pawn;
 				attacker ??= searcher.Thing;
 
-				if (attacker != null && attacker.Faction.HostileTo(Faction.OfPlayer) == false)
+				var attackerFaction = attacker?.Faction;
+				if (attackerFaction?.def != null && attackerFaction.HostileTo(Faction.OfPlayer) == false)
 				{
 					var verb = searcher.CurrentEffectiveVerb;
 					if (verb != null)
@@ -486,7 +493,7 @@ namespace ZombieLand
 	{
 		static bool Prefix(ref bool __result, Thing t, Faction fac)
 		{
-			if ((t is ZombieBlob || t is ZombieSpitter) && fac.IsPlayer == false)
+			if ((t is ZombieBlob || t is ZombieSpitter) && (fac?.def?.isPlayer ?? false) == false)
 			{
 				__result = false;
 				return false;
@@ -571,7 +578,7 @@ namespace ZombieLand
 			if (target is Zombie zombie)
 				return zombie.IsRopedOrConfused == false;
 			if (target is ZombieBlob || target is ZombieSpitter)
-				return faction.IsPlayer;
+				return faction?.def?.isPlayer ?? false;
 			return GenHostility.IsActiveThreatTo(target, faction, ignoreHives, canBeFogged); // ok to call patched method bc we filtered out zombies
 		}
 

@@ -43,6 +43,15 @@ namespace ZombieLand
 			};
 		}
 
+		static PawnKindDef FindNonFleshPawnKind()
+		{
+			return DefDatabase<PawnKindDef>.AllDefsListForReading
+				.Where(kind => kind?.race?.race != null && kind.race.race.IsFlesh == false)
+				.OrderByDescending(kind => kind.race.race.IsMechanoid)
+				.ThenBy(kind => kind.defName)
+				.FirstOrDefault();
+		}
+
 		static bool TryFindEatingFixtureCells(Map map, IntVec3 rootCell, string targetLabel, out IntVec3 zombieCell, out IntVec3 targetCell, out object error)
 		{
 			const float searchRadius = 70f;
@@ -117,7 +126,7 @@ namespace ZombieLand
 			static int MissingPartCount(Pawn pawn)
 				=> pawn?.health?.hediffSet?.hediffs?.OfType<Hediff_MissingPart>().Count() ?? 0;
 
-			object RunCase(string name, bool eatCorpses, PawnKindDef targetKind, Faction targetFaction, IntVec3 caseRoot)
+			object RunCase(string name, bool eatCorpses, bool expectEating, PawnKindDef targetKind, Faction targetFaction, IntVec3 caseRoot, bool fullNegativeWindow = false)
 			{
 				if (TryFindEatingFixtureCells(map, caseRoot, "corpse", out var zombieCell, out var corpseCell, out var error) == false)
 				{
@@ -182,7 +191,7 @@ namespace ZombieLand
 
 				var missingBefore = MissingPartCount(corpse.InnerPawn);
 				var eatDelayTicks = Constants.EAT_DELAY_TICKS / 4;
-				var maxTicks = eatCorpses ? eatDelayTicks + 8 : 8;
+				var maxTicks = expectEating || fullNegativeWindow ? eatDelayTicks + 8 : 8;
 				var tickHit = -1;
 				var samples = new List<object>();
 				var stumbleJob = JobMaker.MakeJob(CustomDefs.Stumble);
@@ -222,7 +231,7 @@ namespace ZombieLand
 
 				var driverAfter = zombie.jobs?.curDriver as JobDriver_Stumble;
 				var missingAfter = MissingPartCount(corpse.InnerPawn);
-				var success = eatCorpses
+				var success = expectEating
 					? tickHit > 0 && missingAfter > missingBefore && ReferenceEquals(driverAfter?.eatTarget, corpse)
 					: tickHit == -1 && missingAfter == missingBefore && driverAfter?.eatTarget == null;
 				allCasesSucceeded &= success;
@@ -232,6 +241,7 @@ namespace ZombieLand
 					name,
 					success,
 					eatCorpses,
+					expectEating,
 					sourcePath = "JobDriver_Stumble.TickAction -> ZombieStateHandler.Eat -> CanIngest -> EatDelay -> EatBodyPart",
 					sourceDerivedTicks = new
 					{
@@ -277,14 +287,16 @@ namespace ZombieLand
 			try
 			{
 				var animalKind = DefDatabase<PawnKindDef>.GetNamed("Muffalo", false);
-				var disabledCase = RunCase("corpseEatingDisabled", false, PawnKindDefOf.Colonist, Faction.OfPlayer, root + new IntVec3(-8, 0, 8));
-				var enabledHumanCase = RunCase("corpseEatingEnabledHuman", true, PawnKindDefOf.Colonist, Faction.OfPlayer, root + new IntVec3(8, 0, 8));
-				var enabledAnimalCase = RunCase("corpseEatingEnabledAnimal", true, animalKind, null, root + new IntVec3(8, 0, -8));
+				var nonFleshKind = FindNonFleshPawnKind();
+				var disabledCase = RunCase("corpseEatingDisabled", false, false, PawnKindDefOf.Colonist, Faction.OfPlayer, root + new IntVec3(-8, 0, 8));
+				var enabledHumanCase = RunCase("corpseEatingEnabledHuman", true, true, PawnKindDefOf.Colonist, Faction.OfPlayer, root + new IntVec3(8, 0, 8));
+				var enabledAnimalCase = RunCase("corpseEatingEnabledAnimal", true, true, animalKind, null, root + new IntVec3(8, 0, -8));
+				var nonFleshCase = RunCase("corpseEatingRejectsNonFlesh", true, false, nonFleshKind, null, root + new IntVec3(-16, 0, 8), true);
 				return new
 				{
 					success = allCasesSucceeded,
 					destroyedZombies,
-					cases = new[] { disabledCase, enabledHumanCase, enabledAnimalCase }
+					cases = new[] { disabledCase, enabledHumanCase, enabledAnimalCase, nonFleshCase }
 				};
 			}
 			finally
@@ -317,9 +329,12 @@ namespace ZombieLand
 			static bool TryMakeDowned(Pawn pawn, out string error)
 			{
 				error = null;
-				var bloodLoss = HediffMaker.MakeHediff(HediffDefOf.BloodLoss, pawn);
-				bloodLoss.Severity = 0.45f;
-				pawn.health.hediffSet.AddDirect(bloodLoss);
+				if (pawn.RaceProps.IsFlesh)
+				{
+					var bloodLoss = HediffMaker.MakeHediff(HediffDefOf.BloodLoss, pawn);
+					bloodLoss.Severity = 0.45f;
+					pawn.health.hediffSet.AddDirect(bloodLoss);
+				}
 				var anesthetic = HediffMaker.MakeHediff(HediffDefOf.Anesthetic, pawn);
 				anesthetic.Severity = 1f;
 				pawn.health.hediffSet.AddDirect(anesthetic);
@@ -339,7 +354,7 @@ namespace ZombieLand
 				return true;
 			}
 
-			object RunCase(string name, bool eatDowned, PawnKindDef targetKind, IntVec3 caseRoot)
+			object RunCase(string name, bool eatDowned, bool expectEating, PawnKindDef targetKind, IntVec3 caseRoot)
 			{
 				if (TryFindEatingFixtureCells(map, caseRoot, "downed-pawn", out var zombieCell, out var targetCell, out var error) == false)
 				{
@@ -403,7 +418,7 @@ namespace ZombieLand
 
 				var missingBefore = MissingPartCount(target);
 				var eatDelayTicks = Constants.EAT_DELAY_TICKS / 4;
-				var maxTicks = eatDowned ? eatDelayTicks + 8 : 8;
+				var maxTicks = expectEating ? eatDelayTicks + 8 : 8;
 				var tickHit = -1;
 				var samples = new List<object>();
 				var stumbleJob = JobMaker.MakeJob(CustomDefs.Stumble);
@@ -445,7 +460,7 @@ namespace ZombieLand
 
 				var driverAfter = zombie.jobs?.curDriver as JobDriver_Stumble;
 				var missingAfter = MissingPartCount(target);
-				var success = eatDowned
+				var success = expectEating
 					? tickHit > 0 && missingAfter > missingBefore && ReferenceEquals(driverAfter?.eatTarget, target)
 					: tickHit == -1 && missingAfter == missingBefore && driverAfter?.eatTarget == null;
 				allCasesSucceeded &= success;
@@ -455,6 +470,7 @@ namespace ZombieLand
 					name,
 					success,
 					eatDowned,
+					expectEating,
 					attackMode = ZombieSettings.Values.attackMode.ToString(),
 					sourcePath = "JobDriver_Stumble.TickAction -> ZombieStateHandler.Eat -> CanIngest(downed pawn) -> EatDelay -> EatBodyPart",
 					sourceDerivedTicks = new
@@ -499,14 +515,16 @@ namespace ZombieLand
 			try
 			{
 				var animalKind = DefDatabase<PawnKindDef>.GetNamed("Muffalo", false);
-				var disabledCase = RunCase("downedEatingDisabled", false, PawnKindDefOf.Colonist, root + new IntVec3(-8, 0, -8));
-				var enabledHumanCase = RunCase("downedEatingEnabledHuman", true, PawnKindDefOf.Colonist, root + new IntVec3(8, 0, -8));
-				var enabledAnimalCase = RunCase("downedEatingEnabledAnimal", true, animalKind, root + new IntVec3(8, 0, -16));
+				var nonFleshKind = FindNonFleshPawnKind();
+				var disabledCase = RunCase("downedEatingDisabled", false, false, PawnKindDefOf.Colonist, root + new IntVec3(-8, 0, -8));
+				var enabledHumanCase = RunCase("downedEatingEnabledHuman", true, true, PawnKindDefOf.Colonist, root + new IntVec3(8, 0, -8));
+				var enabledAnimalCase = RunCase("downedEatingEnabledAnimal", true, true, animalKind, root + new IntVec3(8, 0, -16));
+				var nonFleshCase = RunCase("downedEatingRejectsNonFlesh", true, false, nonFleshKind, root + new IntVec3(-16, 0, -8));
 				return new
 				{
 					success = allCasesSucceeded,
 					destroyedZombies,
-					cases = new[] { disabledCase, enabledHumanCase, enabledAnimalCase }
+					cases = new[] { disabledCase, enabledHumanCase, enabledAnimalCase, nonFleshCase }
 				};
 			}
 			finally
