@@ -5115,6 +5115,234 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_terrain_construction_contract", Description = "Verify contaminated frame materials transfer through real terrain Frame.CompleteConstruction into normal floors and foundations.")]
+		public static object ContaminationTerrainConstructionContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var woodFloor = DefDatabase<TerrainDef>.GetNamedSilentFail("WoodPlankFloor");
+			var bridge = DefDatabase<TerrainDef>.GetNamedSilentFail("Bridge");
+			var stuffDef = ThingDefOf.WoodLog;
+			if (woodFloor?.frameDef == null || bridge?.frameDef == null || stuffDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "WoodPlankFloor, Bridge, their frame defs, or WoodLog is unavailable."
+				};
+			}
+
+			bool TryFindTerrainFrameCell(IntVec3 root, float radius, out IntVec3 cell, out object error)
+			{
+				cell = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+				{
+					if (candidate.InBounds(map) == false)
+						continue;
+					if (candidate.Fogged(map))
+						continue;
+					if (candidate.GetEdifice(map) != null)
+						continue;
+					if (map.terrainGrid.FoundationAt(candidate) != null)
+						continue;
+					if (map.terrainGrid.TempTerrainAt(candidate) != null)
+						continue;
+					if (candidate.GetThingList(map).Any(thing =>
+						thing is Pawn
+						|| thing is Blueprint
+						|| thing is Frame
+						|| thing.def.category == ThingCategory.Plant
+						|| thing.def.category == ThingCategory.Building
+						|| thing.def.passability == Traversability.Impassable))
+						continue;
+
+					cell = candidate;
+					return true;
+				}
+
+				error = new
+				{
+					success = false,
+					error = $"No clear terrain frame fixture cell was found near ({root.x}, {root.z})."
+				};
+				return false;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var workerCell, out var workerSpawnError) == false)
+				return workerSpawnError;
+			if (TryFindTerrainFrameCell(workerCell + new IntVec3(4, 0, 0), 16f, out var floorCell, out var floorCellError) == false)
+				return floorCellError;
+			if (TryFindTerrainFrameCell(floorCell + new IntVec3(4, 0, 0), 16f, out var bridgeCell, out var bridgeCellError) == false)
+				return bridgeCellError;
+
+			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var touchedCells = new List<(IntVec3 cell, TerrainDef top, TerrainDef foundation, TerrainDef temp, float contamination)>();
+			var createdThings = new List<Thing>();
+			try
+			{
+				void SnapshotTerrain(IntVec3 cell)
+				{
+					touchedCells.Add((cell, map.terrainGrid.TerrainAt(cell), map.terrainGrid.FoundationAt(cell), map.terrainGrid.TempTerrainAt(cell), map.GetContamination(cell)));
+				}
+
+				(bool success, object payload) CompleteTerrainFrame(TerrainDef terrainDef, IntVec3 cell, float materialContamination)
+				{
+					SnapshotTerrain(cell);
+
+					var frame = ThingMaker.MakeThing(terrainDef.frameDef) as Frame;
+					var material = ThingMaker.MakeThing(stuffDef);
+					createdThings.Add(frame);
+					createdThings.Add(material);
+
+					if (frame == null || material == null)
+					{
+						var errorPayload = new
+						{
+							success = false,
+							error = $"Could not create terrain frame fixture for {terrainDef.defName}."
+						};
+						return (false, errorPayload);
+					}
+
+					frame.SetFactionDirect(Faction.OfPlayer);
+					GenSpawn.Spawn(frame, cell, map, Rot4.South, WipeMode.Vanish, false);
+
+					material.stackCount = Mathf.Max(1, terrainDef.CostList?.FirstOrDefault(cost => cost.thingDef == stuffDef)?.count ?? 1);
+					material.SetContamination(materialContamination);
+					var materialBefore = material.GetContamination();
+					var acceptedMaterial = frame.resourceContainer.TryAdd(material, canMergeWithExistingStacks: true);
+					var frameMaterialCount = frame.resourceContainer.Count;
+					var frameMaterialContamination = frame.resourceContainer.Sum(thing => thing.GetContamination());
+					var groundBefore = map.GetContamination(cell);
+					var oldTop = map.terrainGrid.TerrainAt(cell);
+					var oldFoundation = map.terrainGrid.FoundationAt(cell);
+					var oldTemp = map.terrainGrid.TempTerrainAt(cell);
+
+					frame.CompleteConstruction(worker);
+
+					var frameDestroyed = frame.Destroyed;
+					var materialDestroyed = material.Destroyed;
+					var topAfter = map.terrainGrid.TerrainAt(cell);
+					var foundationAfter = map.terrainGrid.FoundationAt(cell);
+					var tempAfter = map.terrainGrid.TempTerrainAt(cell);
+					var groundAfter = map.GetContamination(cell);
+
+					var builtTerrain = terrainDef.isFoundation
+						? foundationAfter == terrainDef
+						: terrainDef.temporary
+							? tempAfter == terrainDef
+							: topAfter == terrainDef;
+					var materialCaptured = acceptedMaterial
+						&& frameMaterialCount == 1
+						&& CloseFloat(materialBefore, materialContamination)
+						&& CloseFloat(frameMaterialContamination, materialContamination);
+					var contaminationTransferred = builtTerrain
+						&& CloseFloat(groundBefore, 0f)
+						&& CloseFloat(groundAfter, materialContamination);
+
+					var success = materialCaptured && builtTerrain && contaminationTransferred && frameDestroyed && materialDestroyed;
+					var payload = new
+					{
+						success,
+						terrain = terrainDef.defName,
+						frameDef = terrainDef.frameDef.defName,
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						frame = ZombieRuntimeActions.StableThingId(frame),
+						frameDestroyed,
+						material = ZombieRuntimeActions.StableThingId(material),
+						materialDestroyed,
+						acceptedMaterial,
+						frameMaterialCount,
+						materialBefore,
+						frameMaterialContamination,
+						oldTop = oldTop?.defName,
+						oldFoundation = oldFoundation?.defName,
+						oldTemp = oldTemp?.defName,
+						topAfter = topAfter?.defName,
+						foundationAfter = foundationAfter?.defName,
+						tempAfter = tempAfter?.defName,
+						groundBefore,
+						groundAfter,
+						expectedGroundAfter = materialContamination,
+						materialCaptured,
+						builtTerrain,
+						contaminationTransferred
+					};
+					return (success, payload);
+				}
+
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+				DisablePawnWork(worker);
+				worker.needs?.AddOrRemoveNeedsAsAppropriate();
+				worker.ClearContamination();
+
+				map.SetContamination(floorCell, 0f);
+				map.SetContamination(bridgeCell, 0f);
+
+				var floorResult = CompleteTerrainFrame(woodFloor, floorCell, 0.62f);
+				var bridgeResult = CompleteTerrainFrame(bridge, bridgeCell, 0.74f);
+				var workerAfter = worker.GetContamination();
+
+				return new
+				{
+					success = floorResult.success && bridgeResult.success && CloseFloat(workerAfter, 0f),
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					workerAfter,
+					floor = floorResult.payload,
+					bridge = bridgeResult.payload
+				};
+			}
+			finally
+			{
+				foreach (var thing in createdThings)
+				{
+					thing?.ClearContamination();
+					if (thing is { Destroyed: false, Spawned: true })
+						thing.Destroy();
+				}
+				worker?.ClearContamination();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+				for (var i = touchedCells.Count - 1; i >= 0; i--)
+				{
+					var (cell, top, foundation, temp, contamination) = touchedCells[i];
+					if (cell.InBounds(map) == false)
+						continue;
+					if (map.terrainGrid.TempTerrainAt(cell) != null)
+						map.terrainGrid.RemoveTempTerrain(cell, doLeavings: false, preventDestroyEffects: true);
+					if (map.terrainGrid.FoundationAt(cell) != null)
+						map.terrainGrid.RemoveFoundation(cell, doLeavings: false);
+					map.terrainGrid.SetTerrain(cell, top);
+					if (foundation != null)
+						map.terrainGrid.SetFoundation(cell, foundation);
+					if (temp != null)
+						map.terrainGrid.SetTempTerrain(cell, temp);
+					map.SetContamination(cell, contamination);
+				}
+			}
+		}
+
 		[Tool("zombieland/contamination_zombie_death_contract", Description = "Verify killing a real zombie contaminates its death cell while an ordinary pawn death does not.")]
 		public static object ContaminationZombieDeathContract()
 		{
@@ -5187,6 +5415,80 @@ namespace ZombieLand
 				zombieDeathContaminated,
 				humanDeathIgnored
 			};
+		}
+
+		[Tool("zombieland/contamination_corpse_inner_pawn_contract", Description = "Verify a real corpse inherits contamination from its inner pawn through the Corpse.InnerPawn setter patch.")]
+		public static object ContaminationCorpseInnerPawnContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var pawnCell, out var pawnSpawnError) == false)
+				return pawnSpawnError;
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			Corpse corpse = null;
+			try
+			{
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+				DisablePawnWork(pawn);
+				pawn.needs?.AddOrRemoveNeedsAsAppropriate();
+				pawn.ClearContamination();
+
+				const float pawnContamination = 0.47f;
+				pawn.AddContamination(pawnContamination);
+				var pawnBeforeDeath = pawn.GetContamination();
+
+				pawn.Kill(null);
+				corpse = pawn.Corpse
+					?? map.listerThings.AllThings.OfType<Corpse>().FirstOrDefault(candidate => ReferenceEquals(candidate.InnerPawn, pawn));
+				var corpseContamination = corpse?.GetContamination() ?? -1f;
+				var innerPawnMatches = ReferenceEquals(corpse?.InnerPawn, pawn);
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var corpseInheritedContamination = corpse != null
+					&& innerPawnMatches
+					&& CloseFloat(pawnBeforeDeath, pawnContamination)
+					&& CloseFloat(corpseContamination, pawnContamination);
+
+				return new
+				{
+					success = corpseInheritedContamination,
+					pawn = DescribePawn(pawn),
+					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+					pawnBeforeDeath,
+					expectedCorpseContamination = pawnContamination,
+					corpse = DescribeCorpse(corpse),
+					corpseContamination,
+					innerPawnMatches,
+					corpseInheritedContamination
+				};
+			}
+			finally
+			{
+				corpse?.ClearContamination();
+				pawn?.ClearContamination();
+				if (corpse is { Destroyed: false, Spawned: true })
+					corpse.Destroy();
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+			}
 		}
 
 		[Tool("zombieland/contamination_effect_manager_contract", Description = "Verify contaminated pawns register with the effect manager and can trigger the first source-derived contamination job.")]

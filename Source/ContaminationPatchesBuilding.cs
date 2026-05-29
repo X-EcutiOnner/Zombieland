@@ -59,9 +59,8 @@ namespace ZombieLand
 			return thing;
 		}
 
-		static void SetTerrain(TerrainGrid self, IntVec3 c, TerrainDef newTerr, float contamination)
+		static void SetGroundContamination(TerrainGrid self, IntVec3 c, float contamination)
 		{
-			self.SetTerrain(c, newTerr);
 			if (contamination > 0)
 			{
 				var map = self.map;
@@ -69,6 +68,24 @@ namespace ZombieLand
 				grounds.cells[map.cellIndices.CellToIndex(c)] = contamination;
 				grounds.SetDirty();
 			}
+		}
+
+		static void SetTerrain(TerrainGrid self, IntVec3 c, TerrainDef newTerr, float contamination)
+		{
+			self.SetTerrain(c, newTerr);
+			SetGroundContamination(self, c, contamination);
+		}
+
+		static void SetFoundation(TerrainGrid self, IntVec3 c, TerrainDef newTerr, float contamination)
+		{
+			self.SetFoundation(c, newTerr);
+			SetGroundContamination(self, c, contamination);
+		}
+
+		static void SetTempTerrain(TerrainGrid self, IntVec3 c, TerrainDef newTerr, float contamination)
+		{
+			self.SetTempTerrain(c, newTerr);
+			SetGroundContamination(self, c, contamination);
 		}
 
 		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
@@ -81,8 +98,14 @@ namespace ZombieLand
 			var from2 = SymbolExtensions.GetMethodInfo(() => ThingMaker.MakeThing(default, default));
 			var to2 = SymbolExtensions.GetMethodInfo(() => MakeThing(default, default, default, default));
 
-			var from3 = SymbolExtensions.GetMethodInfo((TerrainGrid grid) => grid.SetTerrain(default, default));
-			var to3 = SymbolExtensions.GetMethodInfo(() => SetTerrain(default, default, default, default));
+			var from3 = SymbolExtensions.GetMethodInfo((TerrainGrid grid) => grid.SetFoundation(default, default));
+			var to3 = SymbolExtensions.GetMethodInfo(() => SetFoundation(default, default, default, default));
+
+			var from4 = SymbolExtensions.GetMethodInfo((TerrainGrid grid) => grid.SetTempTerrain(default, default));
+			var to4 = SymbolExtensions.GetMethodInfo(() => SetTempTerrain(default, default, default, default));
+
+			var from5 = SymbolExtensions.GetMethodInfo((TerrainGrid grid) => grid.SetTerrain(default, default));
+			var to5 = SymbolExtensions.GetMethodInfo(() => SetTerrain(default, default, default, default));
 
 			return new CodeMatcher(instructions)
 				 .MatchStartForward(new CodeMatch(operand: from1))
@@ -97,6 +120,14 @@ namespace ZombieLand
 				 .ThrowIfInvalid($"Cannot find {from3.FullDescription()}")
 				 .InsertAndAdvance(Ldloc[sumVar])
 				 .SetInstruction(Call[to3])
+				 .MatchStartForward(new CodeMatch(operand: from4))
+				 .ThrowIfInvalid($"Cannot find {from4.FullDescription()}")
+				 .InsertAndAdvance(Ldloc[sumVar])
+				 .SetInstruction(Call[to4])
+				 .MatchStartForward(new CodeMatch(operand: from5))
+				 .ThrowIfInvalid($"Cannot find {from5.FullDescription()}")
+				 .InsertAndAdvance(Ldloc[sumVar])
+				 .SetInstruction(Call[to5])
 				 .InstructionEnumeration();
 		}
 	}
