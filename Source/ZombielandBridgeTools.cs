@@ -3678,6 +3678,211 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_sleepwalk_contract", Description = "Verify the sleepwalk contamination effect starts from a real sleeping pawn, reaches an occupied bed, wakes the occupant, and starts their flee job.")]
+		public static object ContaminationSleepwalkContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			map.GetComponent<TickManager>().avoidGrid = new AvoidGrid(map);
+			var existingPawns = map.mapPawns.AllPawnsSpawned.ToArray();
+			var existingZombies = CurrentZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var sleepwalkerCell = IntVec3.Invalid;
+			var bedCell = IntVec3.Invalid;
+			var searchRadius = Math.Min(70f, Math.Min(map.Size.x, map.Size.z) / 2f - 1f);
+			foreach (var candidate in GenRadial.RadialCellsAround(root, searchRadius, true).OrderByDescending(cell => cell.DistanceToSquared(root)))
+			{
+				if (candidate.InBounds(map) == false || candidate.Standable(map) == false || candidate.Fogged(map))
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+					continue;
+				if (existingPawns.Any(pawn => pawn.Position.DistanceToSquared(candidate) < 400))
+					continue;
+				if (existingZombies.Any(zombie => zombie.Position.DistanceToSquared(candidate) < 900))
+					continue;
+				if (TryFindClearBuildingFootprint(map, ThingDefOf.Bed, candidate + new IntVec3(8, 0, 0), 12f, out var candidateBedCell, out _) == false)
+					continue;
+
+				sleepwalkerCell = candidate;
+				bedCell = candidateBedCell;
+				break;
+			}
+			if (sleepwalkerCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					error = "No isolated sleepwalk fixture cells were found away from existing pawns and zombies."
+				};
+			}
+
+			var bed = ThingMaker.MakeThing(ThingDefOf.Bed, GenStuff.DefaultStuffFor(ThingDefOf.Bed)) as Building_Bed;
+			if (bed == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create a bed for the sleepwalk fixture."
+				};
+			}
+			bed.SetFactionDirect(Faction.OfPlayer);
+			GenSpawn.Spawn(bed, bedCell, map, Rot4.North, WipeMode.Vanish, false);
+
+			var occupantCell = bed.GetSleepingSlotPos(0);
+			var sleepwalker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var occupant = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(sleepwalker, sleepwalkerCell, map, Rot4.South);
+			GenSpawn.Spawn(occupant, occupantCell, map, Rot4.South);
+			DisablePawnWork(sleepwalker);
+			DisablePawnWork(occupant);
+			sleepwalker.needs?.AddOrRemoveNeedsAsAppropriate();
+			occupant.needs?.AddOrRemoveNeedsAsAppropriate();
+			sleepwalker.ClearContamination();
+			occupant.ClearContamination();
+			sleepwalker.mindState?.mentalStateHandler?.Reset();
+			occupant.mindState?.mentalStateHandler?.Reset();
+
+			var occupantSleepJob = JobMaker.MakeJob(JobDefOf.LayDown, bed);
+			occupantSleepJob.forceSleep = true;
+			occupant.jobs.ClearQueuedJobs();
+			occupant.jobs.StartJob(occupantSleepJob, JobCondition.InterruptForced, null);
+			var sleepwalkerSleepJob = JobMaker.MakeJob(JobDefOf.LayDown, sleepwalkerCell);
+			sleepwalkerSleepJob.forceSleep = true;
+			sleepwalker.jobs.ClearQueuedJobs();
+			sleepwalker.jobs.StartJob(sleepwalkerSleepJob, JobCondition.InterruptForced, null);
+
+			var sleepPrepTicks = 0;
+			const int maxSleepPrepTicks = 180;
+			while (sleepPrepTicks < maxSleepPrepTicks
+				&& (sleepwalker.jobs?.curDriver?.asleep != true || occupant.jobs?.curDriver?.asleep != true || bed.CurOccupants.Contains(occupant) == false))
+			{
+				AdvanceGameTicks(1);
+				sleepPrepTicks++;
+			}
+			var sleepwalkerAsleepBeforeApply = sleepwalker.jobs?.curDriver?.asleep == true;
+			var occupantAsleepBeforeApply = occupant.jobs?.curDriver?.asleep == true;
+			var bedOccupiedBeforeApply = bed.CurOccupants.Contains(occupant);
+
+			const float sleepwalkMin = 0.35f;
+			const float sleepwalkMax = 0.50f;
+			const float sleepwalkContamination = 0.44f;
+			var factor = Mathf.InverseLerp(sleepwalkMin, sleepwalkMax, sleepwalkContamination);
+			var expectedRecoverAfterTicks = (GenDate.TicksPerHour / 10) * (int)(1 + factor * 7);
+
+			var applied = ContaminationEffect.Sleepwalk(sleepwalker, factor);
+			var mentalStateAfterApply = sleepwalker.mindState?.mentalStateHandler?.CurStateDef?.defName;
+			var jobAfterApply = sleepwalker.CurJobDef?.defName;
+			var recoverAfterApply = sleepwalker.mindState?.mentalStateHandler?.CurState?.forceRecoverAfterTicks ?? -1;
+
+			AdvanceGameTicks(1);
+			var driverAfterInit = sleepwalker.jobs?.curDriver as JobDriver_ContaminationSleepwalk;
+			var trackedBedAfterInit = driverAfterInit?.bed;
+			var movingAfterInit = sleepwalker.pather?.Moving ?? false;
+			var pathDestinationAfterInit = movingAfterInit ? sleepwalker.pather.Destination.Cell : IntVec3.Invalid;
+
+			const int sourceDerivedThinkTreeWindow = 30;
+			AdvanceGameTicks(sourceDerivedThinkTreeWindow);
+			var driverAfterThinkTreeWindow = sleepwalker.jobs?.curDriver as JobDriver_ContaminationSleepwalk;
+			var jobAfterThinkTreeWindow = sleepwalker.CurJobDef?.defName;
+			var trackedBedAfterThinkTreeWindow = driverAfterThinkTreeWindow?.bed;
+
+			var occupantFleeStarted = occupant.CurJobDef == JobDefOf.Flee || occupant.CurJobDef == JobDefOf.FleeAndCower;
+			var occupantAwakeAfterApply = RestUtility.Awake(occupant);
+			var waitUntilAfterArrival = driverAfterThinkTreeWindow?.waitUntil ?? -1;
+			var ticksUntilWake = 0;
+			var maxArrivalTicks = Math.Max(1, expectedRecoverAfterTicks - sourceDerivedThinkTreeWindow - 1);
+			while (ticksUntilWake < maxArrivalTicks && occupantFleeStarted == false)
+			{
+				AdvanceGameTicks(1);
+				ticksUntilWake++;
+				occupantFleeStarted = occupant.CurJobDef == JobDefOf.Flee || occupant.CurJobDef == JobDefOf.FleeAndCower;
+				occupantAwakeAfterApply |= RestUtility.Awake(occupant);
+				if (sleepwalker.jobs?.curDriver is JobDriver_ContaminationSleepwalk currentDriver)
+					waitUntilAfterArrival = currentDriver.waitUntil;
+				else
+					break;
+			}
+
+			var driverAfterWake = sleepwalker.jobs?.curDriver as JobDriver_ContaminationSleepwalk;
+			var stateStarted = applied
+				&& mentalStateAfterApply == EffectDefs.ContaminationStateSleepwalking.defName
+				&& jobAfterApply == EffectDefs.ContaminationJobSleepwalk.defName
+				&& recoverAfterApply == expectedRecoverAfterTicks;
+			var jobInitialized = driverAfterInit != null
+				&& trackedBedAfterInit == bed
+				&& movingAfterInit
+				&& pathDestinationAfterInit == bed.Position;
+			var survivedThinkTreeWindow = driverAfterThinkTreeWindow != null
+				&& jobAfterThinkTreeWindow == EffectDefs.ContaminationJobSleepwalk.defName
+				&& trackedBedAfterThinkTreeWindow == bed;
+			var occupantWokenAndFleeing = occupantAwakeAfterApply
+				&& occupantFleeStarted
+				&& waitUntilAfterArrival > Find.TickManager.TicksGame;
+
+			return new
+			{
+				success = sleepwalkerAsleepBeforeApply && occupantAsleepBeforeApply && bedOccupiedBeforeApply && stateStarted && jobInitialized && survivedThinkTreeWindow && occupantWokenAndFleeing,
+				sleepwalker = DescribePawn(sleepwalker),
+				occupant = DescribePawn(occupant),
+				bed = new
+				{
+					id = ZombieRuntimeActions.StableThingId(bed),
+					cell = ZombieRuntimeActions.DescribeCell(bed.Position),
+					occupantCell = ZombieRuntimeActions.DescribeCell(occupantCell),
+					occupants = bed.CurOccupants.Select(ZombieRuntimeActions.StableThingId).ToArray()
+				},
+				sleepwalkerCell = ZombieRuntimeActions.DescribeCell(sleepwalkerCell),
+				sleepPrepTicks,
+				maxSleepPrepTicks,
+				sleepwalkerAsleepBeforeApply,
+				occupantAsleepBeforeApply,
+				bedOccupiedBeforeApply,
+				sleepwalkContamination,
+				factor,
+				expectedRecoverAfterTicks,
+				applied,
+				mentalStateAfterApply,
+				expectedMentalState = EffectDefs.ContaminationStateSleepwalking.defName,
+				jobAfterApply,
+				expectedJob = EffectDefs.ContaminationJobSleepwalk.defName,
+				recoverAfterApply,
+				trackedBedAfterInit = ZombieRuntimeActions.StableThingId(trackedBedAfterInit),
+				movingAfterInit,
+				pathDestinationAfterInit = pathDestinationAfterInit.IsValid ? ZombieRuntimeActions.DescribeCell(pathDestinationAfterInit) : null,
+				sourceDerivedThinkTreeWindow,
+				jobAfterThinkTreeWindow,
+				trackedBedAfterThinkTreeWindow = ZombieRuntimeActions.StableThingId(trackedBedAfterThinkTreeWindow),
+				ticksUntilWake,
+				maxArrivalTicks,
+				driverAfterWakeStillSleepwalk = driverAfterWake != null,
+				waitUntilAfterArrival,
+				currentTicks = Find.TickManager.TicksGame,
+				occupantAwakeAfterApply,
+				occupantFleeStarted,
+				occupantJobAfterWake = occupant.CurJobDef?.defName,
+				stateStarted,
+				jobInitialized,
+				survivedThinkTreeWindow,
+				occupantWokenAndFleeing
+			};
+		}
+
 		[Tool("zombieland/contamination_ingestion_contract", Description = "Verify ingesting contaminated stack food transfers the source-derived partial-stack contamination to the eater.")]
 		public static object ContaminationIngestionContract()
 		{
