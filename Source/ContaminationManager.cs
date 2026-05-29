@@ -118,20 +118,29 @@ namespace ZombieLand
 
 		public void UpdatePawnHediff(Thing thing, float contamination)
 		{
-			if (thing is not Pawn pawn || pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
+			if (thing is not Pawn pawn)
 				return;
+
+			var effects = pawn.Map?.GetComponent<TickManager>()?.contaminationEffects;
+			if (pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
+			{
+				effects?.Remove(pawn);
+				return;
+			}
 
 			if (contamination > 0)
 			{
 				var hediff = (Hediff_Contamination)pawn.health.hediffSet.GetFirstHediffOfDef(CustomDefs.ContaminationEffect);
 				hediff ??= (Hediff_Contamination)pawn.health.AddHediff(CustomDefs.ContaminationEffect);
 				hediff.Severity = contamination;
+				effects?.Add(pawn);
 			}
 			else
 			{
 				var hediff = (Hediff_Contamination)pawn.health.hediffSet.GetFirstHediffOfDef(CustomDefs.ContaminationEffect);
 				if (hediff != null)
 					pawn.health.RemoveHediff(hediff);
+				effects?.Remove(pawn);
 			}
 		}
 

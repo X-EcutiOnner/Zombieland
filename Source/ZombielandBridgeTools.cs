@@ -3039,6 +3039,104 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_effect_manager_contract", Description = "Verify contaminated pawns register with the effect manager and can trigger the first source-derived contamination job.")]
+		public static object ContaminationEffectManagerContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			var effects = tickManager?.contaminationEffects;
+			if (effects == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Current map has no contamination effect manager."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanSpawnError) == false)
+				return humanSpawnError;
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+			human.needs?.AddOrRemoveNeedsAsAppropriate();
+			human.ClearContamination();
+			effects.Remove(human);
+			human.mindState?.mentalStateHandler?.Reset();
+
+			var trackedBefore = effects.pawns.ContainsKey(human);
+			const float forceRestThreshold = 0.15f;
+			human.AddContamination(forceRestThreshold);
+			var trackedAfterAdd = effects.pawns.TryGetValue(human, out var effect);
+			var nextEffectTickBeforeForce = effect?.nextEffectTick ?? -1;
+			if (effect != null)
+				effect.nextEffectTick = Find.TickManager.TicksGame;
+			effects.Tick();
+
+			var mentalStateAfterTick = human.mindState?.mentalStateHandler?.CurStateDef?.defName;
+			var jobAfterTick = human.CurJobDef?.defName;
+			var reportAfterTick = human.CurJob?.GetReport(human);
+			var forceRecoverAfterTicks = human.mindState?.mentalStateHandler?.CurState?.forceRecoverAfterTicks ?? -1;
+			var trackedAfterTick = effects.pawns.ContainsKey(human);
+			var contaminationAfterTick = DescribeContamination(human);
+
+			human.ClearContamination();
+			var trackedAfterClear = effects.pawns.ContainsKey(human);
+			var contaminationAfterClear = DescribeContamination(human);
+
+			var registered = trackedBefore == false && trackedAfterAdd;
+			var forceRestStarted = mentalStateAfterTick == EffectDefs.ContaminationStateForceRest.defName
+				&& jobAfterTick == EffectDefs.ContaminationJobForceRest.defName
+				&& forceRecoverAfterTicks > 0;
+			var unregistered = trackedAfterClear == false
+				&& contaminationAfterClear.hasHediff == false
+				&& contaminationAfterClear.stored == 0f;
+
+			return new
+			{
+				success = registered && forceRestStarted && trackedAfterTick && unregistered,
+				human = DescribePawn(human),
+				humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
+				contamination = forceRestThreshold,
+				trackedBefore,
+				trackedAfterAdd,
+				trackedAfterTick,
+				trackedAfterClear,
+				nextEffectTickBeforeForce,
+				forcedEffectTick = Find.TickManager.TicksGame,
+				mentalStateAfterTick,
+				expectedMentalState = EffectDefs.ContaminationStateForceRest.defName,
+				jobAfterTick,
+				expectedJob = EffectDefs.ContaminationJobForceRest.defName,
+				reportAfterTick,
+				forceRecoverAfterTicks,
+				contaminationAfterTick,
+				contaminationAfterClear,
+				registered,
+				forceRestStarted,
+				unregistered
+			};
+		}
+
 		[Tool("zombieland/zombie_records_suppression", Description = "Verify zombies cannot mutate or report vanilla pawn records while ordinary pawns still can.")]
 		public static object ZombieRecordsSuppression()
 		{
