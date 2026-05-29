@@ -97,7 +97,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 
 ### Unity `Originals/Effects` ZombieBlob Pink Material
 
-Status: investigated in `/Users/ap/Desktop/Effects` against Unity `2022.3.62f3` on macOS/Metal, but not applied to this repo yet.
+Status: applied source-side in this repo and import-checked with Unity `2022.3.62f3` on macOS/Metal. Do not export bundles from `Originals/Effects` yet; the deployed bundle still contains assets that are not present in this source project.
 
 Problem:
 
@@ -105,7 +105,7 @@ Problem:
 - Unity 2022's Metal compiler rejects buffer-size queries from shader code: pass a count explicitly or avoid the query.
 - The tracked Unity YAML already contains old serialized GUID references, but this repo ignores and does not track `.meta` files. Unity therefore generates new GUIDs when opening the project, breaking the scene -> material and material -> shader links. The visible symptom is `ZombieBlob` rendering pink/magenta.
 
-Minimal fix to apply:
+Applied minimal fix:
 
 1. Patch `Originals/Effects/Assets/Zombieland/ZombieBlob.shader` only in the small preview/test path:
    - Uncomment the existing static `cellCount` and `positions[cellCount]` array.
@@ -165,7 +165,7 @@ Minimal fix to apply:
      assetBundleVariant:
    ```
 
-4. Optional, separate from the `ZombieBlob` pink fix: add `Originals/Effects/Assets/Zombieland/Rimworld.png.meta` with GUID `d75ba6bd32be5d34c888c16a0b983109`, because `Rimworld.mat` already references that texture GUID. This fixes the Rimworld material texture binding but is not required for `ZombieBlob` to render.
+4. Added `Originals/Effects/Assets/Zombieland/Rimworld.png.meta` with GUID `d75ba6bd32be5d34c888c16a0b983109`, because `Rimworld.mat` already references that texture GUID. This fixes the Rimworld material texture binding but is not required for `ZombieBlob` to render.
 
 Avoid:
 
@@ -182,3 +182,4 @@ Verification used in temp project:
 
 - After adding the matching metas and restarting Unity, `/Users/ap/Desktop/Effects` rendered green blob shapes in the Scene view instead of a magenta plane.
 - Before restarting Unity, the editor asset database still cached generated GUIDs, so a normal refresh was not enough. Restart Unity after changing these `.meta` GUIDs.
+- The repo copy was opened from a temporary copy with Unity `2022.3.62f3` using `-batchmode -quit`; Unity exited successfully and did not report shader compiler errors for `ZombieBlob.shader`. The expected historical GUIDs were present in the temporary imported project.

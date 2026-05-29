@@ -28,7 +28,6 @@
 
          static const float2 powerExponent = float2(1.0, 3.0);
 
-         /*
          static const int cellCount = 18;
          static const float2 positions[cellCount] = 
          {
@@ -58,9 +57,6 @@
              // top right
              float2(1.5, 1.5)
          };
-         */
-         
-         StructuredBuffer<float2> _Positions;
 
          float2 cellPower(int idx, float2 coord, float2 pos)
          {
@@ -81,11 +77,9 @@
             float2 pos;
             float2 power = float2(0.0, 0.0);
             
-            // for(int idx = 0; idx != cellCount; ++idx)
-            int count = (int)_Positions.Length - 1;
-            for(int idx = 0; idx != count; ++idx)
+            for(int idx = 0; idx != cellCount; ++idx)
             {
-               pos = _Positions[idx]; // positions[idx];
+               pos = positions[idx];
                power += cellPower(idx, coord, pos);
             }
 
