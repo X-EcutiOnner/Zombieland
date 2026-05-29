@@ -4935,6 +4935,186 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_frame_construction_contract", Description = "Verify contaminated frame materials transfer through real Frame.CompleteConstruction into the final building and worker.")]
+		public static object ContaminationFrameConstructionContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var wallDef = ThingDefOf.Wall;
+			var stuffDef = ThingDefOf.WoodLog;
+			var frameDef = wallDef?.frameDef;
+			if (wallDef == null || stuffDef == null || frameDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Wall, WoodLog, or Wall.frameDef is unavailable."
+				};
+			}
+
+			bool TryFindFrameCell(IntVec3 root, float radius, out IntVec3 cell, out object error)
+			{
+				cell = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+				{
+					if (candidate.InBounds(map) == false)
+						continue;
+					if (candidate.Standable(map) == false)
+						continue;
+					if (candidate.Fogged(map))
+						continue;
+					if (candidate.GetEdifice(map) != null)
+						continue;
+					if (candidate.GetThingList(map).Any(thing =>
+						thing is Pawn
+						|| thing is Blueprint
+						|| thing is Frame
+						|| thing.def.category == ThingCategory.Plant
+						|| thing.def.category == ThingCategory.Building
+						|| thing.def.passability == Traversability.Impassable))
+						continue;
+
+					cell = candidate;
+					return true;
+				}
+
+				error = new
+				{
+					success = false,
+					error = $"No clear 1x1 frame fixture cell was found near ({root.x}, {root.z})."
+				};
+				return false;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var workerCell, out var workerSpawnError) == false)
+				return workerSpawnError;
+			if (TryFindFrameCell(workerCell + new IntVec3(3, 0, 0), 16f, out var frameCell, out var frameCellError) == false)
+				return frameCellError;
+
+			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var frame = ThingMaker.MakeThing(frameDef, stuffDef) as Frame;
+			var material = ThingMaker.MakeThing(stuffDef);
+			Thing finalThing = null;
+			try
+			{
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+				DisablePawnWork(worker);
+				worker.needs?.AddOrRemoveNeedsAsAppropriate();
+				worker.ClearContamination();
+
+				if (frame == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not create a wall frame fixture."
+					};
+				}
+				frame.SetFactionDirect(Faction.OfPlayer);
+				GenSpawn.Spawn(frame, frameCell, map, Rot4.South, WipeMode.Vanish, false);
+
+				const float materialContamination = 0.8f;
+				material.stackCount = 10;
+				material.AddContamination(materialContamination, (sbyte)map.Index);
+				var materialBefore = material.GetContamination();
+				var acceptedMaterial = frame.resourceContainer.TryAdd(material, canMergeWithExistingStacks: true);
+				var frameMaterialCount = frame.resourceContainer.Count;
+				var frameMaterialContamination = frame.resourceContainer.Sum(thing => thing.GetContamination());
+				var workerBefore = worker.GetContamination();
+
+				frame.CompleteConstruction(worker);
+				finalThing = frameCell.GetEdifice(map);
+				var frameDestroyed = frame.Destroyed;
+				var materialDestroyed = material.Destroyed;
+				var finalContamination = finalThing?.GetContamination() ?? -1f;
+				var workerAfter = worker.GetContamination();
+				var expectedFinalContamination = materialContamination
+					* ZombieSettings.Values.contamination.constructionAdd
+					* (1f - ZombieSettings.Values.contamination.constructionTransfer);
+				var expectedWorkerContamination = materialContamination
+					* ZombieSettings.Values.contamination.constructionAdd
+					* ZombieSettings.Values.contamination.constructionTransfer;
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+				var materialCaptured = acceptedMaterial
+					&& frameMaterialCount == 1
+					&& CloseFloat(materialBefore, materialContamination)
+					&& CloseFloat(frameMaterialContamination, materialContamination);
+				var finalBuilt = frameDestroyed
+					&& materialDestroyed
+					&& finalThing != null
+					&& finalThing.def == wallDef
+					&& finalThing.Stuff == stuffDef;
+				var contaminationTransferred = finalBuilt
+					&& CloseFloat(workerBefore, 0f)
+					&& CloseFloat(finalContamination, expectedFinalContamination)
+					&& CloseFloat(workerAfter, expectedWorkerContamination);
+
+				return new
+				{
+					success = materialCaptured && finalBuilt && contaminationTransferred,
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					frameCell = ZombieRuntimeActions.DescribeCell(frameCell),
+					frame = ZombieRuntimeActions.StableThingId(frame),
+					frameDestroyed,
+					material = ZombieRuntimeActions.StableThingId(material),
+					materialDestroyed,
+					acceptedMaterial,
+					frameMaterialCount,
+					materialBefore,
+					frameMaterialContamination,
+					finalThing = ZombieRuntimeActions.StableThingId(finalThing),
+					finalDef = finalThing?.def?.defName,
+					finalStuff = finalThing?.Stuff?.defName,
+					finalContamination,
+					expectedFinalContamination,
+					workerBefore,
+					workerAfter,
+					expectedWorkerContamination,
+					constructionAdd = ZombieSettings.Values.contamination.constructionAdd,
+					constructionTransfer = ZombieSettings.Values.contamination.constructionTransfer,
+					materialCaptured,
+					finalBuilt,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				material.ClearContamination();
+				frame?.ClearContamination();
+				finalThing?.ClearContamination();
+				worker?.ClearContamination();
+				if (finalThing is { Destroyed: false, Spawned: true })
+					finalThing.Destroy();
+				if (frame is { Destroyed: false, Spawned: true })
+					frame.Destroy();
+				if (material is { Destroyed: false, Spawned: true })
+					material.Destroy();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+			}
+		}
+
 		[Tool("zombieland/contamination_zombie_death_contract", Description = "Verify killing a real zombie contaminates its death cell while an ordinary pawn death does not.")]
 		public static object ContaminationZombieDeathContract()
 		{
