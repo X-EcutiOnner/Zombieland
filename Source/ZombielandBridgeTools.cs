@@ -1593,6 +1593,50 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/spawn_spitter_visual_fixture", Description = "Spawn one idle zombie spitter without launching a ZombieBall so its custom three-layer rendering can be inspected.")]
+		public static object SpawnSpitterVisualFixture(
+			[ToolParameter(Description = "Target x coordinate. Use -1 with z -1 to spawn near map center.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Target z coordinate. Use -1 with x -1 to spawn near map center.", Required = false, DefaultValue = -1)] int z = -1,
+			[ToolParameter(Description = "Whether to use the aggressive tinted spitter materials.", Required = false, DefaultValue = false)] bool aggressive = false)
+		{
+			if (TryFindSpawnCell(x, z, out var map, out var cell, out var error) == false)
+				return error;
+
+			var existing = CurrentZombies(map).OfType<ZombieSpitter>()
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			ZombieSpitter.Spawn(map, cell);
+			var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+				.FirstOrDefault(candidate => existing.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
+			if (spitter == null)
+			{
+				return new
+				{
+					success = false,
+					requestedCell = ZombieRuntimeActions.DescribeCell(new IntVec3(x, 0, z)),
+					spawnCell = ZombieRuntimeActions.DescribeCell(cell),
+					error = "ZombieSpitter.Spawn did not produce a spawned spitter."
+				};
+			}
+
+			spitter.aggressive = aggressive;
+			spitter.state = SpitterState.Idle;
+			spitter.tickCounter = 0;
+			spitter.remainingZombies = 0;
+			spitter.spitInterval = 0;
+			spitter.Rotation = Rot4.South;
+
+			return new
+			{
+				success = spitter.Spawned,
+				requestedCell = ZombieRuntimeActions.DescribeCell(new IntVec3(x, 0, z)),
+				spawnCell = ZombieRuntimeActions.DescribeCell(cell),
+				aggressive,
+				spitter = DescribeZombie(spitter)
+			};
+		}
+
 		[Tool("zombieland/spawn_reference_lineup", Description = "Clear and spawn the eight common special zombie types in a compact visual comparison pattern.")]
 		public static object SpawnReferenceLineup(
 			[ToolParameter(Description = "Origin x coordinate for the top-left zombie. Use -1 with z -1 to start near map center.", Required = false, DefaultValue = -1)] int x = -1,

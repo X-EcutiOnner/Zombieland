@@ -3009,6 +3009,9 @@ namespace ZombieLand
 			[HarmonyPriority(Priority.First)]
 			static bool Prefix(PawnRenderer __instance, Vector3 drawLoc)
 			{
+				if (ZombieRenderCompat.Pawn(__instance) is ZombieSpitter)
+					return false;
+
 				var zombie = PrepareZombieGraphics(__instance);
 				if (zombie == null)
 					return true;
