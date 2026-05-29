@@ -113,7 +113,7 @@ namespace ZombieLand
 			if (mineableMap != null)
 			{
 				var contamination = mineableMap.GetContamination(mineable.Position);
-				thing.AddContamination(contamination, thing.mapIndexOrState, ZombieSettings.Values.contamination.destroyMineableAdd);
+				thing.AddContamination(contamination, (sbyte)mineableMap.Index, ZombieSettings.Values.contamination.destroyMineableAdd);
 			}
 			return thing;
 		}

@@ -4432,6 +4432,99 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_stack_absorb_contract", Description = "Verify real Thing.TryAbsorbStack preserves weighted contamination when stacks merge.")]
+		public static object ContaminationStackAbsorbContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var targetCell, out var targetSpawnError) == false)
+				return targetSpawnError;
+			if (TryFindClearSpawnCell(map, targetCell + IntVec3.East, 8f, out var sourceCell, out var sourceSpawnError) == false)
+				return sourceSpawnError;
+
+			var target = ThingMaker.MakeThing(ThingDefOf.Steel);
+			var source = ThingMaker.MakeThing(ThingDefOf.Steel);
+			try
+			{
+				const int targetCountBefore = 6;
+				const int sourceCountBefore = 4;
+				const float targetContaminationBefore = 0.2f;
+				const float sourceContaminationBefore = 0.8f;
+				target.stackCount = targetCountBefore;
+				source.stackCount = sourceCountBefore;
+				GenSpawn.Spawn(target, targetCell, map, WipeMode.Vanish);
+				GenSpawn.Spawn(source, sourceCell, map, WipeMode.Vanish);
+				target.SetContamination(targetContaminationBefore);
+				source.SetContamination(sourceContaminationBefore);
+
+				var targetBefore = target.GetContamination();
+				var sourceBefore = source.GetContamination();
+				var fullyAbsorbed = target.TryAbsorbStack(source, false);
+				var targetCountAfter = target.stackCount;
+				var sourceCountAfter = source.Destroyed ? 0 : source.stackCount;
+				var targetAfter = target.GetContamination();
+				var sourceDestroyed = source.Destroyed;
+				var expectedTargetAfter = (targetCountBefore * targetContaminationBefore + sourceCountBefore * sourceContaminationBefore)
+					/ (targetCountBefore + sourceCountBefore);
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var weightedContamination = CloseFloat(targetBefore, targetContaminationBefore)
+					&& CloseFloat(sourceBefore, sourceContaminationBefore)
+					&& CloseFloat(targetAfter, expectedTargetAfter);
+				var stackMerged = fullyAbsorbed
+					&& targetCountAfter == targetCountBefore + sourceCountBefore
+					&& sourceDestroyed
+					&& sourceCountAfter == 0;
+
+				return new
+				{
+					success = stackMerged && weightedContamination,
+					target = ZombieRuntimeActions.StableThingId(target),
+					source = ZombieRuntimeActions.StableThingId(source),
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					sourceCell = ZombieRuntimeActions.DescribeCell(sourceCell),
+					targetCountBefore,
+					sourceCountBefore,
+					targetCountAfter,
+					sourceCountAfter,
+					fullyAbsorbed,
+					sourceDestroyed,
+					targetBefore,
+					sourceBefore,
+					targetAfter,
+					expectedTargetAfter,
+					stackMerged,
+					weightedContamination
+				};
+			}
+			finally
+			{
+				target?.ClearContamination();
+				source?.ClearContamination();
+				if (target is { Destroyed: false, Spawned: true })
+					target.Destroy();
+				if (source is { Destroyed: false, Spawned: true })
+					source.Destroy();
+			}
+		}
+
 		[Tool("zombieland/contamination_cell_fire_contract", Description = "Verify contaminated ground affects pawns on cell entry and real Fire.DoComplexCalcs burns contamination down.")]
 		public static object ContaminationCellFireContract()
 		{
@@ -5488,6 +5581,169 @@ namespace ZombieLand
 					corpse.Destroy();
 				if (pawn is { Destroyed: false, Spawned: true })
 					pawn.Destroy();
+			}
+		}
+
+		[Tool("zombieland/contamination_mineable_yield_contract", Description = "Verify contaminated mineable ground transfers through real Mineable.DestroyMined into yielded resources.")]
+		public static object ContaminationMineableYieldContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var mineableDef = DefDatabase<ThingDef>.GetNamedSilentFail("MineableSteel");
+			var yieldDef = mineableDef?.building?.mineableThing;
+			if (mineableDef == null || yieldDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "MineableSteel or its mineable yield def is unavailable."
+				};
+			}
+
+			bool TryFindMineableCell(IntVec3 root, float radius, out IntVec3 cell, out object error)
+			{
+				cell = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+				{
+					if (candidate.InBounds(map) == false)
+						continue;
+					if (candidate.Fogged(map))
+						continue;
+					if (candidate.GetEdifice(map) != null)
+						continue;
+					if (candidate.GetThingList(map).Any(thing =>
+						thing is Pawn
+						|| thing is Blueprint
+						|| thing is Frame
+						|| thing.def.category == ThingCategory.Plant
+						|| thing.def.category == ThingCategory.Building
+						|| thing.def.EverHaulable))
+						continue;
+
+					cell = candidate;
+					return true;
+				}
+
+				error = new
+				{
+					success = false,
+					error = $"No clear mineable fixture cell was found near ({root.x}, {root.z})."
+				};
+				return false;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var workerCell, out var workerSpawnError) == false)
+				return workerSpawnError;
+			if (TryFindMineableCell(workerCell + new IntVec3(4, 0, 0), 16f, out var mineableCell, out var mineableCellError) == false)
+				return mineableCellError;
+
+			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var mineable = (Mineable)null;
+			var yieldedThings = new List<Thing>();
+			var oldGroundContamination = map.GetContamination(mineableCell);
+			try
+			{
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+				DisablePawnWork(worker);
+				worker.needs?.AddOrRemoveNeedsAsAppropriate();
+				worker.ClearContamination();
+
+				mineable = ThingMaker.MakeThing(mineableDef) as Mineable;
+				if (mineable == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not create MineableSteel fixture."
+					};
+				}
+
+				GenSpawn.Spawn(mineable, mineableCell, map, Rot4.South, WipeMode.Vanish, false);
+				const float mineableContamination = 0.65f;
+				map.SetContamination(mineableCell, mineableContamination);
+				var mineableBefore = mineable.GetContamination();
+				var existingYields = map.listerThings.ThingsOfDef(yieldDef).ToHashSet();
+
+				mineable.DestroyMined(worker);
+
+				yieldedThings = map.listerThings.ThingsOfDef(yieldDef)
+					.Where(thing => existingYields.Contains(thing) == false)
+					.ToList();
+				var yieldContamination = yieldedThings.Count == 1 ? yieldedThings[0].GetContamination() : -1f;
+				var expectedYieldContamination = mineableContamination * ZombieSettings.Values.contamination.destroyMineableAdd;
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var yielded = mineable.Destroyed
+					&& yieldedThings.Count == 1
+					&& yieldedThings[0].def == yieldDef
+					&& yieldedThings[0].stackCount > 0;
+				var contaminationTransferred = yielded
+					&& CloseFloat(mineableBefore, mineableContamination)
+					&& CloseFloat(yieldContamination, expectedYieldContamination);
+
+				return new
+				{
+					success = yielded && contaminationTransferred,
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					mineable = ZombieRuntimeActions.StableThingId(mineable),
+					mineableDef = mineableDef.defName,
+					mineableCell = ZombieRuntimeActions.DescribeCell(mineableCell),
+					mineableDestroyed = mineable.Destroyed,
+					mineableBefore,
+					yieldDef = yieldDef.defName,
+					effectiveMineableYield = mineableDef.building.EffectiveMineableYield,
+					yieldedCount = yieldedThings.Count,
+					yieldedThings = yieldedThings
+						.Select(thing => new
+						{
+							thing = ZombieRuntimeActions.StableThingId(thing),
+							def = thing.def.defName,
+							stackCount = thing.stackCount,
+							contamination = thing.GetContamination()
+						})
+						.ToArray(),
+					yieldContamination,
+					expectedYieldContamination,
+					destroyMineableAdd = ZombieSettings.Values.contamination.destroyMineableAdd,
+					yielded,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				foreach (var thing in yieldedThings)
+				{
+					thing?.ClearContamination();
+					if (thing is { Destroyed: false, Spawned: true })
+						thing.Destroy();
+				}
+				mineable?.ClearContamination();
+				if (mineable is { Destroyed: false, Spawned: true })
+					mineable.Destroy(DestroyMode.Vanish);
+				worker?.ClearContamination();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+				if (mineableCell.IsValid && mineableCell.InBounds(map))
+					map.SetContamination(mineableCell, oldGroundContamination);
 			}
 		}
 
