@@ -4132,8 +4132,15 @@ namespace ZombieLand
 		[HarmonyPatch(nameof(ShotReport.AimOnTargetChance_StandardTarget), MethodType.Getter)]
 		public static class ShotReport_AimOnTargetChance_StandardTarget_Patch
 		{
-			public static bool Prefix(ref float __result, List<CoverInfo> ___covers)
+			public static bool Prefix(ref float __result, TargetInfo ___target, List<CoverInfo> ___covers)
 			{
+				var map = ___target.Map;
+				if (map != null && ___target.Cell.GetGas(map)?.def == CustomDefs.TarSmoke)
+				{
+					__result = 0f;
+					return false;
+				}
+
 				if (___covers.Any(c => c.thingInt.def == CustomDefs.TarSmoke) == false)
 					return true;
 				__result = 0f;

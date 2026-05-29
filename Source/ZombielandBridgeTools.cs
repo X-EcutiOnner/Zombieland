@@ -3752,6 +3752,7 @@ namespace ZombieLand
 			}
 
 			var canHitBeforeSmoke = verb.CanHitTargetFrom(actor.Position, darkSlimer);
+			var aimChanceBeforeSmoke = ShotReport.HitReportFor(actor, verb, darkSlimer).AimOnTargetChance_StandardTarget;
 			var gasAtTargetBefore = darkSlimer.Position.GetGas(map)?.def?.defName;
 			var tarSmokeThingsBefore = CountThingsNear(map, darkSlimer.Position, CustomDefs.TarSmoke, 3f);
 			var damageResult = darkSlimer.TakeDamage(new DamageInfo(DamageDefOf.Bullet, 1, 0f, -1f, actor, null, weaponDef, DamageInfo.SourceCategory.ThingOrUnknown, darkSlimer, true, true));
@@ -3759,14 +3760,17 @@ namespace ZombieLand
 			var gasAtTargetAfter = darkSlimer.Position.GetGas(map)?.def?.defName;
 			var tarSmokeThingsAfter = CountThingsNear(map, darkSlimer.Position, CustomDefs.TarSmoke, 3f);
 			var canHitAfterSmoke = verb.CanHitTargetFrom(actor.Position, darkSlimer);
+			var aimChanceAfterSmoke = ShotReport.HitReportFor(actor, verb, darkSlimer).AimOnTargetChance_StandardTarget;
 
 			return new
 			{
 				success = canHitBeforeSmoke
+					&& aimChanceBeforeSmoke > 0f
 					&& gasAtTargetBefore == null
 					&& gasAtTargetAfter == CustomDefs.TarSmoke.defName
 					&& tarSmokeThingsAfter > tarSmokeThingsBefore
-					&& canHitAfterSmoke == false,
+					&& canHitAfterSmoke == false
+					&& aimChanceAfterSmoke == 0f,
 				destroyedZombies,
 				actor = DescribePawn(actor),
 				darkSlimer = DescribeZombie(darkSlimer),
@@ -3776,6 +3780,8 @@ namespace ZombieLand
 				targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
 				canHitBeforeSmoke,
 				canHitAfterSmoke,
+				aimChanceBeforeSmoke,
+				aimChanceAfterSmoke,
 				gasAtTargetBefore,
 				gasAtTargetAfter,
 				tarSmokeThingsBefore,
