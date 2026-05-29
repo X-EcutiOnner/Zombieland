@@ -530,7 +530,8 @@ namespace ZombieLand
 		{
 			var result = GenSpawn.Spawn(def, loc, map, wipeMode);
 			var contamination = map.GetContamination(c);
-			result.AddContamination(contamination);
+			if (result is not Mineable)
+				result.AddContamination(contamination);
 			return result;
 		}
 

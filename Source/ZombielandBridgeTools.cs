@@ -5993,6 +5993,143 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_roof_collapse_contract", Description = "Verify contaminated ground transfers into collapsed roof rock through real RoofCollapserImmediate.DropRoofInCellPhaseOne.")]
+		public static object ContaminationRoofCollapseContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var roofDef = DefDatabase<RoofDef>.GetNamedSilentFail("RoofRockThick");
+			var leavingDef = roofDef?.collapseLeavingThingDef;
+			if (roofDef == null || leavingDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "RoofRockThick or its collapse leaving def is unavailable."
+				};
+			}
+
+			var method = typeof(RoofCollapserImmediate).GetMethod("DropRoofInCellPhaseOne", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+			if (method == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect RoofCollapserImmediate.DropRoofInCellPhaseOne."
+				};
+			}
+
+			bool TryFindRoofCell(IntVec3 root, float radius, out IntVec3 cell, out object error)
+			{
+				cell = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+				{
+					if (candidate.InBounds(map) == false)
+						continue;
+					if (candidate.Fogged(map))
+						continue;
+					if (candidate.GetEdifice(map) != null)
+						continue;
+					if (candidate.GetThingList(map).Any(thing =>
+						thing is Pawn
+						|| thing is Blueprint
+						|| thing is Frame
+						|| thing.def.category == ThingCategory.Plant
+						|| thing.def.category == ThingCategory.Building
+						|| thing.def.EverHaulable))
+						continue;
+
+					cell = candidate;
+					return true;
+				}
+
+				error = new
+				{
+					success = false,
+					error = $"No clear roof-collapse fixture cell was found near ({root.x}, {root.z})."
+				};
+				return false;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindRoofCell(root, 24f, out var roofCell, out var roofCellError) == false)
+				return roofCellError;
+
+			var oldRoof = map.roofGrid.RoofAt(roofCell);
+			var oldGroundContamination = map.GetContamination(roofCell);
+			var collapsedRock = (Thing)null;
+			try
+			{
+				const float groundContamination = 0.67f;
+				map.roofGrid.SetRoof(roofCell, roofDef);
+				map.SetContamination(roofCell, groundContamination);
+				var groundBefore = map.GetContamination(roofCell);
+				var existingRocks = map.listerThings.ThingsOfDef(leavingDef).ToHashSet();
+				var crushedThings = new List<Thing>();
+
+				method.Invoke(null, new object[] { roofCell, map, crushedThings });
+
+				collapsedRock = map.listerThings.ThingsOfDef(leavingDef)
+					.FirstOrDefault(thing => existingRocks.Contains(thing) == false && thing.Position == roofCell);
+				var rockContamination = collapsedRock?.GetContamination() ?? -1f;
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var spawnedRock = collapsedRock != null
+					&& collapsedRock.Spawned
+					&& collapsedRock.def == leavingDef
+					&& collapsedRock.Position == roofCell;
+				var contaminationTransferred = spawnedRock
+					&& CloseFloat(groundBefore, groundContamination)
+					&& CloseFloat(rockContamination, groundContamination);
+
+				return new
+				{
+					success = spawnedRock && contaminationTransferred,
+					cell = ZombieRuntimeActions.DescribeCell(roofCell),
+					roofDef = roofDef.defName,
+					oldRoof = oldRoof?.defName,
+					leavingDef = leavingDef.defName,
+					crushedThings = crushedThings.Select(ZombieRuntimeActions.StableThingId).ToArray(),
+					rock = ZombieRuntimeActions.StableThingId(collapsedRock),
+					rockSpawned = collapsedRock?.Spawned,
+					rockDef = collapsedRock?.def?.defName,
+					groundBefore,
+					rockContamination,
+					expectedRockContamination = groundContamination,
+					spawnedRock,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				collapsedRock?.ClearContamination();
+				if (collapsedRock is { Destroyed: false, Spawned: true })
+					collapsedRock.Destroy();
+				if (roofCell.IsValid && roofCell.InBounds(map))
+				{
+					map.roofGrid.SetRoof(roofCell, oldRoof);
+					map.SetContamination(roofCell, oldGroundContamination);
+				}
+			}
+		}
+
 		[Tool("zombieland/contamination_effect_manager_contract", Description = "Verify contaminated pawns register with the effect manager and can trigger the first source-derived contamination job.")]
 		public static object ContaminationEffectManagerContract()
 		{
