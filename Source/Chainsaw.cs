@@ -22,6 +22,8 @@ namespace ZombieLand
 
 		CompRefuelable refuelable;
 		CompBreakable breakable;
+		readonly List<Thing>[] adjacentThings = new List<Thing>[8];
+		readonly int[] adjacentHostiles = new int[8];
 
 		bool Disabled => pawn == null || pawn.MentalStateDef != null || refuelable.HasFuel == false || breakable.broken;
 
@@ -106,16 +108,19 @@ namespace ZombieLand
 					StopMotor();
 			}
 
-			var cells = GenAdj.AdjacentCellsAround.Select(c => c + pos).ToArray();
-			var affectedCells = new List<Thing>[8];
 			var grid = map.thingGrid;
 			for (var i = 0; i < 8; i++)
-				affectedCells[i] = grid.ThingsListAt(cells[i]);
-			var hostileCells = new List<Pawn>[8];
-			for (var i = 0; i < 8; i++)
-				hostileCells[i] = affectedCells[i].OfType<Pawn>().Where(victim => victim.HostileTo(pawn)).ToList();
+			{
+				var things = grid.ThingsListAt(pos + GenAdj.AdjacentCellsAround[i]);
+				adjacentThings[i] = things;
+				var hostileCount = 0;
+				for (var j = 0; j < things.Count; j++)
+					if (things[j] is Pawn hostilePawn && hostilePawn.HostileTo(pawn))
+						hostileCount++;
+				adjacentHostiles[i] = hostileCount;
+			}
 
-			var maxEmpty = MaxEmptyCells(hostileCells);
+			var maxEmpty = MaxEmptyCells(adjacentHostiles);
 			if (maxEmpty <= 4)
 			{
 				Drop();
@@ -146,15 +151,32 @@ namespace ZombieLand
 				angle = pawn.Rotation.AsAngle;
 
 			var idx = (int)angle / 45;
-			var things = affectedCells[idx].Where(victim => (pawn.DrawPos - victim.DrawPos).MagnitudeHorizontalSquared() <= 2f);
+			var thingsInTargetCell = adjacentThings[idx];
 
-			var victim = things.OfType<Pawn>().FirstOrDefault();
+			Pawn victim = null;
+			for (var i = 0; i < thingsInTargetCell.Count; i++)
+			{
+				if (thingsInTargetCell[i] is Pawn pawnInCell && (pawn.DrawPos - pawnInCell.DrawPos).MagnitudeHorizontalSquared() <= 2f)
+				{
+					victim = pawnInCell;
+					break;
+				}
+			}
 			if (victim != null)
 			{
 				Slaughter(victim);
 				return;
 			}
-			var building = things.OfType<Building>().FirstOrDefault();
+
+			Building building = null;
+			for (var i = 0; i < thingsInTargetCell.Count; i++)
+			{
+				if (thingsInTargetCell[i] is Building buildingInCell && (pawn.DrawPos - buildingInCell.DrawPos).MagnitudeHorizontalSquared() <= 2f)
+				{
+					building = buildingInCell;
+					break;
+				}
+			}
 			if (building != null)
 			{
 				_ = building.TakeDamage(new DamageInfo(DamageDefOf.Crush, 80f));
@@ -168,8 +190,8 @@ namespace ZombieLand
 				var leftIdx = (idx - i + 8) % 8;
 				var rightIdx = (idx + i + 8) % 8;
 
-				var leftHostiles = hostileCells[leftIdx].Count;
-				var rightHostiles = hostileCells[rightIdx].Count;
+				var leftHostiles = adjacentHostiles[leftIdx];
+				var rightHostiles = adjacentHostiles[rightIdx];
 
 				if (leftHostiles > 0)
 					nextIndex = leftIdx;
@@ -324,12 +346,12 @@ namespace ZombieLand
 			swinging = false;
 		}
 
-		static int MaxEmptyCells(List<Pawn>[] cells)
+		static int MaxEmptyCells(int[] hostileCounts)
 		{
 			var idx = 7;
 			while (idx >= 0)
 			{
-				if (cells[idx]?.Any() ?? false)
+				if (hostileCounts[idx] > 0)
 					break;
 				idx--;
 			}
@@ -340,7 +362,7 @@ namespace ZombieLand
 			var maxEmpty = 0;
 			for (var j = 0; j < 8; j++)
 			{
-				if (cells[idx].Count == 0)
+				if (hostileCounts[idx] == 0)
 					empty++;
 				else
 				{
