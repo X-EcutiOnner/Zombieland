@@ -186,7 +186,9 @@ print_contract_response() {
 
 		if .result.structuredContent then
 			.result.structuredContent as $result
-			| {
+			| if (($result.cases // []) | length) == 0 then
+				$result
+			else {
 				success: $result.success,
 				message: $result.message,
 				error: $result.error,
@@ -215,6 +217,7 @@ print_contract_response() {
 					samples: compact_samples
 				}))
 			}
+			end
 			| with_entries(select(.value != null))
 		else
 			.result.content // .error

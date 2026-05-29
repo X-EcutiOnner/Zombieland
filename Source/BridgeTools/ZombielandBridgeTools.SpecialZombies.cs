@@ -470,6 +470,128 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/sticky_goo_toxic_buildup_contract", Description = "Move a real colonist off StickyGoo and verify the Position patch applies source-derived toxic buildup.")]
+		public static object StickyGooToxicBuildupContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var startCell, out var spawnError) == false)
+				return spawnError;
+
+			static float ToxicBuildupSeverity(Pawn pawn)
+			{
+				return pawn.health?.hediffSet?.GetFirstHediffOfDef(HediffDefOf.ToxicBuildup)?.Severity ?? 0f;
+			}
+
+			static void RemoveStickyGooAt(Map map, IntVec3 cell)
+			{
+				foreach (var thing in cell.GetThingList(map).Where(thing => thing.def == CustomDefs.StickyGoo).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+
+			bool TryFindMovePair(Pawn pawn, out IntVec3 cleanDestination, out IntVec3 gooDestination)
+			{
+				cleanDestination = IntVec3.Invalid;
+				gooDestination = IntVec3.Invalid;
+				foreach (var cleanOffset in GenAdj.AdjacentCells)
+				{
+					var cleanCandidate = pawn.Position + cleanOffset;
+					if (cleanCandidate.InBounds(map) == false || cleanCandidate.Standable(map) == false || cleanCandidate.Fogged(map))
+						continue;
+					if (cleanCandidate.GetThingList(map).Any(thing => thing is Pawn && thing != pawn))
+						continue;
+					foreach (var gooOffset in GenAdj.AdjacentCells)
+					{
+						var gooCandidate = cleanCandidate + gooOffset;
+						if (gooCandidate == pawn.Position)
+							continue;
+						if (gooCandidate.InBounds(map) == false || gooCandidate.Standable(map) == false || gooCandidate.Fogged(map))
+							continue;
+						if (gooCandidate.GetThingList(map).Any(thing => thing is Pawn && thing != pawn))
+							continue;
+						cleanDestination = cleanCandidate;
+						gooDestination = gooCandidate;
+						return true;
+					}
+				}
+				return false;
+			}
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, startCell, map, WipeMode.Vanish);
+			DisablePawnWork(actor);
+			actor.jobs?.EndCurrentJob(JobCondition.InterruptForced, false, true);
+			if (TryFindMovePair(actor, out var cleanDestination, out var gooDestination) == false)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "No two-step movement fixture was available for StickyGoo toxic buildup."
+				};
+			}
+
+			RemoveStickyGooAt(map, startCell);
+			RemoveStickyGooAt(map, cleanDestination);
+			RemoveStickyGooAt(map, gooDestination);
+
+			var beforeCleanMove = ToxicBuildupSeverity(actor);
+			actor.Position = cleanDestination;
+			actor.Notify_Teleported(false, false);
+			var afterCleanMove = ToxicBuildupSeverity(actor);
+
+			var madeGoo = FilthMaker.TryMakeFilth(cleanDestination, map, CustomDefs.StickyGoo, actor.Name?.ToStringShort, 1);
+			var stickyGooCount = cleanDestination.GetThingList(map).Count(thing => thing.def == CustomDefs.StickyGoo);
+			var expectedPerFilth = 0.023006668f * Mathf.Max(1f - actor.GetStatValue(StatDefOf.ToxicResistance, true, -1), 0f);
+			if (ModsConfig.BiotechActive)
+				expectedPerFilth *= Mathf.Max(1f - actor.GetStatValue(StatDefOf.ToxicEnvironmentResistance, true, -1), 0f);
+			var expectedDelta = expectedPerFilth * stickyGooCount;
+
+			var beforeGooMove = ToxicBuildupSeverity(actor);
+			actor.Position = gooDestination;
+			actor.Notify_Teleported(false, false);
+			var afterGooMove = ToxicBuildupSeverity(actor);
+			var cleanDelta = afterCleanMove - beforeCleanMove;
+			var gooDelta = afterGooMove - beforeGooMove;
+			var tolerance = 0.0001f;
+
+			return new
+			{
+				success = Mathf.Abs(cleanDelta) <= tolerance
+					&& madeGoo
+					&& stickyGooCount > 0
+					&& expectedDelta > 0f
+					&& Mathf.Abs(gooDelta - expectedDelta) <= tolerance,
+				sourcePath = "Thing.Position setter prefix -> StickyGoo at pawn.Position -> HealthUtility.AdjustSeverity(ToxicBuildup)",
+				actor = DescribePawn(actor),
+				cells = new
+				{
+					start = ZombieRuntimeActions.DescribeCell(startCell),
+					cleanDestination = ZombieRuntimeActions.DescribeCell(cleanDestination),
+					gooDestination = ZombieRuntimeActions.DescribeCell(gooDestination)
+				},
+				madeGoo,
+				stickyGooCount,
+				expectedPerFilth,
+				expectedDelta,
+				beforeCleanMove,
+				afterCleanMove,
+				cleanDelta,
+				beforeGooMove,
+				afterGooMove,
+				gooDelta
+			};
+		}
+
 		[Tool("zombieland/mine_with_miner", Description = "Place a mineable block next to a miner zombie and verify Zombieland's mining code damages it.")]
 		public static object MineWithMiner(
 			[ToolParameter(Description = "Optional miner zombie id, ThingID, label, or short name. When omitted, a fresh miner is spawned near map center.", Required = false, DefaultValue = "")] string target = "")
