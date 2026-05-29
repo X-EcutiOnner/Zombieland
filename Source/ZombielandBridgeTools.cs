@@ -4906,6 +4906,111 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_rest_comfort_contract", Description = "Verify the real GainComfortFromCellIfPossible cadence equalizes contaminated ground into a resting pawn.")]
+		public static object ContaminationRestComfortContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var pawnCell, out var pawnSpawnError) == false)
+				return pawnSpawnError;
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var oldGroundContamination = map.GetContamination(pawnCell);
+			try
+			{
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+				DisablePawnWork(pawn);
+				pawn.needs?.AddOrRemoveNeedsAsAppropriate();
+				pawn.ClearContamination();
+				pawn.jobs?.StopAll(false, true);
+				pawn.pather?.StopDead();
+				if (pawn.drafter != null)
+					pawn.drafter.Drafted = true;
+				var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				waitJob.playerForced = true;
+				pawn.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+
+				const float groundContaminationBefore = 0.8f;
+				map.SetContamination(pawnCell, groundContaminationBefore);
+				var pawnBefore = pawn.GetContamination();
+				var groundBefore = map.GetContamination(pawnCell);
+				var restEqualize = ZombieSettings.Values.contamination.restEqualize;
+				var expectedPawnAfter = groundBefore * restEqualize;
+				var expectedGroundAfter = groundBefore * (1f - restEqualize);
+				var tickStart = Find.TickManager.TicksGame;
+				var cadenceTick = pawn.thingIDNumber % 1000;
+				var ticksToCadence = (cadenceTick - tickStart % 1000 + 1000) % 1000;
+				var tickHit = -1;
+				for (var tick = 0; tick <= ticksToCadence; tick++)
+				{
+					PawnUtility.GainComfortFromCellIfPossible(pawn, 1, false);
+					if (pawn.GetContamination() > pawnBefore)
+					{
+						tickHit = tick;
+						break;
+					}
+					AdvanceGameTicks(1);
+				}
+
+				var pawnAfter = pawn.GetContamination();
+				var groundAfter = map.GetContamination(pawnCell);
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var cadenceReached = tickHit >= 0 && tickHit <= 1000;
+				var equalized = cadenceReached
+					&& CloseFloat(pawnBefore, 0f)
+					&& CloseFloat(groundBefore, groundContaminationBefore)
+					&& CloseFloat(pawnAfter, expectedPawnAfter)
+					&& CloseFloat(groundAfter, expectedGroundAfter);
+
+				return new
+				{
+					success = equalized,
+					pawn = DescribePawn(pawn),
+					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+					pawnPositionAfter = ZombieRuntimeActions.DescribeCell(pawn.Position),
+					startedJob = pawn.CurJobDef?.defName,
+					tickStart,
+					cadenceTick,
+					ticksToCadence,
+					tickHit,
+					restEqualize,
+					pawnBefore,
+					pawnAfter,
+					expectedPawnAfter,
+					groundBefore,
+					groundAfter,
+					expectedGroundAfter,
+					cadenceReached,
+					equalized
+				};
+			}
+			finally
+			{
+				pawn?.ClearContamination();
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+				if (pawnCell.IsValid && pawnCell.InBounds(map))
+					map.SetContamination(pawnCell, oldGroundContamination);
+			}
+		}
+
 		[Tool("zombieland/contamination_recipe_product_contract", Description = "Verify contamination transfers from spawned recipe ingredients into unspawned recipe products.")]
 		public static object ContaminationRecipeProductContract()
 		{
@@ -5744,6 +5849,147 @@ namespace ZombieLand
 					worker.Destroy();
 				if (mineableCell.IsValid && mineableCell.InBounds(map))
 					map.SetContamination(mineableCell, oldGroundContamination);
+			}
+		}
+
+		[Tool("zombieland/contamination_plant_stump_contract", Description = "Verify a contaminated tree transfers contamination through real Plant.TrySpawnStump into its stump.")]
+		public static object ContaminationPlantStumpContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var plantDef = DefDatabase<ThingDef>.GetNamedSilentFail("Plant_TreeOak");
+			var expectedStumpDef = plantDef?.plant?.choppedThingDef;
+			if (plantDef == null || expectedStumpDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Plant_TreeOak or its chopped stump def is unavailable."
+				};
+			}
+
+			bool TryFindPlantCell(IntVec3 root, float radius, out IntVec3 cell, out object error)
+			{
+				cell = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+				{
+					if (candidate.InBounds(map) == false)
+						continue;
+					if (candidate.Fogged(map))
+						continue;
+					if (candidate.GetEdifice(map) != null)
+						continue;
+					if (candidate.GetThingList(map).Any(thing =>
+						thing is Pawn
+						|| thing is Blueprint
+						|| thing is Frame
+						|| thing.def.category == ThingCategory.Plant
+						|| thing.def.category == ThingCategory.Building))
+						continue;
+
+					cell = candidate;
+					return true;
+				}
+
+				error = new
+				{
+					success = false,
+					error = $"No clear plant fixture cell was found near ({root.x}, {root.z})."
+				};
+				return false;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindPlantCell(root, 24f, out var plantCell, out var plantCellError) == false)
+				return plantCellError;
+
+			var plant = (Plant)null;
+			var stump = (Thing)null;
+			try
+			{
+				plant = ThingMaker.MakeThing(plantDef) as Plant;
+				if (plant == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not create Plant_TreeOak fixture."
+					};
+				}
+
+				GenSpawn.Spawn(plant, plantCell, map, Rot4.South, WipeMode.Vanish, false);
+				plant.Growth = 1f;
+
+				const float plantContamination = 0.55f;
+				plant.SetContamination(plantContamination);
+				var plantBefore = plant.GetContamination();
+				var harvestable = plant.HarvestableNow;
+
+				stump = plant.TrySpawnStump(PlantDestructionMode.Chop);
+
+				var plantAfter = plant.GetContamination();
+				var stumpContamination = stump?.GetContamination() ?? -1f;
+				var expectedStumpContamination = plantContamination * ZombieSettings.Values.contamination.stumpTransfer;
+				var expectedPlantAfter = plantContamination - expectedStumpContamination;
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var spawnedStump = harvestable
+					&& stump != null
+					&& stump.Spawned
+					&& stump.def == expectedStumpDef
+					&& stump.Position == plantCell;
+				var contaminationTransferred = spawnedStump
+					&& CloseFloat(plantBefore, plantContamination)
+					&& CloseFloat(stumpContamination, expectedStumpContamination)
+					&& CloseFloat(plantAfter, expectedPlantAfter);
+
+				return new
+				{
+					success = spawnedStump && contaminationTransferred,
+					cell = ZombieRuntimeActions.DescribeCell(plantCell),
+					plant = ZombieRuntimeActions.StableThingId(plant),
+					plantDef = plant.def.defName,
+					plantGrowth = plant.Growth,
+					harvestable,
+					plantBefore,
+					plantAfter,
+					expectedPlantAfter,
+					stump = ZombieRuntimeActions.StableThingId(stump),
+					stumpDef = stump?.def?.defName,
+					expectedStumpDef = expectedStumpDef.defName,
+					stumpSpawned = stump?.Spawned,
+					stumpContamination,
+					expectedStumpContamination,
+					stumpTransfer = ZombieSettings.Values.contamination.stumpTransfer,
+					spawnedStump,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				stump?.ClearContamination();
+				if (stump is { Destroyed: false, Spawned: true })
+					stump.Destroy();
+				plant?.ClearContamination();
+				if (plant is { Destroyed: false, Spawned: true })
+					plant.Destroy();
 			}
 		}
 
