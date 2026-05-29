@@ -4657,6 +4657,11 @@ namespace ZombieLand
 
 		// patch for disallowing social interaction with zombies
 		//
+		static bool IsZombielandSocialPawn(Pawn pawn)
+		{
+			return pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter;
+		}
+
 		[HarmonyPatch(typeof(RelationsUtility))]
 		[HarmonyPatch(nameof(RelationsUtility.HasAnySocialMemoryWith))]
 		static class RelationsUtility_HasAnySocialMemoryWith_Patch
@@ -4664,7 +4669,7 @@ namespace ZombieLand
 			[HarmonyPriority(Priority.First)]
 			static bool Prefix(Pawn p, Pawn otherPawn, ref bool __result)
 			{
-				if (p is Zombie || otherPawn is Zombie)
+				if (IsZombielandSocialPawn(p) || IsZombielandSocialPawn(otherPawn))
 				{
 					__result = false;
 					return false;
@@ -4682,10 +4687,10 @@ namespace ZombieLand
 
 				yield return new CodeInstruction(OpCodes.Ldarg_0);
 				yield return new CodeInstruction(OpCodes.Ldfld, typeof(Pawn_RelationsTracker).Field("pawn"));
-				yield return new CodeInstruction(OpCodes.Isinst, typeof(Zombie));
+				yield return new CodeInstruction(OpCodes.Call, SymbolExtensions.GetMethodInfo(() => IsZombielandSocialPawn(null)));
 				yield return new CodeInstruction(OpCodes.Brtrue_S, returnZeroLabel);
 				yield return new CodeInstruction(OpCodes.Ldarg_1);
-				yield return new CodeInstruction(OpCodes.Isinst, typeof(Zombie));
+				yield return new CodeInstruction(OpCodes.Call, SymbolExtensions.GetMethodInfo(() => IsZombielandSocialPawn(null)));
 				yield return new CodeInstruction(OpCodes.Brtrue_S, returnZeroLabel);
 
 				foreach (var instruction in instructions)
@@ -4705,7 +4710,7 @@ namespace ZombieLand
 			[HarmonyPriority(Priority.First)]
 			static bool Prefix(Pawn p1, Pawn p2, ref bool __result)
 			{
-				if (p1 is Zombie || p2 is Zombie)
+				if (IsZombielandSocialPawn(p1) || IsZombielandSocialPawn(p2))
 				{
 					__result = false;
 					return false;
@@ -4721,7 +4726,7 @@ namespace ZombieLand
 			[HarmonyPriority(Priority.First)]
 			static bool Prefix(ThoughtHandler __instance, Pawn otherPawn, List<ISocialThought> outThoughts)
 			{
-				if (otherPawn is Zombie || __instance.pawn is Zombie)
+				if (IsZombielandSocialPawn(otherPawn) || IsZombielandSocialPawn(__instance.pawn))
 				{
 					outThoughts.Clear();
 					return false;
@@ -4736,7 +4741,7 @@ namespace ZombieLand
 			[HarmonyPriority(Priority.First)]
 			static bool Prefix(SituationalThoughtHandler __instance, Pawn otherPawn)
 			{
-				return !(otherPawn is Zombie || __instance.pawn is Zombie);
+				return !(IsZombielandSocialPawn(otherPawn) || IsZombielandSocialPawn(__instance.pawn));
 			}
 		}
 		[HarmonyPatch(typeof(Corpse))]
@@ -4769,7 +4774,7 @@ namespace ZombieLand
 			[HarmonyPriority(Priority.First)]
 			static bool Prefix(Pawn pawn, ref bool __result)
 			{
-				if (pawn is Zombie)
+				if (IsZombielandSocialPawn(pawn))
 				{
 					__result = false;
 					return false;
@@ -4797,24 +4802,25 @@ namespace ZombieLand
 		[HarmonyPatch(nameof(Pawn_InteractionsTracker.TryInteractWith))]
 		static class Pawn_InteractionsTracker_TryInteractWith_Patch
 		{
-			static IEnumerable<CodeInstruction> Transpiler(ILGenerator generator, MethodBase method, IEnumerable<CodeInstruction> instructions)
+			[HarmonyPriority(Priority.First)]
+			static bool Prefix(Pawn ___pawn, Pawn recipient, ref bool __result)
 			{
-				var conditions = new List<CodeInstruction>();
-				conditions.AddRange(Tools.NotZombieInstructions(generator, method));
-				conditions.AddRange(Tools.NotZombieInstructions(generator, method, "recipient"));
-				var transpiler = Tools.GenerateReplacementCallTranspiler(conditions);
-				return transpiler(generator, instructions);
+				if (IsZombielandSocialPawn(___pawn) || IsZombielandSocialPawn(recipient))
+				{
+					__result = false;
+					return false;
+				}
+				return true;
 			}
 		}
 		[HarmonyPatch(typeof(Pawn_InteractionsTracker))]
 		[HarmonyPatch(nameof(Pawn_InteractionsTracker.InteractionsTrackerTickInterval))]
 		static class Pawn_InteractionsTracker_InteractionsTrackerTickInterval_Patch
 		{
-			static IEnumerable<CodeInstruction> Transpiler(ILGenerator generator, MethodBase method, IEnumerable<CodeInstruction> instructions)
+			[HarmonyPriority(Priority.First)]
+			static bool Prefix(Pawn ___pawn)
 			{
-				var conditions = Tools.NotZombieInstructions(generator, method);
-				var transpiler = Tools.GenerateReplacementCallTranspiler(conditions);
-				return transpiler(generator, instructions);
+				return IsZombielandSocialPawn(___pawn) == false;
 			}
 		}
 

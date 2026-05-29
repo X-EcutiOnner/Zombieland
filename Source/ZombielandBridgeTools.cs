@@ -78,6 +78,21 @@ namespace ZombieLand
 			return selected;
 		}
 
+		static bool TryHasAnySocialMemoryWith(Pawn pawn, Pawn otherPawn, out bool result, out string error)
+		{
+			result = false;
+			error = null;
+			var method = typeof(RelationsUtility).GetMethod("HasAnySocialMemoryWith", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+			if (method == null)
+			{
+				error = "Could not find RelationsUtility.HasAnySocialMemoryWith by reflection.";
+				return false;
+			}
+
+			result = (bool)method.Invoke(null, new object[] { pawn, otherPawn });
+			return true;
+		}
+
 		static object DescribeZombie(Pawn pawn)
 		{
 			var zombie = pawn as Zombie;
@@ -1392,6 +1407,130 @@ namespace ZombieLand
 				formerLiveLabelColor = DescribeColor(formerLiveLabelColor),
 				normalLiveHasFormerColor,
 				formerLiveHasFormerColor
+			};
+		}
+
+		[Tool("zombieland/zombie_social_thought_suppression", Description = "Verify zombie pawns and zombie corpses are ignored by RimWorld social-memory, interaction, and observed-corpse thought APIs.")]
+		public static object ZombieSocialThoughtSuppression()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var destroyedZombieCorpses = 0;
+			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+			{
+				corpse.Destroy();
+				destroyedZombieCorpses++;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+			if (TryFindClearSpawnCell(map, actorCell + new IntVec3(4, 0, 0), 10f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+			DisablePawnWork(actor);
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					actor = DescribePawn(actor),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					error = "ZombieGenerator.SpawnZombie returned no social/thought test zombie."
+				};
+			}
+
+			if (TryHasAnySocialMemoryWith(actor, zombie, out var hasAnySocialMemoryWithZombie, out var socialMemoryError) == false)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					error = socialMemoryError
+				};
+			}
+
+			var thoughtDef = ThoughtDefOf.DebugBad;
+			var actorCanGetDebugThought = thoughtDef != null && ThoughtUtility.CanGetThought(actor, thoughtDef);
+			var zombieCanGetDebugThought = thoughtDef != null && ThoughtUtility.CanGetThought(zombie, thoughtDef);
+			var pawnsKnowEachOther = RelationsUtility.PawnsKnowEachOther(actor, zombie);
+			var pawnsKnowEachOtherReverse = RelationsUtility.PawnsKnowEachOther(zombie, actor);
+			var actorOpinionOfZombie = actor.relations?.OpinionOf(zombie) ?? int.MinValue;
+			var zombieOpinionOfActor = zombie.relations?.OpinionOf(actor) ?? int.MinValue;
+			var socialThoughtsAboutZombie = new List<ISocialThought>();
+			actor.needs?.mood?.thoughts?.GetSocialThoughts(zombie, socialThoughtsAboutZombie);
+			var actorInteractWithZombie = actor.interactions?.TryInteractWith(zombie, InteractionDefOf.Chitchat) ?? false;
+			var zombieInteractWithActor = zombie.interactions?.TryInteractWith(actor, InteractionDefOf.Chitchat) ?? false;
+
+			zombie.Kill(null);
+			var zombieCorpse = zombie.Corpse as ZombieCorpse
+				?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(zombieCell)).FirstOrDefault();
+			if (zombieCorpse == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					error = "Killing the social/thought test zombie did not leave a ZombieCorpse."
+				};
+			}
+
+			var observedZombieCorpseThought = zombieCorpse.GiveObservedThought(actor);
+			var observedZombieCorpseHistoryEvent = zombieCorpse.GiveObservedHistoryEvent(actor);
+
+			return new
+			{
+				success = thoughtDef != null
+					&& actorCanGetDebugThought
+					&& zombieCanGetDebugThought == false
+					&& pawnsKnowEachOther == false
+					&& pawnsKnowEachOtherReverse == false
+					&& hasAnySocialMemoryWithZombie == false
+					&& actorOpinionOfZombie == 0
+					&& zombieOpinionOfActor == 0
+					&& socialThoughtsAboutZombie.Count == 0
+					&& actorInteractWithZombie == false
+					&& zombieInteractWithActor == false
+					&& observedZombieCorpseThought == null
+					&& observedZombieCorpseHistoryEvent == null,
+				destroyedZombies,
+				destroyedZombieCorpses,
+				actor = DescribePawn(actor),
+				zombie = DescribeZombie(zombie),
+				zombieCorpse = DescribeCorpse(zombieCorpse),
+				thoughtDef = thoughtDef?.defName,
+				actorCanGetDebugThought,
+				zombieCanGetDebugThought,
+				pawnsKnowEachOther,
+				pawnsKnowEachOtherReverse,
+				hasAnySocialMemoryWithZombie,
+				actorOpinionOfZombie,
+				zombieOpinionOfActor,
+				socialThoughtCountAboutZombie = socialThoughtsAboutZombie.Count,
+				actorInteractWithZombie,
+				zombieInteractWithActor,
+				observedZombieCorpseThoughtDef = observedZombieCorpseThought?.def?.defName,
+				observedZombieCorpseHistoryEventDef = observedZombieCorpseHistoryEvent?.defName
 			};
 		}
 
