@@ -140,6 +140,13 @@ namespace ZombieLand
 
 		static Map CurrentMap => Find.CurrentMap;
 
+		static void FillZombieTickPercent(float percent)
+		{
+			for (var i = 0; i < ZombieTicker.percentZombiesTicked.Length; i++)
+				ZombieTicker.percentZombiesTicked[i] = percent;
+			ZombieTicker.percentZombiesTickedIndex = 0;
+		}
+
 		static object DescribeColor(Color color)
 		{
 			return new
@@ -10532,6 +10539,271 @@ namespace ZombieLand
 				nonZombieFactionCount = nonZombieFactions.Length,
 				relations
 			};
+		}
+
+		[Tool("zombieland/zombie_ticking_budget_contract", Description = "Verify reduced zombie ticking counts production ticks and keeps move-speed compensation active.")]
+		public static object ZombieTickingBudgetContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland tick manager is available on the current map."
+				};
+			}
+
+			var originalPercents = (float[])ZombieTicker.percentZombiesTicked.Clone();
+			var originalPercentIndex = ZombieTicker.percentZombiesTickedIndex;
+			var originalZombiesTicked = ZombieTicker.zombiesTicked;
+			var originalMaxTicking = ZombieTicker.maxTicking;
+			var originalCurrentTicking = ZombieTicker.currentTicking;
+			var destroyedExisting = ZombieRuntimeActions.DestroyZombies(map);
+			var spawned = new List<Zombie>();
+
+			try
+			{
+				const int targetCount = 20;
+				const float targetPercent = 0.25f;
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				for (var i = 0; i < targetCount; i++)
+				{
+					var candidateRoot = root + new IntVec3((i % 5) * 3, 0, (i / 5) * 3);
+					if (TryFindClearSpawnCell(map, candidateRoot, 16f, out var cell, out var spawnError) == false)
+						return spawnError;
+
+					var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+					if (zombie == null)
+					{
+						return new
+						{
+							success = false,
+							destroyedExisting,
+							spawnedCount = spawned.Count,
+							error = "ZombieGenerator.SpawnZombie returned no normal zombie."
+						};
+					}
+					spawned.Add(zombie);
+				}
+
+				tickManager.allZombiesCached.RemoveWhere(zombie => zombie == null || zombie.Destroyed || zombie.Spawned == false || zombie.Dead);
+				foreach (var zombie in spawned)
+					_ = tickManager.allZombiesCached.Add(zombie);
+
+				var liveCachedBefore = tickManager.allZombiesCached.Count(zombie => zombie.Spawned && zombie.Dead == false);
+				FillZombieTickPercent(targetPercent);
+				var percentBeforeTicking = ZombieTicker.PercentTicking;
+				var expectedTicking = Mathf.FloorToInt(liveCachedBefore * percentBeforeTicking);
+				ZombieTicker.zombiesTicked = 0;
+				tickManager.ZombieTicking();
+				var subsetCount = tickManager.currentZombiesTicking?.Length ?? 0;
+				var tickedCount = ZombieTicker.zombiesTicked;
+				var allTickedWereLive = tickManager.currentZombiesTicking?.All(zombie => zombie.Spawned && zombie.Dead == false) ?? false;
+
+				var sample = spawned.FirstOrDefault(zombie => zombie.Spawned && zombie.Dead == false);
+				FillZombieTickPercent(1f);
+				var normalSpeed = sample?.GetStatValue(StatDefOf.MoveSpeed) ?? 0f;
+				FillZombieTickPercent(targetPercent);
+				var throttledSpeed = sample?.GetStatValue(StatDefOf.MoveSpeed) ?? 0f;
+				var speedRatio = normalSpeed == 0f ? 0f : throttledSpeed / normalSpeed;
+
+				return new
+				{
+					success = spawned.Count == targetCount
+						&& liveCachedBefore == targetCount
+						&& expectedTicking > 0
+						&& expectedTicking < liveCachedBefore
+						&& subsetCount == expectedTicking
+						&& tickedCount == subsetCount
+						&& allTickedWereLive
+						&& speedRatio > 3.5f,
+					destroyedExisting,
+					spawnedCount = spawned.Count,
+					liveCachedBefore,
+					targetPercent,
+					percentBeforeTicking,
+					expectedTicking,
+					subsetCount,
+					tickedCount,
+					allTickedWereLive,
+					normalSpeed,
+					throttledSpeed,
+					speedRatio,
+					sample = DescribeZombie(sample)
+				};
+			}
+			finally
+			{
+				ZombieRuntimeActions.DestroyZombies(map);
+				ZombieTicker.percentZombiesTicked = originalPercents;
+				ZombieTicker.percentZombiesTickedIndex = originalPercentIndex;
+				ZombieTicker.zombiesTicked = originalZombiesTicked;
+				ZombieTicker.maxTicking = originalMaxTicking;
+				ZombieTicker.currentTicking = originalCurrentTicking;
+				tickManager.currentZombiesTicking = Array.Empty<Zombie>();
+				tickManager.currentZombiesTickingIndex = 0;
+			}
+		}
+
+		[Tool("zombieland/infected_incident_hooks_contract", Description = "Verify Zombieland's incident pawn-group infection and post-incident bite-harmless hooks.")]
+		public static object InfectedIncidentHooksContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var generatePawnsPatch = typeof(Patches).GetNestedType("IncidentWorker_Patches", BindingFlags.NonPublic);
+			var generatePawnsPostfix = generatePawnsPatch?.GetMethod("Postfix", BindingFlags.Static | BindingFlags.NonPublic);
+			var incidentTryExecutePatch = typeof(Patches).GetNestedType("IncidentWorker_TryExecute_Patch", BindingFlags.NonPublic);
+			var incidentTryExecutePostfix = incidentTryExecutePatch?.GetMethod("Postfix", BindingFlags.Static | BindingFlags.NonPublic);
+			if (generatePawnsPostfix == null || incidentTryExecutePostfix == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find both infected incident postfixes by reflection.",
+					generatePawnsPostfixFound = generatePawnsPostfix != null,
+					incidentTryExecutePostfixFound = incidentTryExecutePostfix != null
+				};
+			}
+
+			var animalKind = DefDatabase<PawnKindDef>.GetNamed("Muffalo", false);
+			if (animalKind == null)
+			{
+				return new
+				{
+					success = false,
+					error = "PawnKindDef Muffalo was not found."
+				};
+			}
+
+			var pawns = new List<Pawn>();
+			var oldInfectedRaidsChance = ZombieSettings.Values.infectedRaidsChance;
+			var oldUseDynamicThreatLevel = ZombieSettings.Values.useDynamicThreatLevel;
+			try
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root + new IntVec3(-8, 0, 12), 18f, out var raidHumanCell, out var raidHumanError) == false)
+					return raidHumanError;
+				if (TryFindClearSpawnCell(map, raidHumanCell + new IntVec3(3, 0, 0), 10f, out var raidAnimalCell, out var raidAnimalError) == false)
+					return raidAnimalError;
+				if (TryFindClearSpawnCell(map, raidHumanCell + new IntVec3(6, 0, 0), 12f, out var incidentPawnCell, out var incidentPawnError) == false)
+					return incidentPawnError;
+
+				var raidHuman = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfAncientsHostile);
+				var raidAnimal = PawnGenerator.GeneratePawn(animalKind, null);
+				var incidentPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfAncientsHostile);
+				pawns.AddRange(new[] { raidHuman, raidAnimal, incidentPawn });
+				GenSpawn.Spawn(raidHuman, raidHumanCell, map, Rot4.South);
+				GenSpawn.Spawn(raidAnimal, raidAnimalCell, map, Rot4.South);
+				GenSpawn.Spawn(incidentPawn, incidentPawnCell, map, Rot4.South);
+				DisablePawnWork(raidHuman);
+				DisablePawnWork(incidentPawn);
+
+				ZombieSettings.Values.infectedRaidsChance = 1f;
+				ZombieSettings.Values.useDynamicThreatLevel = false;
+				var generatedPawns = new List<Pawn> { raidHuman, raidAnimal };
+				generatePawnsPostfix.Invoke(null, new object[] { generatedPawns });
+				var raidHumanInfection = ZombieRuntimeActions.DescribePawnInfection(raidHuman);
+				var raidAnimalInfection = ZombieRuntimeActions.DescribePawnInfection(raidAnimal);
+				var raidHumanBites = new List<Hediff_Injury_ZombieBite>();
+				raidHuman.health.hediffSet.GetHediffs(ref raidHumanBites);
+				var raidAnimalBites = new List<Hediff_Injury_ZombieBite>();
+				raidAnimal.health.hediffSet.GetHediffs(ref raidAnimalBites);
+
+				if (ZombieRuntimeActions.AddZombieBite(incidentPawn, "final", out var bite, out var biteError) == false)
+				{
+					return new
+					{
+						success = false,
+						error = biteError
+					};
+				}
+
+				var incidentBefore = ZombieRuntimeActions.DescribePawnInfection(incidentPawn);
+				var parms = new IncidentParms
+				{
+					pawnGroups = new Dictionary<Pawn, int>
+					{
+						[incidentPawn] = 0
+					}
+				};
+				Rand.PushState(6300);
+				try
+				{
+					incidentTryExecutePostfix.Invoke(null, new object[] { parms });
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+				var incidentAfter = ZombieRuntimeActions.DescribePawnInfection(incidentPawn);
+				var incidentBites = new List<Hediff_Injury_ZombieBite>();
+				incidentPawn.health.hediffSet.GetHediffs(ref incidentBites);
+				var allIncidentBitesHarmless = incidentBites.Count > 0
+					&& incidentBites.All(current => current.mayBecomeZombieWhenDead == false
+						&& (current.TendDuration?.GetInfectionState() ?? InfectionState.None) == InfectionState.BittenHarmless);
+
+				return new
+				{
+					success = raidHumanBites.Count == 1
+						&& raidAnimalBites.Count == 0
+						&& allIncidentBitesHarmless,
+					settings = new
+					{
+						ZombieSettings.Values.infectedRaidsChance,
+						ZombieSettings.Values.useDynamicThreatLevel,
+						threatLevel = ZombieWeather.GetThreatLevel(map)
+					},
+					raidGeneration = new
+					{
+						human = DescribePawn(raidHuman),
+						animal = DescribePawn(raidAnimal),
+						humanInfection = raidHumanInfection,
+						animalInfection = raidAnimalInfection,
+						humanBiteCount = raidHumanBites.Count,
+						animalBiteCount = raidAnimalBites.Count
+					},
+					incidentReduction = new
+					{
+						pawn = DescribePawn(incidentPawn),
+						before = incidentBefore,
+						after = incidentAfter,
+						biteCount = incidentBites.Count,
+						allIncidentBitesHarmless
+					},
+					sourcePath = "PawnGroupKindWorker.GeneratePawns postfix and IncidentWorker.TryExecute postfix"
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.infectedRaidsChance = oldInfectedRaidsChance;
+				ZombieSettings.Values.useDynamicThreatLevel = oldUseDynamicThreatLevel;
+				foreach (var pawn in pawns)
+				{
+					if (pawn.Corpse != null && pawn.Corpse.Destroyed == false)
+						pawn.Corpse.Destroy(DestroyMode.Vanish);
+					if (pawn.Destroyed == false)
+						pawn.Destroy(DestroyMode.Vanish);
+				}
+			}
 		}
 
 		[Tool("zombieland/zombie_active_threat_count_contract", Description = "Verify GenHostility.IsActiveThreatTo excludes all Zombieland pawn types from player hostile counts.")]

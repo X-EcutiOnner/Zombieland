@@ -361,7 +361,10 @@ namespace ZombieLand
 			PrepareThreadedTicking(this);
 			var threatLevel = ZombieWeather.GetThreatLevel(map);
 			for (var i = 0; i < currentZombiesTicking.Length; i++)
+			{
 				currentZombiesTicking[i].CustomTick(threatLevel);
+				ZombieTicker.zombiesTicked++;
+			}
 		}
 
 		public static void PrepareThreadedTicking(object input)
@@ -389,6 +392,7 @@ namespace ZombieLand
 				if (idx < 0)
 					return;
 				tickManager.currentZombiesTicking[idx].CustomTick(threatLevel);
+				Interlocked.Increment(ref ZombieTicker.zombiesTicked);
 			}
 		}
 
