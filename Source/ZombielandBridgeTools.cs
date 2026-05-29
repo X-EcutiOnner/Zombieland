@@ -2708,6 +2708,177 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/chainsaw_slaughter_zombie", Description = "Run a fueled chainsaw against an adjacent live zombie and verify the chainsaw tick kills it through the custom slaughter path.")]
+		public static object ChainsawSlaughterZombie()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+			actor.workSettings?.DisableAll();
+			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+
+			var zombieCell = IntVec3.Invalid;
+			var targetIndex = -1;
+			var adjacent = GenAdj.AdjacentCellsAround;
+			for (var i = 0; i < adjacent.Length; i++)
+			{
+				var candidate = actorCell + adjacent[i];
+				if (candidate.InBounds(map) == false || candidate.Standable(map) == false || candidate.Fogged(map))
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+					continue;
+				zombieCell = candidate;
+				targetIndex = i;
+				break;
+			}
+			if (zombieCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "No adjacent zombie target cell was available."
+				};
+			}
+
+			var chainsaw = ThingMaker.MakeThing(CustomDefs.Chainsaw) as Chainsaw;
+			if (chainsaw == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create Chainsaw."
+				};
+			}
+
+			GenSpawn.Spawn(chainsaw, actorCell, map, WipeMode.Vanish);
+			var refuelable = chainsaw.TryGetComp<CompRefuelable>();
+			var breakable = chainsaw.TryGetComp<CompBreakable>();
+			if (refuelable == null || breakable == null)
+			{
+				return new
+				{
+					success = false,
+					chainsaw = ZombieRuntimeActions.StableThingId(chainsaw),
+					error = "The spawned chainsaw did not have refuelable and breakable comps."
+				};
+			}
+
+			var fuel = ThingMaker.MakeThing(ThingDefOf.Chemfuel);
+			fuel.stackCount = Math.Min(ThingDefOf.Chemfuel.stackLimit, refuelable.GetFuelCountToFullyRefuel());
+			GenSpawn.Spawn(fuel, actorCell + IntVec3.South, map, WipeMode.Vanish);
+			refuelable.Refuel(new List<Thing> { fuel });
+			chainsaw.DeSpawn();
+			actor.equipment.AddEquipment(chainsaw);
+			actor.drafter.Drafted = true;
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "ZombieGenerator.SpawnZombie returned no chainsaw target zombie."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			var victimHeadsBefore = tickManager?.victimHeads?.Count ?? 0;
+			var hitPointsBefore = chainsaw.HitPoints;
+			var fuelBefore = refuelable.Fuel;
+			var toggle = chainsaw.GetGizmos().OfType<Command_Action>().FirstOrDefault(command => command.disabled == false);
+			toggle?.action();
+			chainsaw.angle = targetIndex * 45f + 22.5f;
+			var runningAfterToggle = chainsaw.running;
+			var samples = new List<object>();
+			var tickHit = -1;
+
+			for (var tick = 1; tick <= 10; tick++)
+			{
+				AdvanceGameTicks(1);
+				samples.Add(new
+				{
+					tick,
+					zombieDead = zombie.Dead,
+					zombieDestroyed = zombie.Destroyed,
+					chainsaw.running,
+					chainsaw.swinging,
+					chainsaw.angle,
+					chainsawHitPoints = chainsaw.HitPoints,
+					fuel = refuelable.Fuel,
+					victimHeads = tickManager?.victimHeads?.Count ?? 0
+				});
+
+				if (zombie.Dead)
+				{
+					tickHit = tick;
+					break;
+				}
+			}
+
+			var victimHeadsAfter = tickManager?.victimHeads?.Count ?? 0;
+			var fuelAfter = refuelable.Fuel;
+			var hitPointsAfter = chainsaw.HitPoints;
+
+			return new
+			{
+				success = runningAfterToggle
+					&& tickHit > 0
+					&& zombie.Dead
+					&& victimHeadsAfter > victimHeadsBefore
+					&& hitPointsAfter < hitPointsBefore
+					&& fuelAfter < fuelBefore
+					&& breakable.broken == false,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				zombie = DescribeZombie(zombie),
+				cells = new
+				{
+					actor = ZombieRuntimeActions.DescribeCell(actorCell),
+					zombie = ZombieRuntimeActions.DescribeCell(zombieCell)
+				},
+				targetIndex,
+				targetOffset = ZombieRuntimeActions.DescribeCell(adjacent[targetIndex]),
+				runningAfterToggle,
+				tickHit,
+				hitPointsBefore,
+				hitPointsAfter,
+				hitPointDelta = hitPointsBefore - hitPointsAfter,
+				fuelBefore,
+				fuelAfter,
+				fuelDelta = fuelBefore - fuelAfter,
+				victimHeadsBefore,
+				victimHeadsAfter,
+				victimHeadDelta = victimHeadsAfter - victimHeadsBefore,
+				chainsaw = new
+				{
+					id = ZombieRuntimeActions.StableThingId(chainsaw),
+					equipped = ReferenceEquals(actor.equipment.Primary, chainsaw),
+					pawnSet = ReferenceEquals(chainsaw.pawn, actor),
+					breakable.broken,
+					chainsaw.running,
+					chainsaw.swinging,
+					chainsaw.angle
+				},
+				samples
+			};
+		}
+
 		[Tool("zombieland/damage_dark_slimer", Description = "Apply real bullet damage to a dark slimer and verify the damage-worker patch creates custom TarSmoke.")]
 		public static object DamageDarkSlimer(
 			[ToolParameter(Description = "Optional dark slimer zombie id, ThingID, label, or short name. When omitted, a fresh dark slimer is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
