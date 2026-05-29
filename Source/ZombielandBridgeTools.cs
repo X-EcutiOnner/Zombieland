@@ -1639,6 +1639,68 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/zombie_extract_filter_visibility", Description = "Verify the broad zombie ThingFilter patch still allows zombie extract and serum defs while blocking actual zombie defs.")]
+		public static object ZombieExtractFilterVisibility()
+		{
+			var serumDef = DefDatabase<ThingDef>.GetNamed("ZombieSerumSimple", false);
+			if (serumDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "ZombieSerumSimple def was not loaded."
+				};
+			}
+
+			var filter = new ThingFilter();
+			filter.SetAllow(CustomDefs.ZombieExtract, true);
+			filter.SetAllow(serumDef, true);
+			filter.SetAllow(CustomDefs.Corpse_Zombie, true);
+			filter.SetAllow(CustomDefs.Zombie, true);
+			var allowedDefs = filter.AllowedThingDefs.ToHashSet();
+			var extractAllowed = allowedDefs.Contains(CustomDefs.ZombieExtract);
+			var serumAllowed = allowedDefs.Contains(serumDef);
+			var zombieCorpseAllowed = allowedDefs.Contains(CustomDefs.Corpse_Zombie);
+			var zombiePawnAllowed = allowedDefs.Contains(CustomDefs.Zombie);
+
+			var extractThing = ThingMaker.MakeThing(CustomDefs.ZombieExtract);
+			var serumFilterWorker = new ZombieSerumFilterWorker();
+			var extractExcludedBySerumFilter = serumFilterWorker.Matches(extractThing);
+
+			return new
+			{
+				success = extractAllowed
+					&& serumAllowed
+					&& zombieCorpseAllowed == false
+					&& zombiePawnAllowed == false
+					&& extractExcludedBySerumFilter == false,
+				extract = new
+				{
+					defName = CustomDefs.ZombieExtract.defName,
+					allowed = extractAllowed,
+					excludedBySerumFilter = extractExcludedBySerumFilter
+				},
+				serum = new
+				{
+					defName = serumDef.defName,
+					allowed = serumAllowed
+				},
+				blockedZombieDefs = new
+				{
+					corpse = new
+					{
+						defName = CustomDefs.Corpse_Zombie.defName,
+						allowed = zombieCorpseAllowed
+					},
+					pawn = new
+					{
+						defName = CustomDefs.Zombie.defName,
+						allowed = zombiePawnAllowed
+					}
+				}
+			};
+		}
+
 		[Tool("zombieland/rope_zombie_job", Description = "Run the real RopeZombie job from a colonist to a live zombie and verify the zombie becomes roped.")]
 		public static object RopeZombieJob()
 		{
