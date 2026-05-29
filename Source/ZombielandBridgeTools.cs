@@ -7616,6 +7616,150 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_wild_plant_spawn_contract", Description = "Spawn a wild plant through real WildPlantSpawner.SpawnPlant and verify contaminated ground transfers to the plant.")]
+		public static object ContaminationWildPlantSpawnContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+			if (map.wildPlantSpawner == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Current map has no WildPlantSpawner."
+				};
+			}
+			var plantDef = DefDatabase<ThingDef>.GetNamedSilentFail("Plant_Grass");
+			if (plantDef == null)
+				plantDef = DefDatabase<ThingDef>.GetNamedSilentFail("Plant_Rice");
+			if (plantDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Plant_Grass and Plant_Rice are unavailable."
+				};
+			}
+
+			bool TryFindWildPlantCell(IntVec3 root, float radius, out IntVec3 cell, out object error)
+			{
+				cell = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+				{
+					if (candidate.InBounds(map) == false)
+						continue;
+					if (candidate.Fogged(map))
+						continue;
+					if (candidate.GetPlant(map) != null)
+						continue;
+					if (candidate.GetCover(map) != null)
+						continue;
+					if (candidate.GetEdifice(map) != null)
+						continue;
+					if (PlantUtility.SnowAllowsPlanting(candidate, map) == false)
+						continue;
+					if (PlantUtility.SandAllowsPlanting(candidate, map) == false)
+						continue;
+					if (map.fertilityGrid.FertilityAt(candidate) <= 0f)
+						continue;
+					if (candidate.GetThingList(map).Any(thing =>
+						thing is Pawn
+						|| thing is Blueprint
+						|| thing is Frame
+						|| thing.def.category == ThingCategory.Plant
+						|| thing.def.category == ThingCategory.Building))
+						continue;
+
+					cell = candidate;
+					return true;
+				}
+
+				error = new
+				{
+					success = false,
+					error = $"No clear wild-plant fixture cell was found near ({root.x}, {root.z})."
+				};
+				return false;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindWildPlantCell(root, 30f, out var plantCell, out var cellError) == false)
+				return cellError;
+
+			var oldTerrain = map.terrainGrid.TerrainAt(plantCell);
+			var oldFoundation = map.terrainGrid.FoundationAt(plantCell);
+			var oldTempTerrain = map.terrainGrid.TempTerrainAt(plantCell);
+			var oldGroundContamination = map.GetContamination(plantCell);
+			var plant = (Plant)null;
+			try
+			{
+				map.terrainGrid.SetTerrain(plantCell, TerrainDefOf.Soil);
+				map.terrainGrid.RemoveTempTerrain(plantCell);
+				if (map.terrainGrid.FoundationAt(plantCell) != null)
+					map.terrainGrid.RemoveFoundation(plantCell, false);
+				map.mapDrawer.MapMeshDirty(plantCell, MapMeshFlagDefOf.Terrain);
+
+				const float groundContamination = 0.72f;
+				map.SetContamination(plantCell, groundContamination);
+
+				var canEverPlantAfterTerrainSetup = plantDef.CanEverPlantAt(plantCell, map);
+				plant = WildPlantSpawner.SpawnPlant(plantDef, map, plantCell, false);
+				var plantContamination = plant?.GetContamination() ?? -1f;
+				var expectedPlantContamination = groundContamination * ZombieSettings.Values.contamination.plantAdd;
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+				return new
+				{
+					success = canEverPlantAfterTerrainSetup
+						&& plant != null
+						&& plant.Spawned
+						&& plant.def == plantDef
+						&& plant.Position == plantCell
+						&& CloseFloat(plantContamination, expectedPlantContamination),
+					cell = ZombieRuntimeActions.DescribeCell(plantCell),
+					canEverPlantAfterTerrainSetup,
+					plant = ZombieRuntimeActions.StableThingId(plant),
+					plantDef = plant?.def?.defName,
+					plantGrowth = plant?.Growth ?? -1f,
+					groundContamination,
+					plantAdd = ZombieSettings.Values.contamination.plantAdd,
+					plantContamination,
+					expectedPlantContamination
+				};
+			}
+			finally
+			{
+				plant?.ClearContamination();
+				if (plant is { Destroyed: false, Spawned: true })
+					plant.Destroy();
+				map.SetContamination(plantCell, oldGroundContamination);
+				if (map.terrainGrid.FoundationAt(plantCell) != null)
+					map.terrainGrid.RemoveFoundation(plantCell, false);
+				map.terrainGrid.SetTerrain(plantCell, oldTerrain);
+				if (oldFoundation != null)
+					map.terrainGrid.SetFoundation(plantCell, oldFoundation);
+				if (oldTempTerrain != null)
+					map.terrainGrid.SetTempTerrain(plantCell, oldTempTerrain);
+				map.mapDrawer.MapMeshDirty(plantCell, MapMeshFlagDefOf.Terrain);
+			}
+		}
+
 		[Tool("zombieland/contamination_roof_collapse_contract", Description = "Verify contaminated ground transfers into collapsed roof rock through real RoofCollapserImmediate.DropRoofInCellPhaseOne.")]
 		public static object ContaminationRoofCollapseContract()
 		{

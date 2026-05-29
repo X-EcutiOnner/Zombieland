@@ -16,7 +16,6 @@ namespace ZombieLand
 
 		static IEnumerable<MethodBase> TargetMethods()
 		{
-			yield return SymbolExtensions.GetMethodInfo((WildPlantSpawner spawner) => spawner.CheckSpawnWildPlantAt(IntVec3.Zero, 0f, 0f, false));
 			yield return SymbolExtensions.GetMethodInfo((TunnelJellySpawner spawner) => spawner.Spawn(null, IntVec3.Zero));
 		}
 
@@ -37,6 +36,20 @@ namespace ZombieLand
 			var from = SymbolExtensions.GetMethodInfo(() => GenSpawn.Spawn((Thing)null, IntVec3.Zero, null, WipeMode.Vanish));
 			var to = SymbolExtensions.GetMethodInfo(() => Spawn(null, IntVec3.Zero, null, WipeMode.Vanish));
 			return instructions.MethodReplacer(from, to);
+		}
+	}
+
+	[HarmonyPatch(typeof(WildPlantSpawner), nameof(WildPlantSpawner.SpawnPlant))]
+	static class WildPlantSpawner_SpawnPlant_Patch
+	{
+		static bool Prepare() => Constants.CONTAMINATION;
+
+		static void Postfix(Plant __result, Map map, IntVec3 cell)
+		{
+			if (Tools.IsPlaying() == false || __result == null || map == null)
+				return;
+			var contamination = map.GetContamination(cell);
+			__result.AddContamination(contamination, null, ZombieSettings.Values.contamination.plantAdd);
 		}
 	}
 
