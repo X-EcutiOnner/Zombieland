@@ -258,7 +258,7 @@ namespace ZombieLand
 		private static float ShockwaveStartSpeed(int maxRadius)
 		{
 			maxRadius = Tools.Boxed(maxRadius, 2, MaxRadius);
-			return maxRadius * 10f / DebugImpactDurationSeconds;
+			return (maxRadius - 2) * 10f / DebugImpactDurationSeconds;
 		}
 
 		private static void ConfigureDustParticleSystem(ParticleSystem particleSystem, int maxRadius)
