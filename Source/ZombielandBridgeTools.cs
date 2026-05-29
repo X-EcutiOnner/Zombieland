@@ -3994,6 +3994,218 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_hoard_driver_flow_contract", Description = "Verify the hoarding contamination job initializes from a real assigned room and runs its pickup/drop arrival callbacks.")]
+		public static object ContaminationHoardDriverFlowContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryBuildFogRoomFixture(map, root, 32f, out var bedroomFixture, out var bedroomError) == false)
+				return bedroomError;
+			if (TryBuildFogRoomFixture(map, bedroomFixture.doorCell + new IntVec3(10, 0, 0), 32f, out var sourceFixture, out var sourceError) == false)
+				return sourceError;
+
+			var bedCell = bedroomFixture.interiorRect.CenterCell;
+			var bed = ThingMaker.MakeThing(ThingDefOf.Bed, GenStuff.DefaultStuffFor(ThingDefOf.Bed)) as Building_Bed;
+			if (bed == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create a bed for the hoarding flow fixture."
+				};
+			}
+			bed.SetFactionDirect(Faction.OfPlayer);
+			GenSpawn.Spawn(bed, bedCell, map, Rot4.North, WipeMode.Vanish, false);
+
+			var sourceThingCell = sourceFixture.interiorRect.CenterCell;
+			var sourceThing = ThingMaker.MakeThing(ThingDefOf.Silver);
+			sourceThing.stackCount = ThingDefOf.Silver.stackLimit;
+			GenSpawn.Spawn(sourceThing, sourceThingCell, map, WipeMode.Vanish);
+
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+			var bedroom = bed.GetRoom(RegionType.Set_All);
+			var sourceRoom = sourceThingCell.GetRoom(map);
+			if (bedroom == null || sourceRoom == null || bedroom == sourceRoom || bedroom.IsHuge || sourceRoom.IsHuge)
+			{
+				return new
+				{
+					success = false,
+					bedroomExists = bedroom != null,
+					sourceRoomExists = sourceRoom != null,
+					sameRoom = bedroom != null && bedroom == sourceRoom,
+					bedroomHuge = bedroom?.IsHuge,
+					sourceRoomHuge = sourceRoom?.IsHuge,
+					error = "The hoarding flow fixture did not produce two distinct non-huge rooms."
+				};
+			}
+
+			var hoarderCell = bedroomFixture.interiorRect.Cells
+				.Where(cell => cell.InBounds(map)
+					&& cell.Standable(map)
+					&& cell.GetEdifice(map) == null
+					&& cell.GetThingList(map).Any(thing => thing is Pawn) == false)
+				.OrderByDescending(cell => cell.DistanceToSquared(bedCell))
+				.FirstOrDefault();
+			if (hoarderCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find a clear hoarder cell in the bedroom fixture."
+				};
+			}
+
+			var hoarder = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(hoarder, hoarderCell, map, Rot4.South);
+			DisablePawnWork(hoarder);
+			hoarder.needs?.AddOrRemoveNeedsAsAppropriate();
+			hoarder.ClearContamination();
+			hoarder.mindState?.mentalStateHandler?.Reset();
+			bed.CompAssignableToPawn?.TryAssignPawn(hoarder);
+			bed.NotifyRoomAssignedPawnsChanged();
+
+			const float hoardingContamination = 0.54f;
+			var factor = Mathf.InverseLerp(0.45f, 0.60f, hoardingContamination);
+			var expectedRecoverAfterTicks = (GenDate.TicksPerHour / 10) * (int)(1 + factor * 7);
+			var applied = ContaminationEffect.Hoarding(hoarder, factor);
+			var jobAfterApply = hoarder.CurJobDef?.defName;
+			var recoverAfterApply = hoarder.mindState?.mentalStateHandler?.CurState?.forceRecoverAfterTicks ?? -1;
+
+			AdvanceGameTicks(1);
+			var driverAfterInit = hoarder.jobs?.curDriver as JobDriver_ContaminationHoard;
+			var selectedThing = driverAfterInit?.thing;
+			var storageCell = driverAfterInit?.cell ?? IntVec3.Invalid;
+			var initialized = applied
+				&& jobAfterApply == EffectDefs.ContaminationJobHoard.defName
+				&& recoverAfterApply == expectedRecoverAfterTicks
+				&& driverAfterInit != null
+				&& driverAfterInit.room == bedroom
+				&& driverAfterInit.state == JobDriver_ContaminationHoard.State.moveToThing
+				&& selectedThing != null
+				&& selectedThing.def == ThingDefOf.Silver
+				&& storageCell.IsValid;
+			if (initialized == false)
+			{
+				return new
+				{
+					success = false,
+					hoarder = DescribePawn(hoarder),
+					hoardingContamination,
+					applied,
+					jobAfterApply,
+					currentJob = hoarder.CurJobDef?.defName,
+					recoverAfterApply,
+					expectedRecoverAfterTicks,
+					driverExists = driverAfterInit != null,
+					driverState = driverAfterInit?.state.ToString(),
+					selectedThing = ZombieRuntimeActions.StableThingId(selectedThing),
+					selectedThingDef = selectedThing?.def?.defName,
+					storageCell = storageCell.IsValid ? ZombieRuntimeActions.DescribeCell(storageCell) : null,
+					error = "The hoarding driver did not initialize into a move-to-thing state."
+				};
+			}
+
+			const int sourceDerivedThinkTreeWindow = 30;
+			var positionBeforeThinkTreeWindow = hoarder.Position;
+			AdvanceGameTicks(sourceDerivedThinkTreeWindow);
+			var driverAfterThinkTreeWindow = hoarder.jobs?.curDriver as JobDriver_ContaminationHoard;
+			var selectedThingAfterThinkTreeWindow = driverAfterThinkTreeWindow?.thing;
+			var survivedThinkTreeWindow = driverAfterThinkTreeWindow != null
+				&& hoarder.CurJobDef == EffectDefs.ContaminationJobHoard
+				&& driverAfterThinkTreeWindow.state == JobDriver_ContaminationHoard.State.moveToThing
+				&& selectedThingAfterThinkTreeWindow != null
+				&& selectedThingAfterThinkTreeWindow.def == ThingDefOf.Silver;
+			if (survivedThinkTreeWindow == false)
+			{
+				return new
+				{
+					success = false,
+					hoarder = DescribePawn(hoarder),
+					hoardingContamination,
+					initialized,
+					sourceDerivedThinkTreeWindow,
+					jobAfterThinkTreeWindow = hoarder.CurJobDef?.defName,
+					driverAfterThinkTreeWindowExists = driverAfterThinkTreeWindow != null,
+					driverStateAfterThinkTreeWindow = driverAfterThinkTreeWindow?.state.ToString(),
+					selectedThingAfterThinkTreeWindow = ZombieRuntimeActions.StableThingId(selectedThingAfterThinkTreeWindow),
+					selectedThingDefAfterThinkTreeWindow = selectedThingAfterThinkTreeWindow?.def?.defName,
+					error = "The hoarding job did not survive the source-derived think-tree window."
+				};
+			}
+
+			hoarder.pather.StopDead();
+			driverAfterThinkTreeWindow.Notify_PatherArrived();
+			var carriedAfterPickup = hoarder.carryTracker.CarriedThing;
+			var stateAfterPickup = driverAfterThinkTreeWindow.state;
+			var pickedUp = carriedAfterPickup != null
+				&& carriedAfterPickup.def == ThingDefOf.Silver
+				&& stateAfterPickup == JobDriver_ContaminationHoard.State.moveToStorage;
+
+			hoarder.pather.StopDead();
+			driverAfterThinkTreeWindow.Notify_PatherArrived();
+			var carriedAfterDrop = hoarder.carryTracker.CarriedThing;
+			var droppedThing = storageCell.GetThingList(map).FirstOrDefault(thing => thing.def == ThingDefOf.Silver);
+			var droppedInBedroom = droppedThing != null && bedroom.Cells.Contains(droppedThing.Position);
+			var dropped = pickedUp
+				&& carriedAfterDrop == null
+				&& droppedInBedroom
+				&& driverAfterThinkTreeWindow.state == JobDriver_ContaminationHoard.State.findThing;
+
+			return new
+			{
+				success = initialized && survivedThinkTreeWindow && pickedUp && dropped,
+				hoarder = DescribePawn(hoarder),
+				hoardingContamination,
+				applied,
+				expectedRecoverAfterTicks,
+				recoverAfterApply,
+				sourceDerivedThinkTreeWindow,
+				positionBeforeThinkTreeWindow = ZombieRuntimeActions.DescribeCell(positionBeforeThinkTreeWindow),
+				positionAfterThinkTreeWindow = ZombieRuntimeActions.DescribeCell(hoarder.Position),
+				bedroom = new
+				{
+					center = ZombieRuntimeActions.DescribeCell(bedroomFixture.interiorRect.CenterCell),
+					cellCount = bedroom.CellCount
+				},
+				sourceRoom = new
+				{
+					center = ZombieRuntimeActions.DescribeCell(sourceThingCell),
+					cellCount = sourceRoom.CellCount
+				},
+				selectedThing = ZombieRuntimeActions.StableThingId(selectedThing),
+				selectedThingDef = selectedThing?.def?.defName,
+				storageCell = ZombieRuntimeActions.DescribeCell(storageCell),
+				carriedAfterPickup = ZombieRuntimeActions.StableThingId(carriedAfterPickup),
+				carriedAfterPickupDef = carriedAfterPickup?.def?.defName,
+				stateAfterPickup = stateAfterPickup.ToString(),
+				carriedAfterDrop = ZombieRuntimeActions.StableThingId(carriedAfterDrop),
+				droppedThing = ZombieRuntimeActions.StableThingId(droppedThing),
+				droppedThingCell = droppedThing?.Spawned == true ? ZombieRuntimeActions.DescribeCell(droppedThing.Position) : null,
+				driverStateAfterDrop = driverAfterThinkTreeWindow.state.ToString(),
+				initialized,
+				survivedThinkTreeWindow,
+				pickedUp,
+				dropped
+			};
+		}
+
 		[Tool("zombieland/contamination_breakdown_contract", Description = "Verify the breakdown contamination effect starts the real job, immediately picks a flee path, and survives RimWorld's 30-tick think-tree pass.")]
 		public static object ContaminationBreakdownContract()
 		{
