@@ -5400,15 +5400,19 @@ namespace ZombieLand
 
 		// patches so zombies don't use clamors at all
 		//
-		[HarmonyPatch(typeof(GenClamor))]
-		[HarmonyPatch(nameof(GenClamor.DoClamor))]
-		[HarmonyPatch(new[] { typeof(Thing), typeof(IntVec3), typeof(float), typeof(ClamorDef) })]
+		[HarmonyPatch]
 		static class GenClamor_DoClamor_Patch
 		{
+			static IEnumerable<MethodBase> TargetMethods()
+			{
+				return AccessTools.GetDeclaredMethods(typeof(GenClamor))
+					.Where(method => method.Name == nameof(GenClamor.DoClamor));
+			}
+
 			[HarmonyPriority(Priority.First)]
 			static bool Prefix(Thing source)
 			{
-				return (source is Zombie) == false;
+				return IsZombielandPawn(source as Pawn) == false;
 			}
 		}
 		[HarmonyPatch(typeof(Pawn))]
@@ -5418,7 +5422,7 @@ namespace ZombieLand
 			[HarmonyPriority(Priority.First)]
 			static bool Prefix(Thing source)
 			{
-				return (source is Zombie) == false;
+				return IsZombielandPawn(source as Pawn) == false;
 			}
 		}
 

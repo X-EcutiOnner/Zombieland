@@ -2290,6 +2290,127 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/zombie_clamor_suppression", Description = "Verify all GenClamor overloads suppress zombie-originated clamors while ordinary pawn clamors still reach nearby hearers.")]
+		public static object ZombieClamorSuppression()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+				corpse.Destroy();
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var listenerCell, out var listenerSpawnError) == false)
+				return listenerSpawnError;
+			if (TryFindClearSpawnCell(map, listenerCell + new IntVec3(3, 0, 0), 8f, out var humanSourceCell, out var humanSourceSpawnError) == false)
+				return humanSourceSpawnError;
+			if (TryFindClearSpawnCell(map, listenerCell + new IntVec3(6, 0, 0), 10f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+			if (TryFindClearSpawnCell(map, listenerCell + new IntVec3(0, 0, 3), 8f, out var spitterCell, out var spitterSpawnError) == false)
+				return spitterSpawnError;
+			if (TryFindClearSpawnCell(map, listenerCell + new IntVec3(3, 0, 3), 10f, out var blobCell, out var blobSpawnError) == false)
+				return blobSpawnError;
+
+			var listener = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var humanSource = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(listener, listenerCell, map, Rot4.South);
+			GenSpawn.Spawn(humanSource, humanSourceCell, map, Rot4.South);
+			DisablePawnWork(listener);
+			DisablePawnWork(humanSource);
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					listener = DescribePawn(listener),
+					humanSource = DescribePawn(humanSource),
+					error = "ZombieGenerator.SpawnZombie returned no clamor test zombie."
+				};
+			}
+
+			var existingSpitters = CurrentZombies(map).OfType<ZombieSpitter>().Select(ZombieRuntimeActions.StableThingId).ToHashSet();
+			ZombieSpitter.Spawn(map, spitterCell);
+			var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+				.FirstOrDefault(candidate => existingSpitters.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
+			if (spitter == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					listener = DescribePawn(listener),
+					humanSource = DescribePawn(humanSource),
+					zombie = DescribeZombie(zombie),
+					error = "ZombieSpitter.Spawn returned no clamor test spitter."
+				};
+			}
+
+			var existingBlobs = CurrentZombies(map).OfType<ZombieBlob>().Select(ZombieRuntimeActions.StableThingId).ToHashSet();
+			ZombieBlob.Spawn(map, blobCell);
+			var blob = CurrentZombies(map).OfType<ZombieBlob>()
+				.FirstOrDefault(candidate => existingBlobs.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(blobCell)).FirstOrDefault();
+			if (blob == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					listener = DescribePawn(listener),
+					humanSource = DescribePawn(humanSource),
+					zombie = DescribeZombie(zombie),
+					spitter = DescribeZombie(spitter),
+					error = "ZombieBlob.Spawn returned no clamor test blob."
+				};
+			}
+
+			int ListenerEffectCount(Thing source)
+			{
+				var count = 0;
+				GenClamor.DoClamor(source, source.Position, 20f, (clamorSource, hearer) =>
+				{
+					if (hearer == listener)
+						count++;
+				});
+				return count;
+			}
+
+			var humanEffectCount = ListenerEffectCount(humanSource);
+			var zombieEffectCount = ListenerEffectCount(zombie);
+			var spitterEffectCount = ListenerEffectCount(spitter);
+			var blobEffectCount = ListenerEffectCount(blob);
+
+			return new
+			{
+				success = humanEffectCount > 0
+					&& zombieEffectCount == 0
+					&& spitterEffectCount == 0
+					&& blobEffectCount == 0,
+				destroyedZombies,
+				listener = DescribePawn(listener),
+				humanSource = DescribePawn(humanSource),
+				zombie = DescribeZombie(zombie),
+				spitter = DescribeZombie(spitter),
+				blob = DescribeZombie(blob),
+				humanEffectCount,
+				zombieEffectCount,
+				spitterEffectCount,
+				blobEffectCount
+			};
+		}
+
 		[Tool("zombieland/convert_infected_corpse_to_zombie", Description = "Create an infected rotting corpse from a spawned pawn, verify Corpse.RotStageChanged queued it, then run that queued conversion.")]
 		public static object ConvertInfectedCorpseToZombie(
 			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
