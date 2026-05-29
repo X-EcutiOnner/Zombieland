@@ -3,6 +3,7 @@ using RimWorld;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using UnityEngine;
 using Verse;
 using Verse.AI;
 
@@ -90,7 +91,7 @@ namespace ZombieLand
 			{
 				var effect = validEffects.RandomElementByWeight(ef => ef.Item1);
 				validEffects.Remove(effect);
-				var factor = (effect.Item1 - contamination) / (effect.Item2 - effect.Item1);
+				var factor = Mathf.InverseLerp(effect.Item1, effect.Item2, contamination);
 				if (effect.Item3(pawn, factor))
 					break;
 			}

@@ -3084,8 +3084,8 @@ namespace ZombieLand
 			human.mindState?.mentalStateHandler?.Reset();
 
 			var trackedBefore = effects.pawns.ContainsKey(human);
-			const float forceRestThreshold = 0.15f;
-			human.AddContamination(forceRestThreshold);
+			const float forceRestContamination = 0.24f;
+			human.AddContamination(forceRestContamination);
 			var trackedAfterAdd = effects.pawns.TryGetValue(human, out var effect);
 			var nextEffectTickBeforeForce = effect?.nextEffectTick ?? -1;
 			if (effect != null)
@@ -3103,10 +3103,14 @@ namespace ZombieLand
 			var trackedAfterClear = effects.pawns.ContainsKey(human);
 			var contaminationAfterClear = DescribeContamination(human);
 
+			const float forceRestMin = 0.15f;
+			const float forceRestMax = 0.40f;
+			var expectedForceRestFactor = Mathf.InverseLerp(forceRestMin, forceRestMax, forceRestContamination);
+			var expectedForceRecoverAfterTicks = (GenDate.TicksPerHour / 10) * (int)(1 + expectedForceRestFactor * 7);
 			var registered = trackedBefore == false && trackedAfterAdd;
 			var forceRestStarted = mentalStateAfterTick == EffectDefs.ContaminationStateForceRest.defName
 				&& jobAfterTick == EffectDefs.ContaminationJobForceRest.defName
-				&& forceRecoverAfterTicks > 0;
+				&& forceRecoverAfterTicks == expectedForceRecoverAfterTicks;
 			var unregistered = trackedAfterClear == false
 				&& contaminationAfterClear.hasHediff == false
 				&& contaminationAfterClear.stored == 0f;
@@ -3116,7 +3120,8 @@ namespace ZombieLand
 				success = registered && forceRestStarted && trackedAfterTick && unregistered,
 				human = DescribePawn(human),
 				humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
-				contamination = forceRestThreshold,
+				contamination = forceRestContamination,
+				expectedForceRestFactor,
 				trackedBefore,
 				trackedAfterAdd,
 				trackedAfterTick,
@@ -3129,6 +3134,7 @@ namespace ZombieLand
 				expectedJob = EffectDefs.ContaminationJobForceRest.defName,
 				reportAfterTick,
 				forceRecoverAfterTicks,
+				expectedForceRecoverAfterTicks,
 				contaminationAfterTick,
 				contaminationAfterClear,
 				registered,
