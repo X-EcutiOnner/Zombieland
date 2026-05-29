@@ -1534,6 +1534,172 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/zombie_corpse_alert_forbid_contract", Description = "Verify normal and former-colonist zombie corpses stay out of vanilla colonist-corpse alerts and outside-home forbidding.")]
+		public static object ZombieCorpseAlertForbidContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var destroyedZombieCorpses = 0;
+			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+			{
+				corpse.Destroy();
+				destroyedZombieCorpses++;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var workerCell, out var workerSpawnError) == false)
+				return workerSpawnError;
+			if (TryFindClearSpawnCell(map, workerCell + new IntVec3(3, 0, 0), 10f, out var normalZombieCell, out var normalZombieSpawnError) == false)
+				return normalZombieSpawnError;
+			if (TryFindClearSpawnCell(map, workerCell + new IntVec3(6, 0, 0), 12f, out var formerPawnCell, out var formerPawnSpawnError) == false)
+				return formerPawnSpawnError;
+			if (TryFindClearSpawnCell(map, workerCell + new IntVec3(0, 0, 3), 10f, out var humanCorpseCell, out var humanCorpseSpawnError) == false)
+				return humanCorpseSpawnError;
+
+			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+			DisablePawnWork(worker);
+
+			var normalZombie = ZombieRuntimeActions.SpawnZombie(normalZombieCell, map, ZombieType.Normal, true);
+			if (normalZombie == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					worker = DescribePawn(worker),
+					error = "ZombieGenerator.SpawnZombie returned no ordinary corpse test zombie."
+				};
+			}
+
+			var beforeConversionIds = new HashSet<string>(CurrentZombies(map).Select(ZombieRuntimeActions.StableThingId));
+			var formerPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(formerPawn, formerPawnCell, map, Rot4.South);
+			DisablePawnWork(formerPawn);
+			var formerPawnBeforeConversion = DescribePawn(formerPawn);
+			ZombieRuntimeActions.ConvertPawnToZombie(formerPawn, map, true);
+			var formerZombie = CurrentZombies(map)
+				.OfType<Zombie>()
+				.Where(zombie => beforeConversionIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+				.OrderBy(zombie => zombie.Position.DistanceToSquared(formerPawnCell))
+				.FirstOrDefault();
+			if (formerZombie == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					worker = DescribePawn(worker),
+					formerPawn = formerPawnBeforeConversion,
+					error = "Converting the former-colonist corpse test pawn did not produce a zombie."
+				};
+			}
+
+			var humanPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(humanPawn, humanCorpseCell, map, Rot4.South);
+			DisablePawnWork(humanPawn);
+			var humanPawnBeforeDeath = DescribePawn(humanPawn);
+			if (ZombieRuntimeActions.KillPawnToCorpse(humanPawn, out var humanCorpse, out var killError) == false)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					worker = DescribePawn(worker),
+					humanPawn = humanPawnBeforeDeath,
+					error = killError
+				};
+			}
+
+			normalZombie.Kill(null);
+			formerZombie.Kill(null);
+			var normalZombieCorpse = normalZombie.Corpse as ZombieCorpse
+				?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(normalZombieCell)).FirstOrDefault();
+			var formerZombieCorpse = formerZombie.Corpse as ZombieCorpse
+				?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(formerPawnCell)).FirstOrDefault();
+			if (normalZombieCorpse == null || formerZombieCorpse == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					normalZombie = DescribeZombie(normalZombie),
+					formerZombie = DescribeZombie(formerZombie),
+					normalZombieCorpse = DescribeCorpse(normalZombieCorpse),
+					formerZombieCorpse = DescribeCorpse(formerZombieCorpse),
+					error = "Killing the corpse test zombies did not leave both ZombieCorpse instances."
+				};
+			}
+
+			var humanCorpseIsColonist = Alert_ColonistLeftUnburied.IsCorpseOfColonist(humanCorpse);
+			var normalZombieCorpseIsColonist = Alert_ColonistLeftUnburied.IsCorpseOfColonist(normalZombieCorpse);
+			var formerZombieCorpseIsColonist = Alert_ColonistLeftUnburied.IsCorpseOfColonist(formerZombieCorpse);
+
+			foreach (var corpse in new Corpse[] { humanCorpse, normalZombieCorpse, formerZombieCorpse })
+			{
+				corpse.SetForbidden(false, false);
+				map.areaManager.Home[corpse.Position] = false;
+				ForbidUtility.SetForbiddenIfOutsideHomeArea(corpse);
+			}
+			var humanCorpseForbiddenAfterOutsideHome = humanCorpse.IsForbidden(worker);
+			var normalZombieCorpseForbiddenAfterOutsideHome = normalZombieCorpse.IsForbidden(worker);
+			var formerZombieCorpseForbiddenAfterOutsideHome = formerZombieCorpse.IsForbidden(worker);
+
+			var extractWorkGiver = new WorkGiver_ExtractZombieSerum();
+			var doubleTapWorkGiver = new WorkGiver_DoubleTap();
+			var normalZombieCorpseHasExtractJob = extractWorkGiver.HasJobOnThing(worker, normalZombieCorpse, true);
+			var formerZombieCorpseHasExtractJob = extractWorkGiver.HasJobOnThing(worker, formerZombieCorpse, true);
+			var normalZombieCorpseHasDoubleTapJob = doubleTapWorkGiver.HasJobOnThing(worker, normalZombieCorpse, true);
+			var formerZombieCorpseHasDoubleTapJob = doubleTapWorkGiver.HasJobOnThing(worker, formerZombieCorpse, true);
+
+			return new
+			{
+				success = humanCorpseIsColonist
+					&& normalZombieCorpseIsColonist == false
+					&& formerZombieCorpseIsColonist == false
+					&& humanCorpseForbiddenAfterOutsideHome
+					&& normalZombieCorpseForbiddenAfterOutsideHome == false
+					&& formerZombieCorpseForbiddenAfterOutsideHome == false
+					&& normalZombieCorpseHasExtractJob
+					&& formerZombieCorpseHasExtractJob
+					&& normalZombieCorpseHasDoubleTapJob == false
+					&& formerZombieCorpseHasDoubleTapJob == false,
+				destroyedZombies,
+				destroyedZombieCorpses,
+				worker = DescribePawn(worker),
+				humanPawnBeforeDeath,
+				formerPawnBeforeConversion,
+				normalZombie = DescribeZombie(normalZombie),
+				formerZombie = DescribeZombie(formerZombie),
+				humanCorpse = DescribeCorpse(humanCorpse),
+				normalZombieCorpse = DescribeCorpse(normalZombieCorpse),
+				formerZombieCorpse = DescribeCorpse(formerZombieCorpse),
+				humanCorpseIsColonist,
+				normalZombieCorpseIsColonist,
+				formerZombieCorpseIsColonist,
+				humanCorpseForbiddenAfterOutsideHome,
+				normalZombieCorpseForbiddenAfterOutsideHome,
+				formerZombieCorpseForbiddenAfterOutsideHome,
+				normalZombieCorpseHasExtractJob,
+				formerZombieCorpseHasExtractJob,
+				normalZombieCorpseHasDoubleTapJob,
+				formerZombieCorpseHasDoubleTapJob
+			};
+		}
+
 		[Tool("zombieland/convert_infected_corpse_to_zombie", Description = "Create an infected rotting corpse from a spawned pawn, verify Corpse.RotStageChanged queued it, then run that queued conversion.")]
 		public static object ConvertInfectedCorpseToZombie(
 			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
