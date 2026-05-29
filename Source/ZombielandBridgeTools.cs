@@ -1577,6 +1577,105 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/flee_ignores_harmless_zombies", Description = "Call RimWorld FleeUtility.ShouldFleeFrom for real zombies and verify roped/confused/electrical/albino zombies are not flee threats.")]
+		public static object FleeIgnoresHarmlessZombies()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+
+			var zombieCells = GenRadial.RadialCellsAround(actorCell, 7f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.DistanceTo(actorCell) <= 7.5f)
+				.Where(cell => cell != actorCell)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Take(5)
+				.ToArray();
+			if (zombieCells.Length < 5)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "Could not find enough nearby cells for flee-threat zombies."
+				};
+			}
+
+			var normal = ZombieRuntimeActions.SpawnZombie(zombieCells[0], map, ZombieType.Normal, true);
+			var roped = ZombieRuntimeActions.SpawnZombie(zombieCells[1], map, ZombieType.Normal, true);
+			var confused = ZombieRuntimeActions.SpawnZombie(zombieCells[2], map, ZombieType.Normal, true);
+			var electrifier = ZombieRuntimeActions.SpawnZombie(zombieCells[3], map, ZombieType.Electrifier, true);
+			var albino = ZombieRuntimeActions.SpawnZombie(zombieCells[4], map, ZombieType.Albino, true);
+
+			if (normal == null || roped == null || confused == null || electrifier == null || albino == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "ZombieGenerator.SpawnZombie returned no zombie for one or more flee-threat cases."
+				};
+			}
+
+			roped.ropedBy = actor;
+			confused.paralyzedUntil = GenTicks.TicksAbs + 2500;
+			electrifier.electricDisabledUntil = GenTicks.TicksGame - 1;
+
+			var normalThreat = FleeUtility.ShouldFleeFrom(normal, actor, true, false);
+			var ropedThreat = FleeUtility.ShouldFleeFrom(roped, actor, true, false);
+			var confusedThreat = FleeUtility.ShouldFleeFrom(confused, actor, true, false);
+			var electrifierThreat = FleeUtility.ShouldFleeFrom(electrifier, actor, true, false);
+			var albinoThreat = FleeUtility.ShouldFleeFrom(albino, actor, true, false);
+
+			return new
+			{
+				success = normalThreat
+					&& ropedThreat == false
+					&& confusedThreat == false
+					&& electrifierThreat == false
+					&& albinoThreat == false,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				normal = DescribeZombie(normal),
+				roped = DescribeZombie(roped),
+				confused = DescribeZombie(confused),
+				electrifier = DescribeZombie(electrifier),
+				albino = DescribeZombie(albino),
+				threats = new
+				{
+					normal = normalThreat,
+					roped = ropedThreat,
+					confused = confusedThreat,
+					electrifier = electrifierThreat,
+					albino = albinoThreat
+				},
+				seesAsThreat = new
+				{
+					normal = actor.SeesZombieAsThreat(normal),
+					roped = actor.SeesZombieAsThreat(roped),
+					confused = actor.SeesZombieAsThreat(confused),
+					electrifier = actor.SeesZombieAsThreat(electrifier),
+					albino = actor.SeesZombieAsThreat(albino)
+				}
+			};
+		}
+
 		[Tool("zombieland/detonate_suicide_bomber", Description = "Kill a suicide bomber through Zombie.Kill, verify it queued a Zombieland explosion, then execute the explosion.")]
 		public static object DetonateSuicideBomber(
 			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned suicide bomber is used.", Required = false, DefaultValue = "")] string target = "")

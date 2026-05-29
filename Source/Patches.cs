@@ -880,8 +880,16 @@ namespace ZombieLand
 
 		// do not flee from certain zombies
 		//
-		// TODO 1.6: ShouldFleeFrom moved behind FleeUtility/ShouldStartFleeing traversal.
-		// Retarget once zombie threat filtering is validated against the new flee path.
+		[HarmonyPatch(typeof(FleeUtility))]
+		[HarmonyPatch(nameof(FleeUtility.ShouldFleeFrom))]
+		static class FleeUtility_ShouldFleeFrom_Patch
+		{
+			static void Postfix(Thing t, Pawn pawn, ref bool __result)
+			{
+				if (__result && t is Zombie zombie && pawn.SeesZombieAsThreat(zombie) == false)
+					__result = false;
+			}
+		}
 
 		// smart melee skips bites 
 		//
