@@ -3471,6 +3471,213 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_mimic_contract", Description = "Verify the contamination mimic effect survives RimWorld's 30-tick think-tree pass, tracks a victim, scares them, and starts their flee job.")]
+		public static object ContaminationMimicContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var existingPawns = map.mapPawns.AllPawnsSpawned.ToArray();
+			var existingColonists = map.mapPawns.FreeColonists.ToArray();
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var offsets = new[]
+			{
+				new IntVec3(2, 0, 0),
+				new IntVec3(-2, 0, 0),
+				new IntVec3(0, 0, 2),
+				new IntVec3(0, 0, -2)
+			};
+			bool IsClearCell(IntVec3 candidate)
+			{
+				return candidate.InBounds(map)
+					&& candidate.Standable(map)
+					&& candidate.Fogged(map) == false
+					&& candidate.GetThingList(map).Any(thing => thing is Pawn) == false;
+			}
+			Pawn GenerateMobileColonist()
+			{
+				for (var i = 0; i < 10; i++)
+				{
+					var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+					if (pawn.Downed == false && pawn.health?.capacities?.CapableOf(PawnCapacityDefOf.Moving) == true)
+						return pawn;
+				}
+				return PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			}
+
+			var mimicCell = IntVec3.Invalid;
+			var victimCell = IntVec3.Invalid;
+			var searchRadius = Math.Min(70f, Math.Min(map.Size.x, map.Size.z) / 2f - 1f);
+			foreach (var candidate in GenRadial.RadialCellsAround(root, searchRadius, true).OrderByDescending(cell => cell.DistanceToSquared(root)))
+			{
+				if (IsClearCell(candidate) == false)
+					continue;
+				if (existingPawns.Any(pawn => pawn.Position.DistanceToSquared(candidate) < 100))
+					continue;
+
+				foreach (var offset in offsets)
+				{
+					var candidateVictimCell = candidate + offset;
+					if (IsClearCell(candidateVictimCell) == false)
+						continue;
+					var victimDistance = candidate.DistanceToSquared(candidateVictimCell);
+					if (existingColonists.Any(colonist => colonist.Position.DistanceToSquared(candidate) <= victimDistance))
+						continue;
+					if (map.reachability.CanReach(candidate, candidateVictimCell, PathEndMode.ClosestTouch, TraverseMode.PassDoors, Danger.Deadly) == false)
+						continue;
+
+					mimicCell = candidate;
+					victimCell = candidateVictimCell;
+					break;
+				}
+				if (mimicCell.IsValid)
+					break;
+			}
+			if (mimicCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					error = "No isolated clear mimic/victim fixture cells were found."
+				};
+			}
+
+			var mimic = GenerateMobileColonist();
+			var victim = GenerateMobileColonist();
+			GenSpawn.Spawn(mimic, mimicCell, map, Rot4.South);
+			GenSpawn.Spawn(victim, victimCell, map, Rot4.South);
+			DisablePawnWork(mimic);
+			DisablePawnWork(victim);
+			mimic.needs?.AddOrRemoveNeedsAsAppropriate();
+			victim.needs?.AddOrRemoveNeedsAsAppropriate();
+			victim.drafter.Drafted = true;
+			victim.jobs.StopAll(false, false);
+			mimic.ClearContamination();
+			victim.ClearContamination();
+			mimic.mindState?.mentalStateHandler?.Reset();
+			victim.mindState?.mentalStateHandler?.Reset();
+
+			const float mimicMin = 0.50f;
+			const float mimicMax = 1.00f;
+			const float mimicContamination = 0.80f;
+			var factor = Mathf.InverseLerp(mimicMin, mimicMax, mimicContamination);
+			var expectedRecoverAfterTicks = (GenDate.TicksPerHour / 10) * (int)(1 + factor * 7);
+
+			var victimMemoriesBefore = MemoryDefCounts(victim);
+			var applied = ContaminationEffect.Mimicing(mimic, factor);
+			var mentalStateAfterApply = mimic.mindState?.mentalStateHandler?.CurStateDef?.defName;
+			var jobAfterApply = mimic.CurJobDef?.defName;
+			var recoverAfterApply = mimic.mindState?.mentalStateHandler?.CurState?.forceRecoverAfterTicks ?? -1;
+
+			AdvanceGameTicks(1);
+			var driverAfterInit = mimic.jobs?.curDriver as JobDriver_ContaminationMimic;
+			var trackedVictimAfterInit = driverAfterInit?.victim;
+			var movingAfterInit = mimic.pather?.Moving ?? false;
+			var pathDestinationAfterInit = movingAfterInit ? mimic.pather.Destination.Cell : IntVec3.Invalid;
+
+			const int sourceDerivedThinkTreeWindow = 30;
+			AdvanceGameTicks(sourceDerivedThinkTreeWindow);
+			var driverAfterThinkTreeWindow = mimic.jobs?.curDriver as JobDriver_ContaminationMimic;
+			var jobAfterThinkTreeWindow = mimic.CurJobDef?.defName;
+			var trackedVictimAfterThinkTreeWindow = driverAfterThinkTreeWindow?.victim;
+
+			var previousVictim = driverAfterThinkTreeWindow?.previousVictims;
+			var escapeJobStarted = victim.CurJobDef == JobDefOf.Flee || victim.CurJobDef == JobDefOf.FleeAndCower;
+			var victimMovedFromSpawn = victim.Position != victimCell;
+			var victimJobDuringEscape = victim.CurJobDef?.defName;
+			var ticksUntilScare = 0;
+			var maxArrivalTicks = Math.Max(1, expectedRecoverAfterTicks - sourceDerivedThinkTreeWindow - 1);
+			while (ticksUntilScare < maxArrivalTicks && previousVictim != victim && escapeJobStarted == false)
+			{
+				AdvanceGameTicks(1);
+				ticksUntilScare++;
+				if (mimic.jobs?.curDriver is JobDriver_ContaminationMimic currentDriver)
+					previousVictim = currentDriver.previousVictims;
+				else
+					victimMovedFromSpawn = victim.Position != victimCell;
+				escapeJobStarted = victim.CurJobDef == JobDefOf.Flee || victim.CurJobDef == JobDefOf.FleeAndCower;
+				if (escapeJobStarted)
+					victimJobDuringEscape = victim.CurJobDef?.defName;
+			}
+
+			var driverAfterScare = mimic.jobs?.curDriver as JobDriver_ContaminationMimic;
+			var victimMemoriesAfter = MemoryDefCounts(victim);
+			victimMemoriesBefore.TryGetValue(CustomDefs.ZombieScare.defName, out var zombieScareBefore);
+			victimMemoriesAfter.TryGetValue(CustomDefs.ZombieScare.defName, out var zombieScareAfter);
+			var zombieScareMemoryGained = zombieScareAfter > zombieScareBefore;
+
+			var stateStarted = applied
+				&& mentalStateAfterApply == EffectDefs.ContaminationStateMimicing.defName
+				&& jobAfterApply == EffectDefs.ContaminationJobMimic.defName
+				&& recoverAfterApply == expectedRecoverAfterTicks;
+			var jobInitialized = driverAfterInit != null
+				&& trackedVictimAfterInit == victim
+				&& movingAfterInit
+				&& pathDestinationAfterInit == victimCell;
+			var survivedThinkTreeWindow = driverAfterThinkTreeWindow != null
+				&& jobAfterThinkTreeWindow == EffectDefs.ContaminationJobMimic.defName
+				&& trackedVictimAfterThinkTreeWindow == victim;
+			var victimScared = previousVictim == victim
+				&& zombieScareMemoryGained
+				&& escapeJobStarted;
+
+			return new
+			{
+				success = stateStarted && jobInitialized && survivedThinkTreeWindow && victimScared,
+				mimic = DescribePawn(mimic),
+				victim = DescribePawn(victim),
+				mimicCell = ZombieRuntimeActions.DescribeCell(mimicCell),
+				victimCell = ZombieRuntimeActions.DescribeCell(victimCell),
+				mimicContamination,
+				factor,
+				expectedRecoverAfterTicks,
+				applied,
+				mentalStateAfterApply,
+				expectedMentalState = EffectDefs.ContaminationStateMimicing.defName,
+				jobAfterApply,
+				expectedJob = EffectDefs.ContaminationJobMimic.defName,
+				recoverAfterApply,
+				trackedVictimAfterInit = ZombieRuntimeActions.StableThingId(trackedVictimAfterInit),
+				movingAfterInit,
+				pathDestinationAfterInit = pathDestinationAfterInit.IsValid ? ZombieRuntimeActions.DescribeCell(pathDestinationAfterInit) : null,
+				sourceDerivedThinkTreeWindow,
+				jobAfterThinkTreeWindow,
+				trackedVictimAfterThinkTreeWindow = ZombieRuntimeActions.StableThingId(trackedVictimAfterThinkTreeWindow),
+				ticksUntilScare,
+				maxArrivalTicks,
+				previousVictim = ZombieRuntimeActions.StableThingId(previousVictim),
+				driverAfterScareStillMimic = driverAfterScare != null,
+				escapeJobStarted,
+				victimMovedFromSpawn,
+				victimJobDuringEscape,
+				victimJobAfterScare = victim.CurJobDef?.defName,
+				victimMemoriesBefore,
+				victimMemoriesAfter,
+				zombieScareBefore,
+				zombieScareAfter,
+				zombieScareMemoryGained,
+				stateStarted,
+				jobInitialized,
+				survivedThinkTreeWindow,
+				victimScared
+			};
+		}
+
 		[Tool("zombieland/contamination_ingestion_contract", Description = "Verify ingesting contaminated stack food transfers the source-derived partial-stack contamination to the eater.")]
 		public static object ContaminationIngestionContract()
 		{

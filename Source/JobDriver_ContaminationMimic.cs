@@ -37,10 +37,10 @@ namespace ZombieLand
 				.OrderBy(p => p.Position.DistanceToSquared(pawn.Position))
 				.FirstOrDefault();
 
-			if (victim != null)
-				pawn.pather.StartPath(victim.Position, PathEndMode.ClosestTouch);
-			else
+			if (victim == null)
 				EndJobWith(JobCondition.Succeeded);
+			else if (pawn.pather.Moving == false || pawn.IsHashIntervalTick(30) && pawn.pather.Destination.Cell != victim.Position)
+				pawn.pather.StartPath(victim.Position, PathEndMode.ClosestTouch);
 		}
 
 		void InitAction()

@@ -1476,6 +1476,7 @@ namespace ZombieLand
 		public static Dictionary<float, HashSet<IntVec3>> circles;
 		public static IEnumerable<IntVec3> GetCircle(float radius)
 		{
+			radius = Mathf.Min(radius, GenRadial.MaxRadialPatternRadius - float.Epsilon);
 			circles ??= new Dictionary<float, HashSet<IntVec3>>();
 			var cells = circles.ContainsKey(radius) ? circles[radius] : null;
 			if (cells == null)
