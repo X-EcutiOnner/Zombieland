@@ -2433,6 +2433,181 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/random_zombie_type_weights_contract", Description = "Verify ZombieType.Random honors each special-zombie settings weight and the normal fallback weight.")]
+		public static object RandomZombieTypeWeightsContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland TickManager is attached to the current map."
+				};
+			}
+
+			var oldSuicideBomberChance = ZombieSettings.Values.suicideBomberChance;
+			var oldToxicSplasherChance = ZombieSettings.Values.toxicSplasherChance;
+			var oldTankyOperatorChance = ZombieSettings.Values.tankyOperatorChance;
+			var oldMinerChance = ZombieSettings.Values.minerChance;
+			var oldElectrifierChance = ZombieSettings.Values.electrifierChance;
+			var oldAlbinoChance = ZombieSettings.Values.albinoChance;
+			var oldDarkSlimerChance = ZombieSettings.Values.darkSlimerChance;
+			var oldHealerChance = ZombieSettings.Values.healerChance;
+			var spawnedZombies = new List<Zombie>();
+
+			void ClearChances()
+			{
+				ZombieSettings.Values.suicideBomberChance = 0f;
+				ZombieSettings.Values.toxicSplasherChance = 0f;
+				ZombieSettings.Values.tankyOperatorChance = 0f;
+				ZombieSettings.Values.minerChance = 0f;
+				ZombieSettings.Values.electrifierChance = 0f;
+				ZombieSettings.Values.albinoChance = 0f;
+				ZombieSettings.Values.darkSlimerChance = 0f;
+				ZombieSettings.Values.healerChance = 0f;
+			}
+
+			void SelectOnly(ZombieType type)
+			{
+				ClearChances();
+				switch (type)
+				{
+					case ZombieType.SuicideBomber:
+						ZombieSettings.Values.suicideBomberChance = 1f;
+						break;
+					case ZombieType.ToxicSplasher:
+						ZombieSettings.Values.toxicSplasherChance = 1f;
+						break;
+					case ZombieType.TankyOperator:
+						ZombieSettings.Values.tankyOperatorChance = 1f;
+						break;
+					case ZombieType.Miner:
+						ZombieSettings.Values.minerChance = 1f;
+						break;
+					case ZombieType.Electrifier:
+						ZombieSettings.Values.electrifierChance = 1f;
+						break;
+					case ZombieType.Albino:
+						ZombieSettings.Values.albinoChance = 1f;
+						break;
+					case ZombieType.DarkSlimer:
+						ZombieSettings.Values.darkSlimerChance = 1f;
+						break;
+					case ZombieType.Healer:
+						ZombieSettings.Values.healerChance = 1f;
+						break;
+				}
+			}
+
+			try
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				var types = new[]
+				{
+					ZombieType.SuicideBomber,
+					ZombieType.ToxicSplasher,
+					ZombieType.TankyOperator,
+					ZombieType.Miner,
+					ZombieType.Electrifier,
+					ZombieType.Albino,
+					ZombieType.DarkSlimer,
+					ZombieType.Healer,
+					ZombieType.Normal
+				};
+				var samples = new List<object>();
+				var success = true;
+				for (var i = 0; i < types.Length; i++)
+				{
+					var expectedType = types[i];
+					SelectOnly(expectedType);
+					var cellRoot = root + new IntVec3((i % 3 - 1) * 4, 0, (i / 3 - 1) * 4);
+					if (TryFindClearSpawnCell(map, cellRoot, 20f, out var cell, out var cellError) == false)
+					{
+						success = false;
+						samples.Add(new
+						{
+							expectedType = expectedType.ToString(),
+							success = false,
+							cellError
+						});
+						continue;
+					}
+
+					Rand.PushState(6100 + i);
+					Zombie zombie;
+					try
+					{
+						zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Random, true);
+					}
+					finally
+					{
+						Rand.PopState();
+					}
+
+					if (zombie != null)
+						spawnedZombies.Add(zombie);
+					var matched = MatchesRequestedZombieType(zombie, expectedType);
+					success &= matched;
+					samples.Add(new
+					{
+						expectedType = expectedType.ToString(),
+						success = matched,
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						zombie = DescribeZombie(zombie),
+						bodyType = zombie?.story?.bodyType?.defName,
+						chances = new
+						{
+							ZombieSettings.Values.suicideBomberChance,
+							ZombieSettings.Values.toxicSplasherChance,
+							ZombieSettings.Values.tankyOperatorChance,
+							ZombieSettings.Values.minerChance,
+							ZombieSettings.Values.electrifierChance,
+							ZombieSettings.Values.albinoChance,
+							ZombieSettings.Values.darkSlimerChance,
+							ZombieSettings.Values.healerChance
+						}
+					});
+				}
+
+				return new
+				{
+					success,
+					sourcePath = "ZombieGenerator.PrepareZombieType -> TryRandomElementByWeight(zombieTypeInitializers)",
+					samples
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.suicideBomberChance = oldSuicideBomberChance;
+				ZombieSettings.Values.toxicSplasherChance = oldToxicSplasherChance;
+				ZombieSettings.Values.tankyOperatorChance = oldTankyOperatorChance;
+				ZombieSettings.Values.minerChance = oldMinerChance;
+				ZombieSettings.Values.electrifierChance = oldElectrifierChance;
+				ZombieSettings.Values.albinoChance = oldAlbinoChance;
+				ZombieSettings.Values.darkSlimerChance = oldDarkSlimerChance;
+				ZombieSettings.Values.healerChance = oldHealerChance;
+				foreach (var zombie in spawnedZombies.Distinct())
+				{
+					_ = tickManager.allZombiesCached?.Remove(zombie);
+					_ = tickManager.hummingZombies?.Remove(zombie);
+					_ = tickManager.tankZombies?.Remove(zombie);
+					if (zombie.Destroyed == false)
+						zombie.Destroy(DestroyMode.Vanish);
+				}
+			}
+		}
+
 		[Tool("zombieland/incident_scheduling_contract", Description = "Verify zombie incident scheduler skip reasons and positive incident-size calculation.")]
 		public static object IncidentSchedulingContract()
 		{
