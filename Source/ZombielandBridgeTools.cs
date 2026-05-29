@@ -660,6 +660,39 @@ namespace ZombieLand
 				.ToArray();
 		}
 
+		static (bool value, string error) TryHostileTo(Thing a, Thing b)
+		{
+			try
+			{
+				return (GenHostility.HostileTo(a, b), null);
+			}
+			catch (Exception ex)
+			{
+				return (false, $"{ex.GetType().Name}: {ex.Message}");
+			}
+		}
+
+		static (bool value, string error) TryHostileTo(Thing thing, Faction faction)
+		{
+			try
+			{
+				return (GenHostility.HostileTo(thing, faction), null);
+			}
+			catch (Exception ex)
+			{
+				return (false, $"{ex.GetType().Name}: {ex.Message}");
+			}
+		}
+
+		static object DescribeHostility((bool value, string error) sample)
+		{
+			return new
+			{
+				value = sample.value,
+				error = sample.error
+			};
+		}
+
 		static object DescribeTankyArmor(Zombie zombie)
 		{
 			return zombie == null ? null : new
@@ -6866,6 +6899,126 @@ namespace ZombieLand
 				normalAvailableDamageDefs,
 				albinoBiteHidden,
 				normalHasZombieBite
+			};
+		}
+
+		[Tool("zombieland/hostility_to_zombies_contract", Description = "Verify real GenHostility.HostileTo zombie rules for player, hostile, animal, and factionless pawns.")]
+		public static object HostilityToZombiesContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var animalKind = DefDatabase<PawnKindDef>.GetNamed("Muffalo", false);
+			var zombieFaction = Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies);
+			if (animalKind == null || zombieFaction == null)
+			{
+				return new
+				{
+					success = false,
+					error = "PawnKindDef Muffalo or zombie faction was not found."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+			if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(3, 0, 0), 8f, out var playerCell, out var playerSpawnError) == false)
+				return playerSpawnError;
+			if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(6, 0, 0), 10f, out var hostileCell, out var hostileSpawnError) == false)
+				return hostileSpawnError;
+			if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(9, 0, 0), 12f, out var factionlessCell, out var factionlessSpawnError) == false)
+				return factionlessSpawnError;
+			if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(0, 0, 3), 8f, out var animalCell, out var animalSpawnError) == false)
+				return animalSpawnError;
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			var player = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var hostile = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfAncientsHostile);
+			var factionless = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, null);
+			var animal = PawnGenerator.GeneratePawn(animalKind, null);
+			GenSpawn.Spawn(player, playerCell, map, Rot4.South);
+			GenSpawn.Spawn(hostile, hostileCell, map, Rot4.South);
+			GenSpawn.Spawn(factionless, factionlessCell, map, Rot4.South);
+			GenSpawn.Spawn(animal, animalCell, map, Rot4.South);
+			DisablePawnWork(player);
+			DisablePawnWork(hostile);
+			DisablePawnWork(factionless);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					error = "ZombieGenerator.SpawnZombie returned no normal zombie."
+				};
+			}
+
+			var settings = ZombieSettings.Values;
+			var originalEnemiesAttackZombies = settings.enemiesAttackZombies;
+			var originalAnimalsAttackZombies = settings.animalsAttackZombies;
+			(bool value, string error) playerThing;
+			(bool value, string error) hostileThingDisabled;
+			(bool value, string error) hostileThingEnabled;
+			(bool value, string error) animalThingDisabled;
+			(bool value, string error) animalThingEnabled;
+			(bool value, string error) factionlessThing;
+			(bool value, string error) factionlessFaction;
+			try
+			{
+				settings.enemiesAttackZombies = false;
+				settings.animalsAttackZombies = false;
+				playerThing = TryHostileTo(player, zombie);
+				hostileThingDisabled = TryHostileTo(hostile, zombie);
+				animalThingDisabled = TryHostileTo(animal, zombie);
+				factionlessThing = TryHostileTo(factionless, zombie);
+				factionlessFaction = TryHostileTo(factionless, zombieFaction);
+
+				settings.enemiesAttackZombies = true;
+				settings.animalsAttackZombies = true;
+				hostileThingEnabled = TryHostileTo(hostile, zombie);
+				animalThingEnabled = TryHostileTo(animal, zombie);
+			}
+			finally
+			{
+				settings.enemiesAttackZombies = originalEnemiesAttackZombies;
+				settings.animalsAttackZombies = originalAnimalsAttackZombies;
+			}
+
+			var noErrors = new[] { playerThing, hostileThingDisabled, hostileThingEnabled, animalThingDisabled, animalThingEnabled, factionlessThing, factionlessFaction }
+				.All(sample => sample.error == null);
+
+			return new
+			{
+				success = noErrors
+					&& playerThing.value
+					&& hostileThingDisabled.value == false
+					&& hostileThingEnabled.value
+					&& animalThingDisabled.value == false
+					&& animalThingEnabled.value
+					&& factionlessThing.value == false
+					&& factionlessFaction.value == false,
+				destroyedZombies,
+				zombie = DescribeZombie(zombie),
+				player = DescribePawn(player),
+				hostile = DescribePawn(hostile),
+				factionless = DescribePawn(factionless),
+				animal = DescribePawn(animal),
+				zombieFaction = zombieFaction.def?.defName,
+				playerThing = DescribeHostility(playerThing),
+				hostileThingDisabled = DescribeHostility(hostileThingDisabled),
+				hostileThingEnabled = DescribeHostility(hostileThingEnabled),
+				animalThingDisabled = DescribeHostility(animalThingDisabled),
+				animalThingEnabled = DescribeHostility(animalThingEnabled),
+				factionlessThing = DescribeHostility(factionlessThing),
+				factionlessFaction = DescribeHostility(factionlessFaction),
+				noErrors
 			};
 		}
 

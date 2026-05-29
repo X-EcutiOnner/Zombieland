@@ -936,7 +936,11 @@ namespace ZombieLand
 			if (pawn.RaceProps.Animal)
 				return ZombieSettings.Values.animalsAttackZombies;
 
-			if (pawn.Faction.HostileTo(Faction.OfPlayer))
+			var faction = pawn.Faction;
+			if (faction == null)
+				return false;
+
+			if (faction.HostileTo(Faction.OfPlayer))
 				return ZombieSettings.Values.enemiesAttackZombies;
 
 			return false;
