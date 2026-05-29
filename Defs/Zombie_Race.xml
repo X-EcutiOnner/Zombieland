@@ -29,6 +29,7 @@
 		</comps>
 		<drawGUIOverlay>true</drawGUIOverlay>
 		<race>
+			<bloodDef>Filth_Blood</bloodDef>
 			<fleshType>Normal</fleshType>
 			<needsRest>false</needsRest>
 			<hasGenders>true</hasGenders>
@@ -160,6 +161,7 @@
 			<shaderType>CutoutComplex</shaderType>
 		</graphicData>
 		<race>
+			<bloodDef>Filth_Blood</bloodDef>
 			<intelligence>ToolUser</intelligence>
 			<thinkTreeMain>ZombieBlob</thinkTreeMain>
 			<body>ZombieBlobBody</body>
@@ -214,6 +216,7 @@
 			<shaderType>CutoutComplex</shaderType>
 		</graphicData>
 		<race>
+			<bloodDef>Filth_Blood</bloodDef>
 			<intelligence>ToolUser</intelligence>
 			<thinkTreeMain>ZombieSpitter</thinkTreeMain>
 			<body>ZombieSpitterBody</body>

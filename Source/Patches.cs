@@ -5500,30 +5500,21 @@ namespace ZombieLand
 		{
 			static bool SkipDropBlood(Pawn pawn)
 			{
-				if (pawn is not Zombie zombie)
+				if (IsZombielandPawn(pawn) == false)
 					return false;
 				if (ZombieSettings.Values.zombiesDropBlood == false)
 					return true;
+				if (pawn is not Zombie zombie)
+					return false;
 				if (zombie.hasTankyShield > 0 || zombie.hasTankySuit > 0)
 					return true;
 				return false;
 			}
 
-			static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
+			[HarmonyPriority(Priority.First)]
+			static bool Prefix(Pawn ___pawn)
 			{
-				var jump = generator.DefineLabel();
-
-				yield return new CodeInstruction(OpCodes.Ldarg_0);
-				yield return new CodeInstruction(OpCodes.Ldfld, typeof(Pawn_HealthTracker).Field("pawn"));
-				yield return new CodeInstruction(OpCodes.Call, SymbolExtensions.GetMethodInfo(() => SkipDropBlood(null)));
-				yield return new CodeInstruction(OpCodes.Brfalse, jump);
-				yield return new CodeInstruction(OpCodes.Ret);
-
-				var list = instructions.ToList();
-				list[0].labels.Add(jump);
-
-				foreach (var instr in list)
-					yield return instr;
+				return SkipDropBlood(___pawn) == false;
 			}
 		}
 

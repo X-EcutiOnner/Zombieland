@@ -56,6 +56,16 @@ namespace ZombieLand
 			public int publicInt;
 		}
 
+		sealed class BloodFilthSnapshot
+		{
+			public object pawn;
+			public string bloodDef;
+			public object cell;
+			public int before;
+			public int after;
+			public int delta;
+		}
+
 		static readonly LineupEntry[] referenceLineup =
 		{
 			new(ZombieType.Electrifier, 0, 0),
@@ -589,6 +599,23 @@ namespace ZombieLand
 				.Where(cell => cell.InBounds(map))
 				.SelectMany(cell => cell.GetThingList(map))
 				.Count(thing => thing.def == thingDef);
+		}
+
+		static int CountThingsAt(Map map, IntVec3 cell, ThingDef thingDef)
+		{
+			if (map == null || cell.IsValid == false || thingDef == null)
+				return 0;
+
+			return cell.GetThingList(map).Count(thing => thing.def == thingDef);
+		}
+
+		static void ClearFilthAt(Map map, IntVec3 cell)
+		{
+			if (map == null || cell.IsValid == false)
+				return;
+
+			foreach (var filth in cell.GetThingList(map).OfType<Filth>().ToArray())
+				filth.Destroy();
 		}
 
 		static int CountZombieZapMotesNear(Map map, IntVec3 center, float radius)
@@ -2558,6 +2585,163 @@ namespace ZombieLand
 				zombieMatchesTarFormula,
 				spitterMatchesTarFormula,
 				clearCostsDifferFromTar
+			};
+		}
+
+		[Tool("zombieland/zombie_blood_filth_contract", Description = "Verify zombie blood filth follows the Zombieland setting and tanky armor suppression while humans still use vanilla blood drops.")]
+		public static object ZombieBloodFilthContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+				corpse.Destroy();
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanSpawnError) == false)
+				return humanSpawnError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 0), 8f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(6, 0, 0), 10f, out var tankyCell, out var tankySpawnError) == false)
+				return tankySpawnError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(0, 0, 3), 8f, out var spitterCell, out var spitterSpawnError) == false)
+				return spitterSpawnError;
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			var tanky = ZombieRuntimeActions.SpawnZombie(tankyCell, map, ZombieType.TankyOperator, true);
+			if (zombie == null || tanky == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					tanky = DescribeZombie(tanky),
+					error = "ZombieGenerator.SpawnZombie returned no normal or tanky blood-filth test zombie."
+				};
+			}
+
+			var tankyArmorForced = false;
+			if (tanky.hasTankyShield <= 0f && tanky.hasTankySuit <= 0f)
+			{
+				tanky.hasTankyShield = 1f;
+				tankyArmorForced = true;
+			}
+
+			var existingSpitters = CurrentZombies(map).OfType<ZombieSpitter>().Select(ZombieRuntimeActions.StableThingId).ToHashSet();
+			ZombieSpitter.Spawn(map, spitterCell);
+			var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+				.FirstOrDefault(candidate => existingSpitters.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
+			if (spitter == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					tanky = DescribeZombie(tanky),
+					error = "ZombieSpitter.Spawn returned no blood-filth test spitter."
+				};
+			}
+
+			BloodFilthSnapshot DropBloodSample(Pawn pawn)
+			{
+				var bloodDef = pawn?.RaceProps?.BloodDef;
+				var cell = pawn?.Position ?? IntVec3.Invalid;
+				ClearFilthAt(map, cell);
+				var before = CountThingsAt(map, cell, bloodDef);
+				pawn.health.DropBloodFilth();
+				var after = CountThingsAt(map, cell, bloodDef);
+				return new BloodFilthSnapshot
+					{
+						pawn = DescribePawn(pawn),
+						bloodDef = bloodDef?.defName,
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						before = before,
+						after = after,
+						delta = after - before
+					};
+			}
+
+			var originalZombiesDropBlood = ZombieSettings.Values.zombiesDropBlood;
+			BloodFilthSnapshot humanEnabled;
+			BloodFilthSnapshot zombieEnabled;
+			BloodFilthSnapshot tankyEnabled;
+			BloodFilthSnapshot spitterEnabled;
+			BloodFilthSnapshot humanDisabled;
+			BloodFilthSnapshot zombieDisabled;
+			BloodFilthSnapshot spitterDisabled;
+			try
+			{
+				ZombieSettings.Values.zombiesDropBlood = true;
+				humanEnabled = DropBloodSample(human);
+				zombieEnabled = DropBloodSample(zombie);
+				tankyEnabled = DropBloodSample(tanky);
+				spitterEnabled = DropBloodSample(spitter);
+
+				ZombieSettings.Values.zombiesDropBlood = false;
+				humanDisabled = DropBloodSample(human);
+				zombieDisabled = DropBloodSample(zombie);
+				spitterDisabled = DropBloodSample(spitter);
+			}
+			finally
+			{
+				ZombieSettings.Values.zombiesDropBlood = originalZombiesDropBlood;
+			}
+
+			var humanEnabledDropsBlood = humanEnabled.delta > 0;
+			var zombieEnabledDropsBlood = zombieEnabled.delta > 0;
+			var tankyEnabledDropsNoBlood = tankyEnabled.delta == 0;
+			var spitterEnabledDropsBlood = spitterEnabled.delta > 0;
+			var humanDisabledStillDropsBlood = humanDisabled.delta > 0;
+			var zombieDisabledDropsNoBlood = zombieDisabled.delta == 0;
+			var spitterDisabledDropsNoBlood = spitterDisabled.delta == 0;
+
+			return new
+			{
+				success = humanEnabledDropsBlood
+					&& zombieEnabledDropsBlood
+					&& tankyEnabledDropsNoBlood
+					&& spitterEnabledDropsBlood
+					&& humanDisabledStillDropsBlood
+					&& zombieDisabledDropsNoBlood
+					&& spitterDisabledDropsNoBlood,
+				destroyedZombies,
+				originalZombiesDropBlood,
+				tankyArmorForced,
+				human = DescribePawn(human),
+				zombie = DescribeZombie(zombie),
+				tanky = DescribeZombie(tanky),
+				tankyArmor = DescribeTankyArmor(tanky),
+				spitter = DescribeZombie(spitter),
+				humanEnabled,
+				zombieEnabled,
+				tankyEnabled,
+				spitterEnabled,
+				humanDisabled,
+				zombieDisabled,
+				spitterDisabled,
+				humanEnabledDropsBlood,
+				zombieEnabledDropsBlood,
+				tankyEnabledDropsNoBlood,
+				spitterEnabledDropsBlood,
+				humanDisabledStillDropsBlood,
+				zombieDisabledDropsNoBlood,
+				spitterDisabledDropsNoBlood
 			};
 		}
 
