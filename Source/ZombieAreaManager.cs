@@ -18,16 +18,32 @@ namespace ZombieLand
 		public static bool warningShowing = false;
 		public static IEnumerator stateUpdater = StateUpdater();
 
-		static Zombie[] AllZombies(Map map)
+		public static bool IsZombielandPawn(Pawn pawn)
+		{
+			return pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter;
+		}
+
+		static Pawn[] AllZombies(Map map)
 		{
 			try
 			{
-				return map.GetComponent<TickManager>().allZombiesCached.ToArray();
+				return map.mapPawns.AllPawnsSpawned
+					.Where(IsZombielandPawn)
+					.ToArray();
 			}
 			catch (Exception)
 			{
-				return new Zombie[0];
+				return Array.Empty<Pawn>();
 			}
+		}
+
+		static bool IsInDangerArea(Pawn pawn, Area area, AreaRiskMode mode)
+		{
+			var inside = area.innerGrid[pawn.Position];
+			return inside && mode == AreaRiskMode.ColonistInside
+				|| inside == false && mode == AreaRiskMode.ColonistOutside
+				|| inside && mode == AreaRiskMode.ZombieInside
+				|| inside == false && mode == AreaRiskMode.ZombieOutside;
 		}
 
 		static IEnumerator StateUpdater()
@@ -63,8 +79,7 @@ namespace ZombieLand
 						for (var aIdx = 0; aIdx < areas.Length; aIdx++)
 						{
 							var (area, mode) = (areas[aIdx].Key, areas[aIdx].Value);
-							var inside = area.innerGrid[pawn.Position];
-							if (inside && mode == AreaRiskMode.ColonistInside || inside == false && mode == AreaRiskMode.ColonistOutside)
+							if ((mode == AreaRiskMode.ColonistInside || mode == AreaRiskMode.ColonistOutside) && IsInDangerArea(pawn, area, mode))
 							{
 								if (pawnsInDanger.ContainsKey(pawn) == false)
 									pawnsInDanger.Add(pawn, area);
@@ -92,8 +107,7 @@ namespace ZombieLand
 						for (var aIdx = 0; aIdx < areas.Length; aIdx++)
 						{
 							var (area, mode) = (areas[aIdx].Key, areas[aIdx].Value);
-							var inside = area.innerGrid[zombie.Position];
-							if (inside && mode == AreaRiskMode.ZombieInside || inside == false && mode == AreaRiskMode.ZombieOutside)
+							if ((mode == AreaRiskMode.ZombieInside || mode == AreaRiskMode.ZombieOutside) && IsInDangerArea(zombie, area, mode))
 							{
 								if (pawnsInDanger.ContainsKey(zombie) == false)
 									pawnsInDanger.Add(zombie, area);
@@ -162,7 +176,7 @@ namespace ZombieLand
 				}
 				foundArea = area;
 
-				if (pawn is not Zombie)
+				if (IsZombielandPawn(pawn) == false)
 				{
 					var texture = pawnHeadTextures.Get(pawn, p =>
 					{
@@ -185,7 +199,7 @@ namespace ZombieLand
 			warningShowing = colorTexture != null;
 			if (warningShowing)
 			{
-				var zombiesInArea = headsToDraw.Where(pair => pair.Item2 == null).Select(pair => pair.Item1).ToArray();
+				var zombiesInArea = headsToDraw.Where(pair => IsZombielandPawn(pair.Item1)).Select(pair => pair.Item1).ToArray();
 
 				var n = headsToDraw.Where(pair => pair.Item2 != null).Count();
 				if (zombiesInArea.Length > 0)

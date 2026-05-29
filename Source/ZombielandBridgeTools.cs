@@ -3365,6 +3365,113 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_ingestion_contract", Description = "Verify ingesting contaminated stack food transfers the source-derived partial-stack contamination to the eater.")]
+		public static object ContaminationIngestionContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var eaterCell, out var eaterSpawnError) == false)
+				return eaterSpawnError;
+			if (TryFindClearSpawnCell(map, eaterCell + new IntVec3(3, 0, 0), 8f, out var mealCell, out var mealSpawnError) == false)
+				return mealSpawnError;
+
+			var mealDef = ThingDefOf.MealSurvivalPack;
+			var mealStack = Math.Min(5, mealDef.stackLimit);
+			if (mealStack < 2)
+			{
+				return new
+				{
+					success = false,
+					mealDef = mealDef.defName,
+					stackLimit = mealDef.stackLimit,
+					error = "Packaged survival meal is not stackable in this runtime."
+				};
+			}
+
+			var eater = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(eater, eaterCell, map, Rot4.South);
+			DisablePawnWork(eater);
+			eater.needs?.AddOrRemoveNeedsAsAppropriate();
+			eater.ClearContamination();
+
+			var meal = ThingMaker.MakeThing(mealDef);
+			meal.stackCount = mealStack;
+			GenSpawn.Spawn(meal, mealCell, map, WipeMode.Vanish);
+			const float mealContamination = 0.5f;
+			meal.SetContamination(mealContamination);
+
+			var eaterBefore = DescribeContamination(eater);
+			var mealBefore = meal.GetContamination();
+			var mealStackBefore = meal.stackCount;
+			var nutritionWanted = meal.GetStatValue(StatDefOf.Nutrition);
+			var nutritionIngested = meal.Ingested(eater, nutritionWanted);
+			var eaterAfter = DescribeContamination(eater);
+			var mealDestroyed = meal.Destroyed;
+			var mealStackAfter = mealDestroyed ? 0 : meal.stackCount;
+			var mealAfter = mealDestroyed ? 0f : meal.GetContamination();
+			var numTaken = mealStackBefore - mealStackAfter;
+			var expectedFactor = numTaken == 0 ? 0f : numTaken / (float)mealStackBefore;
+			var requestedTransfer = mealBefore * ZombieSettings.Values.contamination.ingestTransfer * expectedFactor;
+			var expectedTransfer = Mathf.Min(mealBefore, requestedTransfer);
+			var expectedMealAfter = Mathf.Max(0f, mealBefore - expectedTransfer);
+			var expectedEaterAfter = eaterBefore.stored + expectedTransfer;
+
+			static bool Close(float? value, float expected) => value.HasValue && Mathf.Abs(value.Value - expected) < 0.0001f;
+			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+			var atePartialStack = numTaken > 0 && mealStackAfter > 0 && nutritionIngested > 0f;
+			var contaminationTransferred = CloseFloat(eaterAfter.stored, expectedEaterAfter)
+				&& Close(eaterAfter.needLevel, expectedEaterAfter)
+				&& eaterAfter.hasHediff
+				&& Close(eaterAfter.hediffSeverity, expectedEaterAfter)
+				&& CloseFloat(mealAfter, expectedMealAfter);
+
+			return new
+			{
+				success = atePartialStack && contaminationTransferred,
+				eater = DescribePawn(eater),
+				eaterCell = ZombieRuntimeActions.DescribeCell(eaterCell),
+				meal = ZombieRuntimeActions.StableThingId(meal),
+				mealDef = mealDef.defName,
+				mealCell = ZombieRuntimeActions.DescribeCell(mealCell),
+				mealStackBefore,
+				mealStackAfter,
+				mealDestroyed,
+				numTaken,
+				nutritionWanted,
+				nutritionIngested,
+				ingestTransfer = ZombieSettings.Values.contamination.ingestTransfer,
+				expectedFactor,
+				requestedTransfer,
+				expectedTransfer,
+				eaterBefore,
+				eaterAfter,
+				expectedEaterAfter,
+				mealBefore,
+				mealAfter,
+				expectedMealAfter,
+				atePartialStack,
+				contaminationTransferred
+			};
+		}
+
 		[Tool("zombieland/zombie_records_suppression", Description = "Verify zombies cannot mutate or report vanilla pawn records while ordinary pawns still can.")]
 		public static object ZombieRecordsSuppression()
 		{
@@ -10765,6 +10872,186 @@ namespace ZombieLand
 					hasMetaballShader = Assets.MetaballShader != null
 				}
 			};
+		}
+
+		[Tool("zombieland/zombie_area_risk_contract", Description = "Verify dangerous-area risk modes classify colonists, normal zombies, spitters, and blobs consistently.")]
+		public static object ZombieAreaRiskContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root + new IntVec3(-6, 0, 0), 16f, out var colonistCell, out var colonistCellError) == false)
+				return colonistCellError;
+			if (TryFindClearSpawnCell(map, root + new IntVec3(-2, 0, 0), 16f, out var normalCell, out var normalCellError) == false)
+				return normalCellError;
+			if (TryFindClearSpawnCell(map, root + new IntVec3(2, 0, 0), 16f, out var spitterCell, out var spitterCellError) == false)
+				return spitterCellError;
+			if (TryFindClearSpawnCell(map, root + new IntVec3(6, 0, 0), 16f, out var blobCell, out var blobCellError) == false)
+				return blobCellError;
+
+			var previousDangerousAreas = ZombieSettings.Values.dangerousAreas.ToDictionary(pair => pair.Key, pair => pair.Value);
+			var createdAreas = new List<Area>();
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+				var colonist = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(colonist, colonistCell, map, Rot4.South);
+				DisablePawnWork(colonist);
+				spawnedThings.Add(colonist);
+
+				var normal = ZombieRuntimeActions.SpawnZombie(normalCell, map, ZombieType.Normal, true);
+				if (normal != null)
+					spawnedThings.Add(normal);
+				ZombieSpitter.Spawn(map, spitterCell);
+				var spitter = CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
+				if (spitter != null)
+					spawnedThings.Add(spitter);
+				ZombieBlob.Spawn(map, blobCell);
+				var blob = CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(blobCell)).FirstOrDefault();
+				if (blob != null)
+					spawnedThings.Add(blob);
+
+				if (normal == null || spitter == null || blob == null)
+				{
+					return new
+					{
+						success = false,
+						colonist = DescribePawn(colonist),
+						normal = DescribeZombie(normal),
+						spitter = DescribeZombie(spitter),
+						blob = DescribeZombie(blob),
+						error = "Could not create all dangerous-area pawn fixtures."
+					};
+				}
+
+				if (map.areaManager.TryMakeNewAllowed(out Area_Allowed area) == false)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not create a test allowed area."
+					};
+				}
+				createdAreas.Add(area);
+				area.labelInt = "ZombielandRiskContract";
+
+				void RunAreaStateUpdater()
+				{
+					ZombieAreaManager.pawnsInDanger.Clear();
+					ZombieAreaManager.lastMap = null;
+					var stateUpdater = typeof(ZombieAreaManager)
+						.GetMethod("StateUpdater", BindingFlags.Static | BindingFlags.NonPublic)
+						.Invoke(null, null) as System.Collections.IEnumerator;
+					ZombieAreaManager.stateUpdater = stateUpdater;
+					for (var i = 0; i < 64; i++)
+					{
+						if (ZombieAreaManager.stateUpdater.MoveNext())
+							continue;
+						ZombieAreaManager.stateUpdater = stateUpdater;
+						break;
+					}
+				}
+
+				object Snapshot(string label, AreaRiskMode mode, params IntVec3[] cells)
+				{
+					foreach (var cell in area.ActiveCells.ToArray())
+						area[cell] = false;
+					foreach (var cell in cells)
+						area[cell] = true;
+
+					ZombieSettings.Values.dangerousAreas.Clear();
+					if (mode != AreaRiskMode.Ignore)
+						ZombieSettings.Values.dangerousAreas[area] = mode;
+					RunAreaStateUpdater();
+
+					var entries = ZombieAreaManager.pawnsInDanger
+						.Select(pair => new
+						{
+							pawn = DescribePawn(pair.Key),
+							kind = DescribeZombieKind(pair.Key as Zombie, pair.Key as ZombieBlob, pair.Key as ZombieSpitter),
+							area = pair.Value?.Label
+						})
+						.ToArray();
+					return new
+					{
+						label,
+						mode = mode.ToString(),
+						activeCells = cells.Select(ZombieRuntimeActions.DescribeCell).ToArray(),
+						colonist = ZombieAreaManager.pawnsInDanger.ContainsKey(colonist),
+						normal = ZombieAreaManager.pawnsInDanger.ContainsKey(normal),
+						spitter = ZombieAreaManager.pawnsInDanger.ContainsKey(spitter),
+						blob = ZombieAreaManager.pawnsInDanger.ContainsKey(blob),
+						entries
+					};
+				}
+
+				var ignore = Snapshot("ignore", AreaRiskMode.Ignore, colonist.Position, normal.Position, spitter.Position, blob.Position);
+				var colonistInside = Snapshot("colonistInside", AreaRiskMode.ColonistInside, colonist.Position, normal.Position, spitter.Position, blob.Position);
+				var zombieInside = Snapshot("zombieInside", AreaRiskMode.ZombieInside, colonist.Position, normal.Position, spitter.Position, blob.Position);
+				var zombieOutside = Snapshot("zombieOutside", AreaRiskMode.ZombieOutside, colonist.Position);
+
+				bool Has(object snapshot, string field)
+				{
+					return (bool)snapshot.GetType().GetProperty(field).GetValue(snapshot);
+				}
+
+				var success = Has(ignore, "colonist") == false
+					&& Has(ignore, "normal") == false
+					&& Has(ignore, "spitter") == false
+					&& Has(ignore, "blob") == false
+					&& Has(colonistInside, "colonist")
+					&& Has(colonistInside, "normal") == false
+					&& Has(colonistInside, "spitter") == false
+					&& Has(colonistInside, "blob") == false
+					&& Has(zombieInside, "colonist") == false
+					&& Has(zombieInside, "normal")
+					&& Has(zombieInside, "spitter")
+					&& Has(zombieInside, "blob")
+					&& Has(zombieOutside, "colonist") == false
+					&& Has(zombieOutside, "normal")
+					&& Has(zombieOutside, "spitter")
+					&& Has(zombieOutside, "blob");
+
+				return new
+				{
+					success,
+					area = area.Label,
+					colonist = DescribePawn(colonist),
+					normal = DescribeZombie(normal),
+					spitter = DescribeZombie(spitter),
+					blob = DescribeZombie(blob),
+					snapshots = new[]
+					{
+						ignore,
+						colonistInside,
+						zombieInside,
+						zombieOutside
+					}
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.dangerousAreas.Clear();
+				foreach (var pair in previousDangerousAreas)
+					ZombieSettings.Values.dangerousAreas[pair.Key] = pair.Value;
+				foreach (var thing in spawnedThings)
+					if (thing != null && thing.Destroyed == false)
+						thing.Destroy(DestroyMode.Vanish);
+				foreach (var area in createdAreas)
+					if (area != null && map.areaManager.AllAreas.Contains(area))
+						map.areaManager.Remove(area);
+				ZombieAreaManager.pawnsInDanger.Clear();
+				ZombieAreaManager.lastMap = null;
+			}
 		}
 
 		static object DescribeVector(Vector3 vector)
