@@ -2965,6 +2965,80 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_zombie_death_contract", Description = "Verify killing a real zombie contaminates its death cell while an ordinary pawn death does not.")]
+		public static object ContaminationZombieDeathContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+			if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(4, 0, 0), 10f, out var humanCell, out var humanSpawnError) == false)
+				return humanSpawnError;
+
+			map.SetContamination(zombieCell, 0f);
+			map.SetContamination(humanCell, 0f);
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					human = DescribePawn(human),
+					error = "ZombieGenerator.SpawnZombie returned no death-contamination test zombie."
+				};
+			}
+
+			var zombieGroundBefore = map.GetContamination(zombieCell);
+			var humanGroundBefore = map.GetContamination(humanCell);
+			zombie.Kill(null);
+			human.Kill(null);
+			var zombieGroundAfter = map.GetContamination(zombieCell);
+			var humanGroundAfter = map.GetContamination(humanCell);
+			var expectedZombieGroundAfter = Mathf.Clamp01(zombieGroundBefore + ZombieSettings.Values.contamination.zombieDeathAdd);
+
+			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+			var zombieDeathContaminated = CloseFloat(zombieGroundAfter, expectedZombieGroundAfter);
+			var humanDeathIgnored = CloseFloat(humanGroundAfter, humanGroundBefore);
+
+			return new
+			{
+				success = zombieDeathContaminated && humanDeathIgnored,
+				zombie = DescribeZombie(zombie),
+				human = DescribePawn(human),
+				zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+				humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
+				zombieDeathAdd = ZombieSettings.Values.contamination.zombieDeathAdd,
+				zombieGroundBefore,
+				zombieGroundAfter,
+				expectedZombieGroundAfter,
+				humanGroundBefore,
+				humanGroundAfter,
+				zombieDeathContaminated,
+				humanDeathIgnored
+			};
+		}
+
 		[Tool("zombieland/zombie_records_suppression", Description = "Verify zombies cannot mutate or report vanilla pawn records while ordinary pawns still can.")]
 		public static object ZombieRecordsSuppression()
 		{
