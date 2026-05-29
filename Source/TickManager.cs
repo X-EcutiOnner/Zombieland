@@ -27,6 +27,13 @@ namespace ZombieLand
 
 		public static void DoSingleTick()
 		{
+			if (LongEventHandler.AnyEventNowOrWaiting || LongEventHandler.ShouldWaitForEvent)
+				return;
+			if (Current.Game == null || Current.ProgramState != ProgramState.Playing || Scribe.mode != LoadSaveMode.Inactive)
+				return;
+			if (managers == null)
+				return;
+
 			if (RimThreaded == null)
 				managers.Do(tickManager =>
 				{

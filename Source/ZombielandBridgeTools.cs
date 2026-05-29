@@ -261,6 +261,7 @@ namespace ZombieLand
 
 		static readonly MethodInfo pathFollowerCostToMoveIntoCellMethod = typeof(Pawn_PathFollower).GetMethod("CostToMoveIntoCell", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Pawn), typeof(IntVec3) }, null);
 		static readonly MethodInfo fireDoFireDamageMethod = typeof(Fire).GetMethod("DoFireDamage", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Thing) }, null);
+		static readonly MethodInfo fireWatcherUpdateObservationsMethod = typeof(FireWatcher).GetMethod("UpdateObservations", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
 		static bool TryCostToMoveIntoCell(Pawn pawn, IntVec3 cell, out float cost, out string error)
 		{
@@ -635,6 +636,15 @@ namespace ZombieLand
 
 			foreach (var filth in cell.GetThingList(map).OfType<Filth>().ToArray())
 				filth.Destroy();
+		}
+
+		static void ClearGasAt(Map map, IntVec3 cell)
+		{
+			if (map == null || cell.IsValid == false)
+				return;
+
+			foreach (var gas in cell.GetThingList(map).Where(thing => thing.def.category == ThingCategory.Gas).ToArray())
+				gas.Destroy();
 		}
 
 		static int CountZombieZapMotesNear(Map map, IntVec3 center, float radius)
@@ -2862,6 +2872,181 @@ namespace ZombieLand
 				adjacentBurningBefore,
 				adjacentBurningAfter,
 				adjacentFireCountAfter = adjacentFiresAfter.Length
+			};
+		}
+
+		[Tool("zombieland/tar_slime_fire_smoke_contract", Description = "Verify a real burning TarSlime fire tick emits Zombieland TarSmoke instead of only vanilla fire smoke.")]
+		public static object TarSlimeFireSmokeContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var spawnError) == false)
+				return spawnError;
+
+			ClearFilthAt(map, cell);
+			ClearGasAt(map, cell);
+			foreach (var existingFire in cell.GetThingList(map).OfType<Fire>().ToArray())
+				existingFire.Destroy();
+
+			FilthMaker.TryMakeFilth(cell, map, CustomDefs.TarSlime);
+			var tar = map.thingGrid.ThingAt<TarSlime>(cell);
+			if (tar == null)
+			{
+				return new
+				{
+					success = false,
+					cell = ZombieRuntimeActions.DescribeCell(cell),
+					error = "Could not create TarSlime fixture."
+				};
+			}
+
+			var tarSmokeBefore = CountThingsAt(map, cell, CustomDefs.TarSmoke);
+			var gasAtCellBefore = cell.GetGas(map)?.def?.defName;
+			FireUtility.TryStartFireIn(cell, map, 0.8f, null);
+			var sourceFire = cell.GetThingList(map).OfType<Fire>().FirstOrDefault();
+			if (sourceFire == null)
+			{
+				return new
+				{
+					success = false,
+					cell = ZombieRuntimeActions.DescribeCell(cell),
+					tar = ZombieRuntimeActions.StableThingId(tar),
+					error = "Could not start a real fire on the TarSlime cell."
+				};
+			}
+
+			const int sourceDerivedFireUpdateTicks = 15;
+			var fireSizeBefore = sourceFire.fireSize;
+			AdvanceGameTicks(sourceDerivedFireUpdateTicks);
+			var tarSmokeAfter = CountThingsAt(map, cell, CustomDefs.TarSmoke);
+			var gasAtCellAfter = cell.GetGas(map)?.def?.defName;
+
+			return new
+			{
+				success = tarSmokeAfter > tarSmokeBefore && gasAtCellAfter == CustomDefs.TarSmoke.defName,
+				cell = ZombieRuntimeActions.DescribeCell(cell),
+				tar = ZombieRuntimeActions.StableThingId(tar),
+				fire = ZombieRuntimeActions.StableThingId(sourceFire),
+				fireSizeBefore,
+				fireSizeAfter = sourceFire.Destroyed ? 0f : sourceFire.fireSize,
+				ticksToRun = sourceDerivedFireUpdateTicks,
+				gasAtCellBefore,
+				gasAtCellAfter,
+				tarSmokeBefore,
+				tarSmokeAfter,
+				tarSmokeDelta = tarSmokeAfter - tarSmokeBefore
+			};
+		}
+
+		[Tool("zombieland/zombie_fire_watcher_excludes_attached_fires", Description = "Verify FireWatcher counts normal fires but excludes fires attached to Zombieland pawns.")]
+		public static object ZombieFireWatcherExcludesAttachedFires()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (fireWatcherUpdateObservationsMethod == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find FireWatcher.UpdateObservations."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var mapFireCell, out var mapFireError) == false)
+				return mapFireError;
+			if (TryFindClearSpawnCell(map, mapFireCell + new IntVec3(3, 0, 0), 10f, out var humanCell, out var humanError) == false)
+				return humanError;
+			if (TryFindClearSpawnCell(map, mapFireCell + new IntVec3(-3, 0, 0), 10f, out var zombieCell, out var zombieError) == false)
+				return zombieError;
+
+			foreach (var cell in new[] { mapFireCell, humanCell, zombieCell })
+			{
+				ClearGasAt(map, cell);
+				foreach (var fire in cell.GetThingList(map).OfType<Fire>().ToArray())
+					fire.Destroy();
+			}
+
+			FireUtility.TryStartFireIn(mapFireCell, map, 1.25f, null);
+			var mapFire = mapFireCell.GetThingList(map).OfType<Fire>().FirstOrDefault();
+			if (mapFire == null)
+			{
+				return new
+				{
+					success = false,
+					mapFireCell = ZombieRuntimeActions.DescribeCell(mapFireCell),
+					error = "Could not start a normal map fire."
+				};
+			}
+			mapFire.fireSize = 1.25f;
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+			FireUtility.TryAttachFire(human, 2f, null);
+			var humanFire = human.GetAttachment(ThingDefOf.Fire) as Fire;
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			FireUtility.TryAttachFire(zombie, 3f, null);
+			var zombieFire = zombie?.GetAttachment(ThingDefOf.Fire) as Fire;
+
+			if (humanFire == null || zombieFire == null)
+			{
+				return new
+				{
+					success = false,
+					mapFire = ZombieRuntimeActions.StableThingId(mapFire),
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					humanFire = ZombieRuntimeActions.StableThingId(humanFire),
+					zombieFire = ZombieRuntimeActions.StableThingId(zombieFire),
+					error = "Could not attach both human and zombie fires."
+				};
+			}
+
+			fireWatcherUpdateObservationsMethod.Invoke(map.fireWatcher, null);
+			var fireDangerAfter = map.fireWatcher.FireDanger;
+			var expectedExcludingZombie = 0.5f + mapFire.fireSize + 0.5f + humanFire.fireSize;
+			var expectedIncludingZombie = expectedExcludingZombie + 0.5f + zombieFire.fireSize;
+			var tolerance = 0.001f;
+
+			return new
+			{
+				success = Math.Abs(fireDangerAfter - expectedExcludingZombie) <= tolerance
+					&& Math.Abs(fireDangerAfter - expectedIncludingZombie) > 0.1f,
+				mapFireCell = ZombieRuntimeActions.DescribeCell(mapFireCell),
+				humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
+				zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+				mapFire = ZombieRuntimeActions.StableThingId(mapFire),
+				human = DescribePawn(human),
+				zombie = DescribeZombie(zombie),
+				humanFire = ZombieRuntimeActions.StableThingId(humanFire),
+				zombieFire = ZombieRuntimeActions.StableThingId(zombieFire),
+				humanFireParent = ZombieRuntimeActions.StableThingId(humanFire.parent),
+				zombieFireParent = ZombieRuntimeActions.StableThingId(zombieFire.parent),
+				mapFireSize = mapFire.fireSize,
+				humanFireSize = humanFire.fireSize,
+				zombieFireSize = zombieFire.fireSize,
+				fireDangerAfter,
+				expectedExcludingZombie,
+				expectedIncludingZombie,
+				tolerance
 			};
 		}
 

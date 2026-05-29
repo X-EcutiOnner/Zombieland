@@ -75,7 +75,7 @@ namespace ZombieLand
 			Log.Error(error);
 		}
 
-		static void SpawnTarSmoke(IntVec3 center, Map map, float radius, float difficulty)
+		static void SpawnTarSmoke(IntVec3 center, Map map, float radius, float difficulty, bool playSound = true)
 		{
 			if (map == null)
 				return;
@@ -92,7 +92,8 @@ namespace ZombieLand
 
 				GenSpawn.Spawn(ThingMaker.MakeThing(CustomDefs.TarSmoke), cell, map);
 			}
-			CustomDefs.TarSmokePop.PlayOneShot(SoundInfo.InMap(new TargetInfo(center, map)));
+			if (playSound)
+				CustomDefs.TarSmokePop.PlayOneShot(SoundInfo.InMap(new TargetInfo(center, map)));
 		}
 
 		// settings backwards compatibility
@@ -4142,46 +4143,45 @@ namespace ZombieLand
 			}
 		}
 
+		// patch for replacing vanilla white fire smoke with dark tar smoke on burning tar slime
+		//
+		[HarmonyPatch(typeof(Fire))]
+		[HarmonyPatch(nameof(Fire.SpawnSmokeParticles))]
+		static class Fire_SpawnSmokeParticles_Patch
+		{
+			static bool Prefix(Fire __instance)
+			{
+				var map = __instance.Map;
+				if (map == null || __instance.Position.GetThingList(map).Any(thing => thing is TarSlime) == false)
+					return true;
+
+				var difficulty = Tools.Difficulty();
+				SpawnTarSmoke(__instance.Position, map, Math.Max(1f, __instance.fireSize), difficulty, false);
+				if (__instance.fireSize > 0.5f && __instance.parent == null)
+					FleckMaker.ThrowFireGlow(__instance.Position.ToVector3Shifted(), map, __instance.fireSize);
+				return false;
+			}
+		}
+
 		// patch for excluding burning zombies from total fire count
 		//
 		[HarmonyPatch(typeof(FireWatcher))]
 		[HarmonyPatch(nameof(FireWatcher.UpdateObservations))]
 		static class FireWatcher_UpdateObservations_Patch
 		{
-			static IEnumerable<CodeInstruction> Transpiler(ILGenerator generator, IEnumerable<CodeInstruction> instructions)
+			[HarmonyPriority(Priority.First)]
+			static bool Prefix(Map ___map, ref float ___fireDanger)
 			{
-				var found1 = false;
-				var found2 = false;
-
-				var n = 0;
-				var label = generator.DefineLabel();
-
-				foreach (var instruction in instructions)
+				___fireDanger = 0f;
+				var fires = ___map.listerThings.ThingsOfDef(ThingDefOf.Fire);
+				for (var i = 0; i < fires.Count; i++)
 				{
-					yield return instruction;
-
-					if (instruction.opcode == OpCodes.Stloc_2)
-					{
-						yield return new CodeInstruction(OpCodes.Ldloc_2);
-						yield return new CodeInstruction(OpCodes.Ldfld, typeof(AttachableThing).Field(nameof(AttachableThing.parent)));
-						yield return new CodeInstruction(OpCodes.Isinst, typeof(Zombie));
-						yield return new CodeInstruction(OpCodes.Brtrue, label);
-						found1 = true;
-					}
-
-					if (n >= 0 && instruction.opcode == OpCodes.Add)
-						n++;
-
-					if (instruction.opcode == OpCodes.Ldloc_1 && n == 2)
-					{
-						instruction.labels.Add(label);
-						n = -1;
-						found2 = true;
-					}
+					var fire = fires[i] as Fire;
+					if (IsZombielandPawn(fire?.parent as Pawn))
+						continue;
+					___fireDanger += 0.5f + fire.fireSize;
 				}
-
-				if (!found1 || !found2)
-					Error("Unexpected code in patch " + MethodBase.GetCurrentMethod().DeclaringType);
+				return false;
 			}
 		}
 
