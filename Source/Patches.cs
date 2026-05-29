@@ -9,6 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
+using Unity.Collections;
 using UnityEngine;
 using Verse;
 using Verse.AI;
@@ -1349,6 +1350,115 @@ namespace ZombieLand
 					yield return instr;
 			}
 		}
+
+		class ZombieAvoidGridPathCustomizer : PathRequest.IPathGridCustomizer, IDisposable
+		{
+			NativeArray<ushort> offsets;
+
+			public ZombieAvoidGridPathCustomizer(AvoidGrid avoidGrid)
+			{
+				var costs = avoidGrid.GetCosts();
+				offsets = new NativeArray<ushort>(costs.Length, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+				for (var i = 0; i < costs.Length; i++)
+					offsets[i] = (ushort)Mathf.Clamp(costs[i], 0, ushort.MaxValue);
+			}
+
+			public NativeArray<ushort> GetOffsetGrid()
+			{
+				return offsets;
+			}
+
+			public void Dispose()
+			{
+				if (offsets.IsCreated)
+					offsets.Dispose();
+			}
+		}
+
+		static bool TryCreateZombieAvoidGridCustomizer(Pawn pawn, out ZombieAvoidGridPathCustomizer customizer)
+		{
+			customizer = null;
+			if (pawn == null || Tools.ShouldAvoidZombies(pawn) == false)
+				return false;
+
+			var map = pawn.Map;
+			if (map == null)
+				return false;
+
+			var avoidGrid = map.GetComponent<TickManager>()?.avoidGrid;
+			if (avoidGrid == null)
+				return false;
+
+			var costs = avoidGrid.GetCosts();
+			if (costs.Any(cost => cost > 0) == false)
+				return false;
+
+			customizer = new ZombieAvoidGridPathCustomizer(avoidGrid);
+			return true;
+		}
+
+		static void AddZombieAvoidGridCustomizer(Pawn pawn, ref PathRequest.IPathGridCustomizer customizer)
+		{
+			if (customizer != null)
+				return;
+			if (TryCreateZombieAvoidGridCustomizer(pawn, out var zombieCustomizer))
+				customizer = zombieCustomizer;
+		}
+
+		[HarmonyPatch(typeof(PathFinder))]
+		[HarmonyPatch(nameof(PathFinder.CreateRequest))]
+		[HarmonyPatch(new[] { typeof(IntVec3), typeof(LocalTargetInfo), typeof(IntVec3?), typeof(TraverseParms), typeof(Nullable<PathFinderCostTuning>), typeof(PathEndMode), typeof(Pawn), typeof(PathRequest.IPathGridCustomizer) })]
+		static class PathFinder_CreateRequest_Patch
+		{
+			static void Prefix(TraverseParms traverseParms, Pawn pawn, ref PathRequest.IPathGridCustomizer customizer)
+			{
+				AddZombieAvoidGridCustomizer(pawn ?? traverseParms.pawn, ref customizer);
+			}
+		}
+
+		[HarmonyPatch(typeof(PathFinder))]
+		[HarmonyPatch(nameof(PathFinder.FindPathNow))]
+		[HarmonyPatch(new[] { typeof(IntVec3), typeof(LocalTargetInfo), typeof(TraverseParms), typeof(Nullable<PathFinderCostTuning>), typeof(PathEndMode), typeof(PathRequest.IPathGridCustomizer) })]
+		static class PathFinder_FindPathNow_Patch
+		{
+			static void Prefix(TraverseParms traverseParms, ref PathRequest.IPathGridCustomizer customizer, out ZombieAvoidGridPathCustomizer __state)
+			{
+				__state = null;
+				if (customizer != null)
+					return;
+				if (TryCreateZombieAvoidGridCustomizer(traverseParms.pawn, out var zombieCustomizer))
+				{
+					customizer = zombieCustomizer;
+					__state = zombieCustomizer;
+				}
+			}
+
+			static void Postfix(ZombieAvoidGridPathCustomizer __state)
+			{
+				__state?.Dispose();
+			}
+		}
+
+		[HarmonyPatch(typeof(PathRequest))]
+		[HarmonyPatch(nameof(PathRequest.Resolve))]
+		static class PathRequest_Resolve_Patch
+		{
+			static void Postfix(PathRequest __instance)
+			{
+				(__instance.customizer as ZombieAvoidGridPathCustomizer)?.Dispose();
+			}
+		}
+
+		[HarmonyPatch(typeof(PathRequest))]
+		[HarmonyPatch(nameof(PathRequest.Dispose))]
+		static class PathRequest_Dispose_Patch
+		{
+			static void Postfix(PathRequest __instance)
+			{
+				(__instance.customizer as ZombieAvoidGridPathCustomizer)?.Dispose();
+			}
+		}
+
 		[HarmonyPatch(typeof(Pawn_PathFollower))]
 		[HarmonyPatch(nameof(Pawn_PathFollower.NeedNewPath))]
 		static class Pawn_PathFollower_NeedNewPath_Patch

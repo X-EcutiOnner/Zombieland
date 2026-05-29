@@ -414,6 +414,13 @@ namespace ZombieLand
 			return avoidGrid.GetCosts()[cell.x + cell.z * map.Size.x];
 		}
 
+		static IntVec3[] DescribePathCells(PawnPath path)
+		{
+			if (path?.Found != true)
+				return Array.Empty<IntVec3>();
+			return Enumerable.Range(0, path.NodesLeftCount).Select(path.Peek).ToArray();
+		}
+
 		static object DescribePheromoneChange(Map map, Dictionary<IntVec3, long> before, out int changedCount)
 		{
 			var grid = map.GetGrid();
@@ -2427,6 +2434,156 @@ namespace ZombieLand
 					lookAheadShouldAvoid,
 					needNewPathBefore,
 					needNewPathAfter
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+			}
+		}
+
+		[Tool("zombieland/avoid_grid_costs_route_new_path", Description = "Verify a new RimWorld 1.6 path request uses Zombieland avoid-grid costs and routes through fewer zombie-danger cells.")]
+		public static object AvoidGridCostsRouteNewPath()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			ZombieSettings.Values.betterZombieAvoidance = false;
+			try
+			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				map.GetComponent<TickManager>().avoidGrid = new AvoidGrid(map);
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				DisablePawnWork(actor);
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoAvoidZombies = false;
+
+				var destination = GenRadial.RadialCellsAround(actor.Position, 22f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(actor.Position) >= 16f)
+					.Where(cell => actor.CanReach(cell, PathEndMode.OnCell, Danger.Deadly))
+					.OrderByDescending(cell => cell.DistanceToSquared(actor.Position))
+					.FirstOrDefault();
+				if (destination.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "No reachable distant destination was found for the avoid-grid route fixture."
+					};
+				}
+
+				var baselinePath = map.pathFinder.FindPathNow(actor.Position, destination, actor, null, PathEndMode.OnCell);
+				var baselineCells = DescribePathCells(baselinePath);
+				if (baselinePath?.Found != true || baselineCells.Length < 10)
+				{
+					baselinePath?.ReleaseToPool();
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						destination = ZombieRuntimeActions.DescribeCell(destination),
+						baselinePathFound = baselinePath?.Found ?? false,
+						baselineCells = baselineCells.Length,
+						error = "Baseline path did not become available with enough cells for the avoid-grid route fixture."
+					};
+				}
+
+				var zombieCell = baselineCells
+					.Skip(Math.Max(2, baselineCells.Length / 3))
+					.Take(Math.Max(1, baselineCells.Length / 3))
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(actor.Position) >= 6f)
+					.Where(cell => cell.DistanceTo(destination) >= 6f)
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					baselinePath.ReleaseToPool();
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						destination = ZombieRuntimeActions.DescribeCell(destination),
+						baselineCells = baselineCells.Length,
+						error = "No usable zombie cell was found on the baseline path."
+					};
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					baselinePath.ReleaseToPool();
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+						error = "ZombieGenerator.SpawnZombie returned no avoid-grid route zombie."
+					};
+				}
+				zombie.state = ZombieState.Tracking;
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var baselineAvoidCells = baselineCells.Count(cell => avoidGrid.ShouldAvoid(map, cell));
+				var baselineAvoidCost = baselineCells.Sum(cell => AvoidCost(avoidGrid, map, cell));
+
+				ZombieSettings.Values.betterZombieAvoidance = true;
+				if (config != null)
+					config.autoAvoidZombies = true;
+
+				var avoidedPath = map.pathFinder.FindPathNow(actor.Position, destination, actor, null, PathEndMode.OnCell);
+				var avoidedCells = DescribePathCells(avoidedPath);
+				var avoidedAvoidCells = avoidedCells.Count(cell => avoidGrid.ShouldAvoid(map, cell));
+				var avoidedAvoidCost = avoidedCells.Sum(cell => AvoidCost(avoidGrid, map, cell));
+				var avoidedPathFound = avoidedPath?.Found == true;
+				baselinePath.ReleaseToPool();
+				avoidedPath?.ReleaseToPool();
+
+				return new
+				{
+					success = avoidedPathFound
+						&& baselineAvoidCells > 0
+						&& avoidedAvoidCells < baselineAvoidCells
+						&& avoidedAvoidCost < baselineAvoidCost,
+					destroyedZombies,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					destination = ZombieRuntimeActions.DescribeCell(destination),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					baseline = new
+					{
+						pathFound = true,
+						cellCount = baselineCells.Length,
+						avoidCells = baselineAvoidCells,
+						avoidCost = baselineAvoidCost
+					},
+					avoided = new
+					{
+						pathFound = avoidedPathFound,
+						cellCount = avoidedCells.Length,
+						avoidCells = avoidedAvoidCells,
+						avoidCost = avoidedAvoidCost
+					}
 				};
 			}
 			finally
