@@ -349,6 +349,14 @@ namespace ZombieLand
 				.Count(thing => thing.def == thingDef);
 		}
 
+		static int CountZombieZapMotesNear(Map map, IntVec3 center, float radius)
+		{
+			return CountThingsNear(map, center, CustomDefs.ZombieZapA, radius)
+				+ CountThingsNear(map, center, CustomDefs.ZombieZapB, radius)
+				+ CountThingsNear(map, center, CustomDefs.ZombieZapC, radius)
+				+ CountThingsNear(map, center, CustomDefs.ZombieZapD, radius);
+		}
+
 		static Dictionary<IntVec3, long> SnapshotPheromones(Map map, IntVec3 center, float radius)
 		{
 			var grid = map.GetGrid();
@@ -525,6 +533,61 @@ namespace ZombieLand
 			{
 				success = false,
 				error = $"No clear standable unfogged cell was found near ({root.x}, {root.z})."
+			};
+			return false;
+		}
+
+		static bool TryFindShockerFixtureCell(Map map, IntVec3 root, float radius, out IntVec3 shockerCell, out object error)
+		{
+			shockerCell = IntVec3.Invalid;
+			error = null;
+			if (map == null)
+			{
+				error = new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+				return false;
+			}
+
+			foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+			{
+				var clear = true;
+				for (var dx = -2; dx <= 2 && clear; dx++)
+				{
+					for (var dz = -3; dz <= 4 && clear; dz++)
+					{
+						var cell = candidate + new IntVec3(dx, 0, dz);
+						if (cell.InBounds(map) == false || cell.Fogged(map) || cell.Standable(map) == false)
+						{
+							clear = false;
+							break;
+						}
+						if (cell.GetEdifice(map) != null || cell.GetFirstThing<Mineable>(map) != null)
+						{
+							clear = false;
+							break;
+						}
+						if (cell.GetThingList(map).Any(thing => thing is Pawn))
+						{
+							clear = false;
+							break;
+						}
+					}
+				}
+
+				if (clear)
+				{
+					shockerCell = candidate;
+					return true;
+				}
+			}
+
+			error = new
+			{
+				success = false,
+				error = $"No clear zombie shocker fixture area was found near ({root.x}, {root.z})."
 			};
 			return false;
 		}
@@ -2097,6 +2160,244 @@ namespace ZombieLand
 				fireBefore,
 				fireAfter,
 				fireDelta = fireAfter - fireBefore
+			};
+		}
+
+		[Tool("zombieland/zap_zombies_with_shocker", Description = "Build a powered zombie shocker room, run the real ZapZombies job, and verify a zombie in the room is paralyzed.")]
+		public static object ZapZombiesWithShocker()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindShockerFixtureCell(map, root, 24f, out var shockerCell, out var fixtureError) == false)
+				return fixtureError;
+
+			var wallDef = ThingDefOf.Wall;
+			var conduitDef = DefDatabase<ThingDef>.GetNamed("PowerConduit", false);
+			var batteryDef = DefDatabase<ThingDef>.GetNamed("Battery", false);
+			if (wallDef == null || conduitDef == null || batteryDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "ThingDef Wall, PowerConduit, or Battery was not found."
+				};
+			}
+
+			var fixtureThings = new List<Thing>();
+			for (var dx = -2; dx <= 2; dx++)
+			{
+				for (var dz = 0; dz <= 4; dz++)
+				{
+					if (dx != -2 && dx != 2 && dz != 0 && dz != 4)
+						continue;
+
+					var wallCell = shockerCell + new IntVec3(dx, 0, dz);
+					var wall = ThingMaker.MakeThing(wallDef, ThingDefOf.WoodLog) as Building;
+					if (wall == null)
+						continue;
+					GenSpawn.Spawn(wall, wallCell, map, WipeMode.Vanish);
+					wall.SetFaction(Faction.OfPlayer);
+					fixtureThings.Add(wall);
+				}
+			}
+
+			var shocker = ThingMaker.MakeThing(CustomDefs.ZombieShocker) as ZombieShocker;
+			if (shocker == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create ZombieShocker."
+				};
+			}
+			shocker.SetFactionDirect(Faction.OfPlayer);
+			GenSpawn.Spawn(shocker, shockerCell, map, Rot4.North, WipeMode.Vanish, false);
+			fixtureThings.Add(shocker);
+
+			var conduitCell = shockerCell + IntVec3.South;
+			var batteryCell = shockerCell + new IntVec3(1, 0, -3);
+			var bridgeConduitCell = batteryCell + new IntVec3(0, 0, 2);
+			var actorCell = shockerCell + IntVec3.South + IntVec3.West;
+			var zombieCell = shockerCell + new IntVec3(0, 0, 2);
+			var conduit = GenSpawn.Spawn(ThingMaker.MakeThing(conduitDef), conduitCell, map, WipeMode.Vanish) as Building;
+			var bridgeConduit = GenSpawn.Spawn(ThingMaker.MakeThing(conduitDef), bridgeConduitCell, map, WipeMode.Vanish) as Building;
+			var battery = GenSpawn.Spawn(ThingMaker.MakeThing(batteryDef), batteryCell, map, WipeMode.Vanish) as Building;
+			conduit?.SetFaction(Faction.OfPlayer);
+			bridgeConduit?.SetFaction(Faction.OfPlayer);
+			battery?.SetFaction(Faction.OfPlayer);
+			if (conduit != null)
+				fixtureThings.Add(conduit);
+			if (bridgeConduit != null)
+				fixtureThings.Add(bridgeConduit);
+			if (battery != null)
+				fixtureThings.Add(battery);
+
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+			var shockerPower = shocker.GetComp<CompPowerTrader>();
+			var conduitPower = conduit?.GetComp<CompPower>();
+			var bridgeConduitPower = bridgeConduit?.GetComp<CompPower>();
+			var batteryPower = battery?.GetComp<CompPowerBattery>();
+			batteryPower?.SetStoredEnergyPct(1f);
+			if (conduitPower != null)
+				map.powerNetManager.Notify_TransmitterSpawned(conduitPower);
+			if (bridgeConduitPower != null)
+				map.powerNetManager.Notify_TransmitterSpawned(bridgeConduitPower);
+			if (batteryPower != null)
+				map.powerNetManager.Notify_TransmitterSpawned(batteryPower);
+			map.powerNetManager.UpdatePowerNetsAndConnections_First();
+			if (shockerPower?.PowerNet == null && conduitPower != null)
+				shockerPower.ConnectToTransmitter(conduitPower);
+			if (shockerPower?.PowerNet == null && bridgeConduitPower != null)
+				shockerPower.ConnectToTransmitter(bridgeConduitPower);
+			if (shockerPower?.PowerNet == null && batteryPower != null)
+				shockerPower.ConnectToTransmitter(batteryPower);
+			AdvanceGameTicks(1);
+			if (shockerPower != null)
+				shockerPower.PowerOn = true;
+
+			var selectedRotation = shocker.Rotation;
+			foreach (var rot in Rot4.AllRotations)
+			{
+				shocker.Rotation = rot;
+				if (shocker.HasValidRoom())
+				{
+					selectedRotation = rot;
+					break;
+				}
+			}
+			shocker.Rotation = selectedRotation;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+			actor.workSettings?.DisableAll();
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					shockerCell = ZombieRuntimeActions.DescribeCell(shockerCell),
+					error = "ZombieGenerator.SpawnZombie returned no shocker test zombie."
+				};
+			}
+			zombie.ropedBy = null;
+			zombie.paralyzedUntil = 0;
+
+			var room = ZombieShocker.GetValidRoom(map, shockerCell + IntVec3.North);
+			var roomCellCount = room?.Cells.Count(cell => cell.Standable(map)) ?? 0;
+			var hasValidRoom = shocker.HasValidRoom();
+			var canReserveAndReach = actor.CanReach(shocker, PathEndMode.InteractionCell, Danger.Deadly)
+				&& actor.CanReserve(shocker);
+			var batteryCount = shockerPower?.PowerNet?.batteryComps?.Count ?? 0;
+			var storedEnergyBefore = batteryPower?.StoredEnergy ?? 0f;
+			var ropedBefore = zombie.ropedBy != null;
+			var paralyzedUntilBefore = zombie.paralyzedUntil;
+			var zapMotesBefore = CountZombieZapMotesNear(map, zombieCell, 2f);
+
+			var job = JobMaker.MakeJob(CustomDefs.ZapZombies, shocker);
+			job.playerForced = true;
+			_ = actor.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
+			var startedJob = actor.CurJobDef?.defName;
+			var maxTicks = 90 + 45 + roomCellCount + 20;
+			var tickHit = -1;
+			var samples = new List<object>();
+
+			for (var tick = 1; tick <= maxTicks; tick++)
+			{
+				AdvanceGameTicks(1);
+				var ropedNow = zombie.ropedBy != null;
+				var paralyzedNow = zombie.paralyzedUntil > GenTicks.TicksAbs;
+				var zapMotesNow = CountZombieZapMotesNear(map, zombieCell, 2f);
+				var hitNow = paralyzedNow && zapMotesNow > zapMotesBefore;
+				if (tick == 1 || tick == 90 || tick == 135 || tick == maxTicks || tick % 30 == 0 || hitNow)
+				{
+					samples.Add(new
+					{
+						tick,
+						actorJob = actor.CurJobDef?.defName,
+						roped = ropedNow,
+						paralyzed = paralyzedNow,
+						zombie.paralyzedUntil,
+						zapMotes = zapMotesNow
+					});
+				}
+
+				if (hitNow)
+				{
+					tickHit = tick;
+					break;
+				}
+			}
+
+			var zapMotesAfter = CountZombieZapMotesNear(map, zombieCell, 2f);
+			var storedEnergyAfter = batteryPower?.StoredEnergy ?? 0f;
+			var ropedAfter = zombie.ropedBy != null;
+			var paralyzedAfter = zombie.paralyzedUntil > GenTicks.TicksAbs;
+
+			return new
+			{
+				success = hasValidRoom
+					&& canReserveAndReach
+					&& shockerPower?.PowerOn == true
+					&& batteryCount > 0
+					&& startedJob == CustomDefs.ZapZombies.defName
+					&& ropedBefore == false
+					&& ropedAfter == false
+					&& paralyzedAfter
+					&& tickHit > 0
+					&& zapMotesAfter > zapMotesBefore,
+				destroyedZombies,
+				shocker = new
+				{
+					id = ZombieRuntimeActions.StableThingId(shocker),
+					cell = ZombieRuntimeActions.DescribeCell(shockerCell),
+					rotation = shocker.Rotation.ToString(),
+					powerOn = shockerPower?.PowerOn,
+					hasPowerNet = shockerPower?.PowerNet != null,
+					batteryCount,
+					hasValidRoom,
+					onWall = shocker.OnWall()
+				},
+				actor = DescribePawn(actor),
+				zombie = DescribeZombie(zombie),
+				cells = new
+				{
+					shocker = ZombieRuntimeActions.DescribeCell(shockerCell),
+					conduit = ZombieRuntimeActions.DescribeCell(conduitCell),
+					bridgeConduit = ZombieRuntimeActions.DescribeCell(bridgeConduitCell),
+					battery = ZombieRuntimeActions.DescribeCell(batteryCell),
+					actor = ZombieRuntimeActions.DescribeCell(actorCell),
+					zombie = ZombieRuntimeActions.DescribeCell(zombieCell)
+				},
+				fixtureThingCount = fixtureThings.Count,
+				roomCellCount,
+				canReserveAndReach,
+				startedJob,
+				maxTicks,
+				tickHit,
+				ropedBefore,
+				ropedAfter,
+				paralyzedUntilBefore,
+				paralyzedUntilAfter = zombie.paralyzedUntil,
+				paralyzedAfter,
+				zapMotesBefore,
+				zapMotesAfter,
+				zapMoteDelta = zapMotesAfter - zapMotesBefore,
+				storedEnergyBefore,
+				storedEnergyAfter,
+				storedEnergyDelta = storedEnergyBefore - storedEnergyAfter,
+				samples
 			};
 		}
 
