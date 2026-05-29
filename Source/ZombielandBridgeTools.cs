@@ -465,6 +465,35 @@ namespace ZombieLand
 			}
 		}
 
+		static bool TryApplyMeleeDamageToTarget(Verb verb, LocalTargetInfo target, out DamageWorker.DamageResult result, out string error)
+		{
+			result = null;
+			error = null;
+			if (verb == null)
+			{
+				error = "Verb is null.";
+				return false;
+			}
+
+			var method = verb.GetType().GetMethod("ApplyMeleeDamageToTarget", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+			if (method == null)
+			{
+				error = $"Could not find {verb.GetType().Name}.ApplyMeleeDamageToTarget(LocalTargetInfo).";
+				return false;
+			}
+
+			try
+			{
+				result = (DamageWorker.DamageResult)method.Invoke(verb, new object[] { target });
+				return true;
+			}
+			catch (TargetInvocationException ex)
+			{
+				error = ex.InnerException?.Message ?? ex.Message;
+				return false;
+			}
+		}
+
 		static bool TrySampleRainVulnerability(Fire fire, int samples, int seed, out int trueCount, out int falseCount, out string error)
 		{
 			trueCount = 0;
@@ -4649,6 +4678,115 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_melee_equalize_contract", Description = "Verify real melee damage equalizes contamination between attacker and target.")]
+		public static object ContaminationMeleeEqualizeContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var attackerCell, out var attackerSpawnError) == false)
+				return attackerSpawnError;
+			if (TryFindClearSpawnCell(map, attackerCell + IntVec3.East, 8f, out var targetCell, out var targetSpawnError) == false)
+				return targetSpawnError;
+
+			var attacker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var target = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			try
+			{
+				GenSpawn.Spawn(attacker, attackerCell, map, Rot4.East);
+				GenSpawn.Spawn(target, targetCell, map, Rot4.West);
+				DisablePawnWork(attacker);
+				DisablePawnWork(target);
+				attacker.ClearContamination();
+				target.ClearContamination();
+
+				const float targetContaminationBefore = 0.8f;
+				target.SetContamination(targetContaminationBefore);
+				var attackerBefore = DescribeContamination(attacker);
+				var targetBefore = DescribeContamination(target);
+				var verb = attacker.meleeVerbs.TryGetMeleeVerb(target);
+				if (TryApplyMeleeDamageToTarget(verb, target, out var damageResult, out var meleeError) == false)
+				{
+					return new
+					{
+						success = false,
+						attacker = DescribePawn(attacker),
+						target = DescribePawn(target),
+						attackerCell = ZombieRuntimeActions.DescribeCell(attackerCell),
+						targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+						verb = DescribeVerb(verb),
+						error = meleeError
+					};
+				}
+
+				var attackerAfter = DescribeContamination(attacker);
+				var targetAfter = DescribeContamination(target);
+				var meleeEqualize = ZombieSettings.Values.contamination.meleeEqualize;
+				var expectedTransfer = (targetBefore.stored - attackerBefore.stored) * meleeEqualize;
+				var expectedAttackerAfter = attackerBefore.stored + expectedTransfer;
+				var expectedTargetAfter = targetBefore.stored - expectedTransfer;
+				static bool Close(float? value, float expected) => value.HasValue && Mathf.Abs(value.Value - expected) < 0.0001f;
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+				var damageApplied = damageResult != null && damageResult.totalDamageDealt > 0f;
+				var contaminationEqualized = damageApplied
+					&& CloseFloat(attackerBefore.stored, 0f)
+					&& CloseFloat(targetBefore.stored, targetContaminationBefore)
+					&& CloseFloat(attackerAfter.stored, expectedAttackerAfter)
+					&& CloseFloat(targetAfter.stored, expectedTargetAfter)
+					&& Close(attackerAfter.needLevel, expectedAttackerAfter)
+					&& Close(targetAfter.needLevel, expectedTargetAfter)
+					&& attackerAfter.hasHediff
+					&& targetAfter.hasHediff;
+
+				return new
+				{
+					success = contaminationEqualized,
+					attacker = DescribePawn(attacker),
+					target = DescribePawn(target),
+					attackerCell = ZombieRuntimeActions.DescribeCell(attackerCell),
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					verb = DescribeVerb(verb),
+					damageApplied,
+					damageTotal = damageResult?.totalDamageDealt ?? 0f,
+					meleeEqualize,
+					expectedTransfer,
+					expectedAttackerAfter,
+					expectedTargetAfter,
+					attackerBefore,
+					attackerAfter,
+					targetBefore,
+					targetAfter,
+					contaminationEqualized
+				};
+			}
+			finally
+			{
+				attacker?.ClearContamination();
+				target?.ClearContamination();
+				if (attacker is { Destroyed: false, Spawned: true })
+					attacker.Destroy();
+				if (target is { Destroyed: false, Spawned: true })
+					target.Destroy();
+			}
+		}
+
 		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns create contaminated blood filth and contaminated destroyed things transfer contamination into real GenLeaving outputs.")]
 		public static object ContaminationFilthLeavingsContract()
 		{
@@ -5733,7 +5871,7 @@ namespace ZombieLand
 				var groundAfter = map.GetContamination(pollutionCell);
 				var wastepackGround = wastepack == null ? -1f : map.GetContamination(wastepack.Position);
 				var wastepackContamination = wastepack?.GetContamination() ?? -1f;
-				var expectedWastepackContamination = wastepack == null ? -1f : wastepackGround * wastePackAdd;
+				var expectedWastepackContamination = wastepack == null ? -1f : groundBefore * wastePackAdd;
 				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
 				var pollutionCleared = pollutedBefore && pollutedAfter == false;
 				var workerContaminated = pollutionCleared

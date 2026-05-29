@@ -472,20 +472,16 @@ namespace ZombieLand
 			return AccessTools.FirstMethod(typeof(JobDriver_ClearPollution), method => method.CallsMethod(m_Spawn));
 		}
 
-		static Thing Spawn(ThingDef def, IntVec3 loc, Map map, WipeMode wipeMode)
+		static Thing Spawn(ThingDef def, IntVec3 loc, Map map, WipeMode wipeMode, JobDriver_ClearPollution driver)
 		{
 			var thing = GenSpawn.Spawn(def, loc, map, wipeMode);
-			var contamination = map.GetContamination(loc);
+			var contamination = map.GetContamination(driver.job.targetA.Cell);
 			thing.AddContamination(contamination, null, ZombieSettings.Values.contamination.wastePackAdd);
 			return thing;
 		}
 
 		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-		{
-			var from = m_Spawn;
-			var to = SymbolExtensions.GetMethodInfo(() => Spawn(default, default, default, default));
-			return instructions.MethodReplacer(from, to);
-		}
+			=> instructions.ExtraArgumentsTranspiler(typeof(GenSpawn), () => Spawn(default, default, default, default, default), new[] { Ldarg_0 }, 1);
 	}
 
 	[HarmonyPatch]

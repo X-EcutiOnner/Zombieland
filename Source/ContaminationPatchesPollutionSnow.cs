@@ -16,10 +16,24 @@ namespace ZombieLand
 		{
 			foreach (var toil in toils)
 			{
-				GridUtility_Unpollute_Patch.subject = __instance.pawn;
+				if (toil.tickIntervalAction != null)
+				{
+					var action = toil.tickIntervalAction;
+					toil.tickIntervalAction = delta =>
+					{
+						GridUtility_Unpollute_Patch.subject = __instance.pawn;
+						try
+						{
+							action(delta);
+						}
+						finally
+						{
+							GridUtility_Unpollute_Patch.subject = null;
+						}
+					};
+				}
 				yield return toil;
 			}
-			GridUtility_Unpollute_Patch.subject = null;
 		}
 	}
 
