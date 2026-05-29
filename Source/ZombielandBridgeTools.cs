@@ -2608,6 +2608,131 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/child_zombie_generation_contract", Description = "Verify child chance creates child normal zombies without overriding suicide bomber or tanky body rules.")]
+		public static object ChildZombieGenerationContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			if (BodyTypeDefOf.Child == null)
+			{
+				return new
+				{
+					success = true,
+					skipped = true,
+					reason = "BodyTypeDefOf.Child is unavailable in this RimWorld build."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland TickManager is attached to the current map."
+				};
+			}
+
+			var oldChildChance = ZombieSettings.Values.childChance;
+			var spawnedZombies = new List<Zombie>();
+			try
+			{
+				ZombieSettings.Values.childChance = 1f;
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				var cases = new[]
+				{
+					new { name = "normal_child", type = ZombieType.Normal, expectedBody = BodyTypeDefOf.Child, expectedChild = true },
+					new { name = "suicide_bomber_adult", type = ZombieType.SuicideBomber, expectedBody = BodyTypeDefOf.Hulk, expectedChild = false },
+					new { name = "tanky_adult", type = ZombieType.TankyOperator, expectedBody = BodyTypeDefOf.Fat, expectedChild = false }
+				};
+				var samples = new List<object>();
+				var success = true;
+				for (var i = 0; i < cases.Length; i++)
+				{
+					var entry = cases[i];
+					var cellRoot = root + new IntVec3((i - 1) * 4, 0, 8);
+					if (TryFindClearSpawnCell(map, cellRoot, 20f, out var cell, out var cellError) == false)
+					{
+						success = false;
+						samples.Add(new
+						{
+							entry.name,
+							success = false,
+							cellError
+						});
+						continue;
+					}
+
+					Rand.PushState(6200 + i);
+					Zombie zombie;
+					try
+					{
+						zombie = ZombieRuntimeActions.SpawnZombie(cell, map, entry.type, true);
+					}
+					finally
+					{
+						Rand.PopState();
+					}
+
+					if (zombie != null)
+						spawnedZombies.Add(zombie);
+					var bodyType = zombie?.story?.bodyType;
+					var isChild = bodyType == BodyTypeDefOf.Child;
+					var age = zombie?.ageTracker?.AgeBiologicalYearsFloat ?? -1f;
+					var ageMatches = entry.expectedChild
+						? age >= 4.5f && age <= 15.6f
+						: age >= 16.4f;
+					var matched = zombie != null
+						&& bodyType == entry.expectedBody
+						&& isChild == entry.expectedChild
+						&& MatchesRequestedZombieType(zombie, entry.type)
+						&& ageMatches;
+					success &= matched;
+					samples.Add(new
+					{
+						entry.name,
+						success = matched,
+						requestedType = entry.type.ToString(),
+						expectedBody = entry.expectedBody.defName,
+						bodyType = bodyType?.defName,
+						expectedChild = entry.expectedChild,
+						isChild,
+						age,
+						ageMatches,
+						zombie = DescribeZombie(zombie)
+					});
+				}
+
+				return new
+				{
+					success,
+					childChance = ZombieSettings.Values.childChance,
+					sourcePath = "ZombieGenerator.SpawnZombieIterativ -> isChild excludes SuicideBomber and Tanky",
+					samples
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.childChance = oldChildChance;
+				foreach (var zombie in spawnedZombies.Distinct())
+				{
+					_ = tickManager.allZombiesCached?.Remove(zombie);
+					_ = tickManager.hummingZombies?.Remove(zombie);
+					_ = tickManager.tankZombies?.Remove(zombie);
+					if (zombie.Destroyed == false)
+						zombie.Destroy(DestroyMode.Vanish);
+				}
+			}
+		}
+
 		[Tool("zombieland/incident_scheduling_contract", Description = "Verify zombie incident scheduler skip reasons and positive incident-size calculation.")]
 		public static object IncidentSchedulingContract()
 		{
