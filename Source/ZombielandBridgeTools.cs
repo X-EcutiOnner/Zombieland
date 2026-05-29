@@ -1676,6 +1676,151 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/colonist_avoidance_interrupts_job", Description = "Build a real avoid grid around a zombie and verify a non-forced colonist job is interrupted into a Flee job.")]
+		public static object ColonistAvoidanceInterruptsJob()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			ZombieSettings.Values.betterZombieAvoidance = true;
+			try
+			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				actor.workSettings?.DisableAll();
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoAvoidZombies = true;
+
+				var zombieCell = GenRadial.RadialCellsAround(actorCell, 3f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.OrderBy(cell => cell.DistanceToSquared(actorCell))
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "No nearby clear zombie cell was found."
+					};
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "ZombieGenerator.SpawnZombie returned no zombie."
+					};
+				}
+
+				zombie.state = ZombieState.Tracking;
+				var tickManager = map.GetComponent<TickManager>();
+				var specs = new List<ZombieCostSpecs>
+				{
+					new()
+					{
+						position = zombie.Position,
+						radius = Tools.ZombieAvoidRadius(zombie),
+						maxCosts = TickManager.ZombieMaxCosts(zombie)
+					}
+				};
+				tickManager.avoidGrid = Tools.avoider.UpdateZombiePositionsImmediately(map, specs);
+				var actorAvoidCost = tickManager.avoidGrid.GetCosts()[actor.Position.x + actor.Position.z * map.Size.x];
+				var inAvoidDangerBefore = tickManager.avoidGrid.InAvoidDanger(actor);
+				var safeCells = GenRadial.RadialCellsAround(actor.Position, 8f, true)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => tickManager.avoidGrid.ShouldAvoid(map, cell) == false)
+					.Take(8)
+					.Select(ZombieRuntimeActions.DescribeCell)
+					.ToArray();
+
+				var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				waitJob.playerForced = false;
+				actor.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+				var startedJob = actor.CurJobDef?.defName;
+				var samples = new List<object>();
+				var tickHit = -1;
+				const int maxTicks = 30;
+
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					var currentJob = actor.CurJob;
+					if (tick == 1 || tick == maxTicks || currentJob?.def == JobDefOf.Flee)
+					{
+						samples.Add(new
+						{
+							tick,
+							job = actor.CurJobDef?.defName,
+							currentJob?.playerForced,
+							target = currentJob?.targetA.Cell.IsValid == true ? ZombieRuntimeActions.DescribeCell(currentJob.targetA.Cell) : null
+						});
+					}
+
+					if (currentJob?.def == JobDefOf.Flee)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var fleeJob = actor.CurJob;
+				var fleeDestination = fleeJob?.targetA.Cell ?? IntVec3.Invalid;
+				var fleeDestinationAvoids = fleeDestination.IsValid && tickManager.avoidGrid.ShouldAvoid(map, fleeDestination) == false;
+
+				return new
+				{
+					success = inAvoidDangerBefore
+						&& startedJob == JobDefOf.Wait_Combat.defName
+						&& tickHit > 0
+						&& fleeJob?.playerForced == true
+						&& fleeDestinationAvoids,
+					destroyedZombies,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					startedJob,
+					inAvoidDangerBefore,
+					actorAvoidCost,
+					safeCells,
+					tickHit,
+					maxTicks,
+					fleeDestination = fleeDestination.IsValid ? ZombieRuntimeActions.DescribeCell(fleeDestination) : null,
+					fleeDestinationAvoids,
+					finalJob = actor.CurJobDef?.defName,
+					finalJobPlayerForced = actor.CurJob?.playerForced,
+					samples
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+			}
+		}
+
 		[Tool("zombieland/detonate_suicide_bomber", Description = "Kill a suicide bomber through Zombie.Kill, verify it queued a Zombieland explosion, then execute the explosion.")]
 		public static object DetonateSuicideBomber(
 			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned suicide bomber is used.", Required = false, DefaultValue = "")] string target = "")
