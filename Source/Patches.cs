@@ -4082,7 +4082,7 @@ namespace ZombieLand
 				if (__result == false)
 					return;
 
-				if (__instance.parent is Zombie && ZombieSettings.Values.zombiesBurnLonger && Rand.Chance(0.2f))
+				if (IsZombielandPawn(__instance.parent as Pawn) && ZombieSettings.Values.zombiesBurnLonger && Rand.Chance(0.2f))
 					__result = false;
 			}
 		}
@@ -4099,7 +4099,7 @@ namespace ZombieLand
 				if (ZombieSettings.Values.zombiesBurnLonger == false)
 					return num;
 
-				if (pawn is not Zombie)
+				if (IsZombielandPawn(pawn) == false)
 					return num;
 
 				return Math.Max(2, num / 2);

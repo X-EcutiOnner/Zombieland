@@ -80,6 +80,32 @@ namespace ZombieLand
 			public int combatTextDelta;
 		}
 
+		sealed class FireDamageSample
+		{
+			public string kind;
+			public int seed;
+			public bool burnLonger;
+			public float injuryBefore;
+			public float injuryAfter;
+			public float injuryDelta;
+			public bool deadAfter;
+			public object pawn;
+			public string error;
+		}
+
+		sealed class FireDamageComparison
+		{
+			public string kind;
+			public float disabledTotal;
+			public float enabledTotal;
+			public float delta;
+			public float[] disabledDeltas;
+			public float[] enabledDeltas;
+			public int disabledDeadCount;
+			public int enabledDeadCount;
+			public string[] errors;
+		}
+
 		static readonly LineupEntry[] referenceLineup =
 		{
 			new(ZombieType.Electrifier, 0, 0),
@@ -359,6 +385,153 @@ namespace ZombieLand
 			}
 
 			return true;
+		}
+
+		static float TotalInjurySeverity(Pawn pawn)
+		{
+			return pawn?.health?.hediffSet?.hediffs?
+				.OfType<Hediff_Injury>()
+				.Sum(hediff => hediff.Severity) ?? 0f;
+		}
+
+		static Pawn SpawnFireFixturePawn(Map map, IntVec3 cell, string kind)
+		{
+			if (kind == "human")
+			{
+				var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(human, cell, map, Rot4.South);
+				DisablePawnWork(human);
+				return human;
+			}
+
+			if (kind == "normal")
+				return ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+
+			if (kind == "spitter")
+			{
+				var spitter = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieSpitter, Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies));
+				GenSpawn.Spawn(spitter, cell, map, Rot4.South, WipeMode.Vanish, false);
+				return spitter;
+			}
+
+			if (kind == "blob")
+			{
+				var blob = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieBlob, Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies));
+				GenSpawn.Spawn(blob, cell, map, Rot4.South, WipeMode.Vanish, false);
+				return blob;
+			}
+
+			return null;
+		}
+
+		static void NormalizeFireDamagePawn(Pawn pawn)
+		{
+			if (pawn == null)
+				return;
+			pawn.apparel?.DestroyAll();
+			pawn.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			pawn.inventory?.DestroyAll();
+			foreach (var hediff in pawn.health?.hediffSet?.hediffs?.ToArray() ?? Array.Empty<Hediff>())
+				pawn.health.RemoveHediff(hediff);
+		}
+
+		static FireDamageSample SampleFireDamage(Map map, Fire fire, IntVec3 cell, string kind, bool burnLonger, int seed)
+		{
+			Pawn pawn = null;
+			var originalBurnLonger = ZombieSettings.Values.zombiesBurnLonger;
+			try
+			{
+				foreach (var existingPawn in cell.GetThingList(map).OfType<Pawn>().ToArray())
+					existingPawn.Destroy(DestroyMode.Vanish);
+
+				pawn = SpawnFireFixturePawn(map, cell, kind);
+				if (pawn == null)
+				{
+					return new FireDamageSample
+					{
+						kind = kind,
+						seed = seed,
+						burnLonger = burnLonger,
+						error = $"Could not spawn {kind} fire-damage fixture pawn."
+					};
+				}
+
+				NormalizeFireDamagePawn(pawn);
+				var before = TotalInjurySeverity(pawn);
+				ZombieSettings.Values.zombiesBurnLonger = burnLonger;
+				Rand.PushState(seed);
+				try
+				{
+					if (TryDoFireDamage(fire, pawn, out var error) == false)
+					{
+						return new FireDamageSample
+						{
+							kind = kind,
+							seed = seed,
+							burnLonger = burnLonger,
+							injuryBefore = before,
+							injuryAfter = TotalInjurySeverity(pawn),
+							injuryDelta = TotalInjurySeverity(pawn) - before,
+							deadAfter = pawn.Dead,
+							pawn = DescribePawn(pawn),
+							error = error
+						};
+					}
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				var after = TotalInjurySeverity(pawn);
+				return new FireDamageSample
+				{
+					kind = kind,
+					seed = seed,
+					burnLonger = burnLonger,
+					injuryBefore = before,
+					injuryAfter = after,
+					injuryDelta = after - before,
+					deadAfter = pawn.Dead,
+					pawn = DescribePawn(pawn)
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.zombiesBurnLonger = originalBurnLonger;
+				if (pawn != null && pawn.Destroyed == false)
+					pawn.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static FireDamageComparison CompareFireDamage(Map map, Fire fire, IntVec3 cell, string kind, int samples, int seed)
+		{
+			var disabled = new FireDamageSample[samples];
+			var enabled = new FireDamageSample[samples];
+			for (var i = 0; i < samples; i++)
+			{
+				var sampleSeed = seed + i;
+				disabled[i] = SampleFireDamage(map, fire, cell, kind, false, sampleSeed);
+				enabled[i] = SampleFireDamage(map, fire, cell, kind, true, sampleSeed);
+			}
+
+			var disabledTotal = disabled.Sum(sample => sample.injuryDelta);
+			var enabledTotal = enabled.Sum(sample => sample.injuryDelta);
+			return new FireDamageComparison
+			{
+				kind = kind,
+				disabledTotal = disabledTotal,
+				enabledTotal = enabledTotal,
+				delta = disabledTotal - enabledTotal,
+				disabledDeltas = disabled.Select(sample => sample.injuryDelta).ToArray(),
+				enabledDeltas = enabled.Select(sample => sample.injuryDelta).ToArray(),
+				disabledDeadCount = disabled.Count(sample => sample.deadAfter),
+				enabledDeadCount = enabled.Count(sample => sample.deadAfter),
+				errors = disabled.Concat(enabled)
+					.Where(sample => sample.error != null)
+					.Select(sample => $"{sample.kind}:{sample.seed}:{sample.burnLonger}:{sample.error}")
+					.ToArray()
+			};
 		}
 
 		static object DescribeZombie(Pawn pawn)
@@ -3171,45 +3344,58 @@ namespace ZombieLand
 				.Where(cell => cell.Fogged(map) == false)
 				.Where(cell => map.roofGrid.RoofAt(cell) == null)
 				.Where(cell => cell.GetThingList(map).Any(thing => thing is Pawn) == false)
-				.Take(2)
+				.Take(4)
 				.ToArray();
-			if (fixtureCells.Length < 2)
+			if (fixtureCells.Length < 4)
 			{
 				return new
 				{
 					success = false,
-					error = "Could not find two clear unroofed fixture cells for rain-vulnerability sampling."
+					error = "Could not find four clear unroofed fixture cells for rain-vulnerability sampling."
 				};
 			}
 
 			var humanCell = fixtureCells[0];
 			var zombieCell = fixtureCells[1];
+			var spitterCell = fixtureCells[2];
+			var blobCell = fixtureCells[3];
 			foreach (var cell in fixtureCells)
 			{
 				ClearGasAt(map, cell);
-				foreach (var fire in cell.GetThingList(map).OfType<Fire>().ToArray())
-					fire.Destroy();
+				foreach (var existingFire in cell.GetThingList(map).OfType<Fire>().ToArray())
+					existingFire.Destroy();
 			}
 
-			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
-			DisablePawnWork(human);
+			var human = SpawnFireFixturePawn(map, humanCell, "human");
 			FireUtility.TryAttachFire(human, 1f, null);
 			var humanFire = human.GetAttachment(ThingDefOf.Fire) as Fire;
 
-			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			var zombie = SpawnFireFixturePawn(map, zombieCell, "normal");
 			FireUtility.TryAttachFire(zombie, 1f, null);
 			var zombieFire = zombie?.GetAttachment(ThingDefOf.Fire) as Fire;
-			if (humanFire == null || zombieFire == null)
+
+			var spitter = SpawnFireFixturePawn(map, spitterCell, "spitter");
+			FireUtility.TryAttachFire(spitter, 1f, null);
+			var spitterFire = spitter?.GetAttachment(ThingDefOf.Fire) as Fire;
+
+			var blob = SpawnFireFixturePawn(map, blobCell, "blob");
+			FireUtility.TryAttachFire(blob, 1f, null);
+			var blobFire = blob?.GetAttachment(ThingDefOf.Fire) as Fire;
+
+			if (humanFire == null || zombieFire == null || spitterFire == null || blobFire == null)
 			{
 				return new
 				{
 					success = false,
 					human = DescribePawn(human),
 					zombie = DescribeZombie(zombie),
+					spitter = DescribeZombie(spitter),
+					blob = DescribeZombie(blob),
 					humanFire = ZombieRuntimeActions.StableThingId(humanFire),
 					zombieFire = ZombieRuntimeActions.StableThingId(zombieFire),
-					error = "Could not attach both human and zombie fires."
+					spitterFire = ZombieRuntimeActions.StableThingId(spitterFire),
+					blobFire = ZombieRuntimeActions.StableThingId(blobFire),
+					error = "Could not attach human, normal zombie, spitter, and blob fires."
 				};
 			}
 
@@ -3237,6 +3423,26 @@ namespace ZombieLand
 						error = zombieError
 					};
 				}
+				if (TrySampleRainVulnerability(spitterFire, cappedSamples, seed + 3, out var spitterTrueEnabled, out var spitterFalseEnabled, out var spitterError) == false)
+				{
+					return new
+					{
+						success = false,
+						spitter = DescribeZombie(spitter),
+						spitterFire = ZombieRuntimeActions.StableThingId(spitterFire),
+						error = spitterError
+					};
+				}
+				if (TrySampleRainVulnerability(blobFire, cappedSamples, seed + 4, out var blobTrueEnabled, out var blobFalseEnabled, out var blobError) == false)
+				{
+					return new
+					{
+						success = false,
+						blob = DescribeZombie(blob),
+						blobFire = ZombieRuntimeActions.StableThingId(blobFire),
+						error = blobError
+					};
+				}
 
 				ZombieSettings.Values.zombiesBurnLonger = false;
 				if (TrySampleRainVulnerability(zombieFire, cappedSamples, seed + 2, out var zombieTrueDisabled, out var zombieFalseDisabled, out var disabledError) == false)
@@ -3249,30 +3455,78 @@ namespace ZombieLand
 						error = disabledError
 					};
 				}
+				if (TrySampleRainVulnerability(spitterFire, cappedSamples, seed + 5, out var spitterTrueDisabled, out var spitterFalseDisabled, out var spitterDisabledError) == false)
+				{
+					return new
+					{
+						success = false,
+						spitter = DescribeZombie(spitter),
+						spitterFire = ZombieRuntimeActions.StableThingId(spitterFire),
+						error = spitterDisabledError
+					};
+				}
+				if (TrySampleRainVulnerability(blobFire, cappedSamples, seed + 6, out var blobTrueDisabled, out var blobFalseDisabled, out var blobDisabledError) == false)
+				{
+					return new
+					{
+						success = false,
+						blob = DescribeZombie(blob),
+						blobFire = ZombieRuntimeActions.StableThingId(blobFire),
+						error = blobDisabledError
+					};
+				}
 
 				var humanVanilla = humanTrueEnabled == cappedSamples && humanFalseEnabled == 0;
 				var zombieSometimesProtected = zombieTrueEnabled > 0 && zombieFalseEnabled > 0;
+				var spitterSometimesProtected = spitterTrueEnabled > 0 && spitterFalseEnabled > 0;
+				var blobSometimesProtected = blobTrueEnabled > 0 && blobFalseEnabled > 0;
 				var zombieVanillaWhenDisabled = zombieTrueDisabled == cappedSamples && zombieFalseDisabled == 0;
+				var spitterVanillaWhenDisabled = spitterTrueDisabled == cappedSamples && spitterFalseDisabled == 0;
+				var blobVanillaWhenDisabled = blobTrueDisabled == cappedSamples && blobFalseDisabled == 0;
 				return new
 				{
-					success = humanVanilla && zombieSometimesProtected && zombieVanillaWhenDisabled,
+					success = humanVanilla
+						&& zombieSometimesProtected
+						&& spitterSometimesProtected
+						&& blobSometimesProtected
+						&& zombieVanillaWhenDisabled
+						&& spitterVanillaWhenDisabled
+						&& blobVanillaWhenDisabled,
 					seed,
 					samples = cappedSamples,
 					humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
 					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					spitterCell = ZombieRuntimeActions.DescribeCell(spitterCell),
+					blobCell = ZombieRuntimeActions.DescribeCell(blobCell),
 					human = DescribePawn(human),
 					zombie = DescribeZombie(zombie),
+					spitter = DescribeZombie(spitter),
+					blob = DescribeZombie(blob),
 					humanFire = ZombieRuntimeActions.StableThingId(humanFire),
 					zombieFire = ZombieRuntimeActions.StableThingId(zombieFire),
+					spitterFire = ZombieRuntimeActions.StableThingId(spitterFire),
+					blobFire = ZombieRuntimeActions.StableThingId(blobFire),
 					humanVanilla,
 					zombieSometimesProtected,
+					spitterSometimesProtected,
+					blobSometimesProtected,
 					zombieVanillaWhenDisabled,
+					spitterVanillaWhenDisabled,
+					blobVanillaWhenDisabled,
 					humanTrueEnabled,
 					humanFalseEnabled,
 					zombieTrueEnabled,
 					zombieFalseEnabled,
+					spitterTrueEnabled,
+					spitterFalseEnabled,
+					blobTrueEnabled,
+					blobFalseEnabled,
 					zombieTrueDisabled,
 					zombieFalseDisabled,
+					spitterTrueDisabled,
+					spitterFalseDisabled,
+					blobTrueDisabled,
+					blobFalseDisabled,
 					originalBurnLonger,
 					restoredBurnLonger = originalBurnLonger
 				};
@@ -3281,6 +3535,101 @@ namespace ZombieLand
 			{
 				ZombieSettings.Values.zombiesBurnLonger = originalBurnLonger;
 			}
+		}
+
+		[Tool("zombieland/zombie_fire_damage_reduction_contract", Description = "Verify zombiesBurnLonger reduces real Fire.DoFireDamage for all Zombieland pawn fire fixtures while humans still take ordinary fire damage.")]
+		public static object ZombieFireDamageReductionContract(
+			[ToolParameter(Description = "Deterministic Rand seed used for paired Fire.DoFireDamage samples.", Required = false, DefaultValue = 747474)] int seed = 747474,
+			[ToolParameter(Description = "Number of paired damage samples per pawn kind.", Required = false, DefaultValue = 12)] int samples = 12)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (fireDoFireDamageMethod == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find Fire.DoFireDamage(Thing)."
+				};
+			}
+
+			var cappedSamples = Math.Max(4, Math.Min(samples, 30));
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var fixtureCells = GenRadial.RadialCellsAround(root, 24f, true)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetThingList(map).Any(thing => thing is Pawn) == false)
+				.Take(5)
+				.ToArray();
+			if (fixtureCells.Length < 5)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find five clear fixture cells for fire-damage sampling."
+				};
+			}
+
+			var fireCell = fixtureCells[0];
+			foreach (var cell in fixtureCells)
+			{
+				ClearGasAt(map, cell);
+				foreach (var existingFire in cell.GetThingList(map).OfType<Fire>().ToArray())
+					existingFire.Destroy();
+			}
+
+			FireUtility.TryStartFireIn(fireCell, map, Fire.MaxFireSize, null);
+			var fire = fireCell.GetThingList(map).OfType<Fire>().FirstOrDefault();
+			if (fire == null)
+			{
+				return new
+				{
+					success = false,
+					fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
+					error = "Could not start a real fire for fire-damage sampling."
+				};
+			}
+			fire.fireSize = Fire.MaxFireSize;
+
+			var human = CompareFireDamage(map, fire, fixtureCells[1], "human", cappedSamples, seed);
+			var normal = CompareFireDamage(map, fire, fixtureCells[2], "normal", cappedSamples, seed + 1000);
+			var spitter = CompareFireDamage(map, fire, fixtureCells[3], "spitter", cappedSamples, seed + 2000);
+			var blob = CompareFireDamage(map, fire, fixtureCells[4], "blob", cappedSamples, seed + 3000);
+
+			var tolerance = 0.001f;
+			var humanFireDamageControl = human.disabledTotal > tolerance && human.enabledTotal > tolerance;
+			var normalReduced = normal.enabledTotal < normal.disabledTotal - tolerance;
+			var spitterReduced = spitter.enabledTotal < spitter.disabledTotal - tolerance;
+			var blobReduced = blob.enabledTotal < blob.disabledTotal - tolerance;
+			var noErrors = new[] { human, normal, spitter, blob }.Any(comparison => comparison.errors.Length > 0) == false;
+
+			return new
+			{
+				success = noErrors && humanFireDamageControl && normalReduced && spitterReduced && blobReduced,
+				seed,
+				samples = cappedSamples,
+				fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
+				fire = ZombieRuntimeActions.StableThingId(fire),
+				fireSize = fire.fireSize,
+				humanFireDamageControl,
+				normalReduced,
+				spitterReduced,
+				blobReduced,
+				noErrors,
+				human,
+				normal,
+				spitter,
+				blob,
+				tolerance
+			};
 		}
 
 		[Tool("zombieland/zombie_damage_log_association_suppression", Description = "Verify RimWorld DamageResult combat-log association fills human hediff logs but skips all Zombieland pawn types.")]
