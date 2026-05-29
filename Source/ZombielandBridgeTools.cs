@@ -3887,6 +3887,115 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_hoard_pather_failure_contract", Description = "Verify the hoarding contamination job survives a pather failure without ending as ErroredPather.")]
+		public static object ContaminationHoardPatherFailureContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryBuildFogRoomFixture(map, root, 32f, out var fixture, out var fixtureError) == false)
+				return fixtureError;
+			if (TryFindClearBuildingFootprint(map, ThingDefOf.Bed, fixture.interiorRect.CenterCell, 4f, out var bedCell, out var bedError) == false)
+				return bedError;
+
+			var bed = ThingMaker.MakeThing(ThingDefOf.Bed, GenStuff.DefaultStuffFor(ThingDefOf.Bed)) as Building_Bed;
+			if (bed == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create a bed for the hoarding pather-failure fixture."
+				};
+			}
+			bed.SetFactionDirect(Faction.OfPlayer);
+			GenSpawn.Spawn(bed, bedCell, map, Rot4.North, WipeMode.Vanish, false);
+
+			var hoarderCell = fixture.interiorRect.Cells
+				.Where(cell => cell.InBounds(map)
+					&& cell.Standable(map)
+					&& cell.GetEdifice(map) == null
+					&& cell.GetThingList(map).Any(thing => thing is Pawn) == false)
+				.OrderByDescending(cell => cell.DistanceToSquared(bedCell))
+				.FirstOrDefault();
+			if (hoarderCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find a clear hoarder cell in the fixture room."
+				};
+			}
+
+			var hoarder = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(hoarder, hoarderCell, map, Rot4.South);
+			DisablePawnWork(hoarder);
+			hoarder.needs?.AddOrRemoveNeedsAsAppropriate();
+			hoarder.ClearContamination();
+			hoarder.mindState?.mentalStateHandler?.Reset();
+			bed.CompAssignableToPawn?.TryAssignPawn(hoarder);
+			bed.NotifyRoomAssignedPawnsChanged();
+
+			const float hoardingContamination = 0.54f;
+			var factor = Mathf.InverseLerp(0.45f, 0.60f, hoardingContamination);
+			var applied = ContaminationEffect.Hoarding(hoarder, factor);
+			AdvanceGameTicks(1);
+			var driver = hoarder.jobs?.curDriver as JobDriver_ContaminationHoard;
+			if (applied == false || driver == null)
+			{
+				return new
+				{
+					success = false,
+					applied,
+					hoarder = DescribePawn(hoarder),
+					job = hoarder.CurJobDef?.defName,
+					error = "The hoarding contamination job did not start."
+				};
+			}
+
+			var unreachableThing = ThingMaker.MakeThing(ThingDefOf.Silver);
+			unreachableThing.stackCount = 1;
+			driver.state = JobDriver_ContaminationHoard.State.moveToThing;
+			driver.thing = unreachableThing;
+			driver.rejectedThings.Clear();
+			driver.Notify_PatherFailed();
+			var driverAfterFailure = hoarder.jobs?.curDriver as JobDriver_ContaminationHoard;
+			var rejected = driverAfterFailure?.rejectedThings.Contains(unreachableThing) ?? false;
+			var survived = driverAfterFailure != null
+				&& hoarder.CurJobDef == EffectDefs.ContaminationJobHoard
+				&& driverAfterFailure.state == JobDriver_ContaminationHoard.State.findThing
+				&& driverAfterFailure.thing == null
+				&& rejected;
+
+			return new
+			{
+				success = survived,
+				hoarder = DescribePawn(hoarder),
+				hoardingContamination,
+				applied,
+				jobAfterFailure = hoarder.CurJobDef?.defName,
+				driverStateAfterFailure = driverAfterFailure?.state.ToString(),
+				thingCleared = driverAfterFailure?.thing == null,
+				rejected,
+				survived
+			};
+		}
+
 		[Tool("zombieland/contamination_breakdown_contract", Description = "Verify the breakdown contamination effect starts the real job, immediately picks a flee path, and survives RimWorld's 30-tick think-tree pass.")]
 		public static object ContaminationBreakdownContract()
 		{

@@ -18,6 +18,7 @@ namespace ZombieLand
 		}
 
 		public List<IntVec3> storage = new();
+		public HashSet<Thing> rejectedThings = new();
 		public Room room;
 		public Thing thing;
 		public IntVec3 cell = IntVec3.Invalid;
@@ -45,7 +46,10 @@ namespace ZombieLand
 			var things = Map.regionGrid.allRooms
 				.Where(r => r.IsHuge == false && r != room)
 				.SelectMany(room => room.ContainedAndAdjacentThings)
-				.Where(t => t.def.EverHaulable && pawn.holdingOwner.CanAcceptAnyOf(t, true) && pawn.CanReach(t, PathEndMode.ClosestTouch, Danger.Deadly))
+				.Where(t => rejectedThings.Contains(t) == false
+					&& t.def.EverHaulable
+					&& pawn.holdingOwner.CanAcceptAnyOf(t, true)
+					&& pawn.CanReach(t, PathEndMode.ClosestTouch, Danger.Deadly))
 				.ToList();
 			if (things.Count == 0)
 				return null;
@@ -124,7 +128,26 @@ namespace ZombieLand
 
 		public override void Notify_PatherFailed()
 		{
-			base.Notify_PatherFailed();
+			if (state == State.moveToThing)
+			{
+				if (thing != null)
+					rejectedThings.Add(thing);
+				thing = null;
+				pawn.pather.StopDead();
+				state = State.findThing;
+				return;
+			}
+
+			if (state == State.moveToStorage)
+			{
+				_ = pawn.carryTracker.TryDropCarriedThing(pawn.Position, ThingPlaceMode.Near, out _);
+				thing = null;
+				pawn.pather.StopDead();
+				state = State.findThing;
+				return;
+			}
+
+			EndJobWith(JobCondition.Succeeded);
 		}
 	}
 }
