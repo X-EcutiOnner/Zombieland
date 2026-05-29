@@ -10,7 +10,7 @@ using Verse.AI;
 
 namespace ZombieLand
 {
-	public sealed class ZombielandBridgeTools
+	public sealed partial class ZombielandBridgeTools
 	{
 		struct LineupEntry
 		{
@@ -1225,6 +1225,36 @@ namespace ZombieLand
 			ZombieTicker.managers = Find.Maps.Select(map => map.GetComponent<TickManager>()).OfType<TickManager>().ToArray();
 			for (var i = 0; i < ticks; i++)
 				tickManager.DoSingleTick();
+		}
+
+		static (SettingsGroup values, List<SettingsKeyFrame> valuesOverTime) SnapshotZombieSettings()
+		{
+			return (
+				ZombieSettings.Values?.MakeCopy(),
+				ZombieSettings.ValuesOverTime?.Select(keyFrame => keyFrame.Copy()).ToList()
+			);
+		}
+
+		static void ApplyZombieSettingsOverride(Action<SettingsGroup> configure)
+		{
+			if (configure == null)
+				return;
+
+			if (ZombieSettings.Values != null)
+				configure(ZombieSettings.Values);
+
+			if (ZombieSettings.ValuesOverTime != null)
+				foreach (var keyFrame in ZombieSettings.ValuesOverTime)
+					if (keyFrame?.values != null)
+						configure(keyFrame.values);
+		}
+
+		static void RestoreZombieSettings((SettingsGroup values, List<SettingsKeyFrame> valuesOverTime) snapshot)
+		{
+			if (snapshot.values != null)
+				ZombieSettings.Values = snapshot.values;
+			if (snapshot.valuesOverTime != null)
+				ZombieSettings.ValuesOverTime = snapshot.valuesOverTime;
 		}
 
 		static bool TryFindAdjacentMoveCell(Pawn pawn, out IntVec3 cell)
@@ -11136,209 +11166,6 @@ namespace ZombieLand
 				isRopedOrConfused = zombie.IsRopedOrConfused,
 				samples
 			};
-		}
-
-		[Tool("zombieland/zombie_eats_corpse_contract", Description = "Run a real Stumble job beside a flesh corpse and verify the source-derived eating delay removes a body part only when corpse eating is enabled.")]
-		public static object ZombieEatsCorpseContract()
-		{
-			var map = CurrentMap;
-			if (map == null)
-			{
-				return new
-				{
-					success = false,
-					error = "No current map is loaded."
-				};
-			}
-
-			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
-			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
-			var oldEatDowned = ZombieSettings.Values.zombiesEatDowned;
-			var oldEatCorpses = ZombieSettings.Values.zombiesEatCorpses;
-			var allCasesSucceeded = true;
-
-			bool TryFindEatingFixtureCells(IntVec3 rootCell, out IntVec3 zombieCell, out IntVec3 corpseCell, out object error)
-			{
-				zombieCell = IntVec3.Invalid;
-				corpseCell = IntVec3.Invalid;
-				error = null;
-				foreach (var candidate in GenRadial.RadialCellsAround(rootCell, 20f, true))
-				{
-					if (candidate.InBounds(map) == false || candidate.Standable(map) == false || candidate.Fogged(map))
-						continue;
-					if (candidate.GetThingList(map).Any(thing => thing is Pawn || thing is Corpse))
-						continue;
-					foreach (var offset in GenAdj.AdjacentCellsAround)
-					{
-						var adjacent = candidate + offset;
-						if (adjacent.InBounds(map) == false || adjacent.Standable(map) == false || adjacent.Fogged(map))
-							continue;
-						if (adjacent.GetThingList(map).Any(thing => thing is Pawn || thing is Corpse))
-							continue;
-						zombieCell = candidate;
-						corpseCell = adjacent;
-						return true;
-					}
-				}
-
-				error = new
-				{
-					success = false,
-					error = $"No adjacent zombie/corpse eating fixture cells were found near ({rootCell.x}, {rootCell.z})."
-				};
-				return false;
-			}
-
-			static int MissingPartCount(Pawn pawn)
-				=> pawn?.health?.hediffSet?.hediffs?.OfType<Hediff_MissingPart>().Count() ?? 0;
-
-			object RunCase(string name, bool eatCorpses, IntVec3 caseRoot)
-			{
-				if (TryFindEatingFixtureCells(caseRoot, out var zombieCell, out var corpseCell, out var error) == false)
-				{
-					allCasesSucceeded = false;
-					return new { name, success = false, error };
-				}
-
-				ZombieSettings.Values.zombiesEatDowned = false;
-				ZombieSettings.Values.zombiesEatCorpses = eatCorpses;
-
-				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
-				if (zombie == null)
-				{
-					allCasesSucceeded = false;
-					return new
-					{
-						name,
-						success = false,
-						error = "ZombieGenerator.SpawnZombie returned no eating test zombie.",
-						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell)
-					};
-				}
-
-				zombie.story.bodyType = BodyTypeDefOf.Fat;
-				zombie.pather?.StopDead();
-				zombie.jobs?.EndCurrentJob(JobCondition.InterruptForced);
-				zombie.state = ZombieState.Wandering;
-				zombie.raging = 0;
-
-				var corpsePawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-				GenSpawn.Spawn(corpsePawn, corpseCell, map, WipeMode.Vanish);
-				DisablePawnWork(corpsePawn);
-				if (ZombieRuntimeActions.KillPawnToCorpse(corpsePawn, out var corpse, out var corpseError) == false)
-				{
-					allCasesSucceeded = false;
-					return new
-					{
-						name,
-						success = false,
-						zombie = DescribeZombie(zombie),
-						corpsePawn = DescribePawn(corpsePawn),
-						error = corpseError
-					};
-				}
-				corpse.SetForbidden(false, false);
-
-				var missingBefore = MissingPartCount(corpse.InnerPawn);
-				var eatDelayTicks = Constants.EAT_DELAY_TICKS / 4;
-				var maxTicks = eatCorpses ? eatDelayTicks + 8 : 8;
-				var tickHit = -1;
-				var samples = new List<object>();
-				zombie.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
-
-				for (var tick = 1; tick <= maxTicks; tick++)
-				{
-					AdvanceGameTicks(1);
-					var driver = zombie.jobs?.curDriver as JobDriver_Stumble;
-					var missingNow = MissingPartCount(corpse.InnerPawn);
-					if (tick == 1 || tick == maxTicks || tick % 60 == 0 || missingNow > missingBefore)
-					{
-						samples.Add(new
-						{
-							tick,
-							zombieJob = zombie.CurJobDef?.defName,
-							eatTarget = driver?.eatTarget == null ? null : ZombieRuntimeActions.StableThingId(driver.eatTarget),
-							eatDelayCounter = driver?.eatDelayCounter ?? -1,
-							eatDelay = driver?.eatDelay ?? -1,
-							missingParts = missingNow,
-							corpseSpawned = corpse.Spawned,
-							corpseDestroyed = corpse.Destroyed
-						});
-					}
-
-					if (missingNow > missingBefore)
-					{
-						tickHit = tick;
-						break;
-					}
-				}
-
-				var driverAfter = zombie.jobs?.curDriver as JobDriver_Stumble;
-				var missingAfter = MissingPartCount(corpse.InnerPawn);
-				var success = eatCorpses
-					? tickHit > 0 && missingAfter > missingBefore && ReferenceEquals(driverAfter?.eatTarget, corpse)
-					: tickHit == -1 && missingAfter == missingBefore && driverAfter?.eatTarget == null;
-				allCasesSucceeded &= success;
-
-				var result = new
-				{
-					name,
-					success,
-					eatCorpses,
-					sourcePath = "JobDriver_Stumble.TickAction -> ZombieStateHandler.Eat -> CanIngest -> EatDelay -> EatBodyPart",
-					sourceDerivedTicks = new
-					{
-						baseEatDelay = Constants.EAT_DELAY_TICKS,
-						bodyType = zombie.story.bodyType?.defName,
-						eatDelayTicks,
-						maxTicks
-					},
-					zombie = DescribeZombie(zombie),
-					corpse = new
-					{
-						id = ZombieRuntimeActions.StableThingId(corpse),
-						cell = ZombieRuntimeActions.DescribeCell(corpse.Position),
-						spawned = corpse.Spawned,
-						destroyed = corpse.Destroyed,
-						innerPawn = DescribePawn(corpse.InnerPawn)
-					},
-					cells = new
-					{
-						zombie = ZombieRuntimeActions.DescribeCell(zombieCell),
-						corpse = ZombieRuntimeActions.DescribeCell(corpseCell)
-					},
-					missingBefore,
-					missingAfter,
-					missingDelta = missingAfter - missingBefore,
-					tickHit,
-					finalEatTarget = driverAfter?.eatTarget == null ? null : ZombieRuntimeActions.StableThingId(driverAfter.eatTarget),
-					finalEatDelayCounter = driverAfter?.eatDelayCounter ?? -1,
-					samples
-				};
-
-				if (zombie.Destroyed == false)
-					zombie.Destroy();
-				if (corpse.Destroyed == false)
-					corpse.Destroy();
-				return result;
-			}
-
-			try
-			{
-				var disabledCase = RunCase("corpseEatingDisabled", false, root + new IntVec3(-8, 0, 8));
-				var enabledCase = RunCase("corpseEatingEnabled", true, root + new IntVec3(8, 0, 8));
-				return new
-				{
-					success = allCasesSucceeded,
-					destroyedZombies,
-					cases = new[] { disabledCase, enabledCase }
-				};
-			}
-			finally
-			{
-				ZombieSettings.Values.zombiesEatDowned = oldEatDowned;
-				ZombieSettings.Values.zombiesEatCorpses = oldEatCorpses;
-			}
 		}
 
 		[Tool("zombieland/flee_ignores_harmless_zombies", Description = "Call RimWorld FleeUtility.ShouldFleeFrom for real zombies and verify roped/confused/electrical/albino zombies are not flee threats.")]
