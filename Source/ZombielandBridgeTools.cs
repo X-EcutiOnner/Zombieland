@@ -2290,6 +2290,149 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/incident_alert_wave_contract", Description = "Verify a multi-zombie incident wave spawns zombies and creates the expected RimWorld threat letter.")]
+		public static object IncidentAlertWaveContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland TickManager is attached to the current map."
+				};
+			}
+
+			var spawnEventProcess = typeof(ZombiesRising).GetMethod("SpawnEventProcess", BindingFlags.Static | BindingFlags.NonPublic);
+			if (spawnEventProcess == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find ZombiesRising.SpawnEventProcess by reflection."
+				};
+			}
+
+			var oldSpawnHowType = ZombieSettings.Values.spawnHowType;
+			var spawnedZombies = new List<Zombie>();
+			try
+			{
+				object RunCase(string name, SpawnHowType spawnHowType, string expectedLabelKey)
+				{
+					ZombieSettings.Values.spawnHowType = spawnHowType;
+					var cellValidator = Tools.ZombieSpawnLocator(map, true);
+					var spot = ZombiesRising.GetValidSpot(map, IntVec3.Invalid, cellValidator);
+					if (spot.IsValid == false)
+					{
+						return new
+						{
+							name,
+							success = false,
+							spawnHowType = spawnHowType.ToString(),
+							error = "No valid event spawn spot was found."
+						};
+					}
+
+					var beforeIds = CurrentZombies(map)
+						.Select(ZombieRuntimeActions.StableThingId)
+						.ToHashSet(StringComparer.OrdinalIgnoreCase);
+					var beforeLetters = (Find.LetterStack?.LettersListForReading ?? new List<Letter>())
+						.ToHashSet();
+					var iterator = spawnEventProcess.Invoke(null, new object[] { map, 4, spot, cellValidator, true, true, ZombieType.Normal }) as System.Collections.IEnumerator;
+					if (iterator == null)
+					{
+						return new
+						{
+							name,
+							success = false,
+							spawnHowType = spawnHowType.ToString(),
+							spot = ZombieRuntimeActions.DescribeCell(spot),
+							error = "SpawnEventProcess did not return an IEnumerator."
+						};
+					}
+
+					var steps = 0;
+					while (steps < 4096 && iterator.MoveNext())
+						steps++;
+
+					var after = CurrentZombies(map)
+						.OfType<Zombie>()
+						.Where(zombie => beforeIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+						.ToArray();
+					spawnedZombies.AddRange(after);
+					var newLetters = (Find.LetterStack?.LettersListForReading ?? new List<Letter>())
+						.Where(letter => beforeLetters.Contains(letter) == false)
+						.ToArray();
+					var expectedLabel = expectedLabelKey.Translate().ToString();
+					var matchingLetters = newLetters
+						.Where(letter => letter?.def == LetterDefOf.ThreatSmall && letter.Label == expectedLabel)
+						.Select(letter => new
+						{
+							label = letter.Label,
+							defName = letter.def?.defName,
+							letter.arrivalTick
+						})
+						.ToArray();
+
+					return new
+					{
+						name,
+						success = steps < 4096
+							&& after.Length == 4
+							&& after.All(zombie => MatchesRequestedZombieType(zombie, ZombieType.Normal))
+							&& newLetters.Length == 1
+							&& matchingLetters.Length == 1,
+						spawnHowType = spawnHowType.ToString(),
+						expectedLabel,
+						spot = ZombieRuntimeActions.DescribeCell(spot),
+						steps,
+						spawnedCount = after.Length,
+						zombies = after.Select(DescribeZombie).ToArray(),
+						newLetterCount = newLetters.Length,
+						letters = newLetters.Select(letter => new
+						{
+							label = letter.Label,
+							defName = letter.def?.defName,
+							letter.arrivalTick
+						}).ToArray(),
+						matchingLetterCount = matchingLetters.Length
+					};
+				}
+
+				var edgeCase = RunCase("from_edges_threat_letter", SpawnHowType.FromTheEdges, "LetterLabelZombiesRising");
+				var allOverCase = RunCase("all_over_map_threat_letter", SpawnHowType.AllOverTheMap, "LetterLabelZombiesRisingNearYourBase");
+				var cases = new[] { edgeCase, allOverCase };
+				return new
+				{
+					success = cases.All(sample => sample.GetType().GetProperty("success")?.GetValue(sample) is true),
+					sourcePath = "ZombiesRising.SpawnEventProcess -> zombiesSpawning > 3 -> Find.LetterStack.ReceiveLetter",
+					cases
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.spawnHowType = oldSpawnHowType;
+				foreach (var zombie in spawnedZombies.Distinct())
+				{
+					_ = tickManager.allZombiesCached?.Remove(zombie);
+					_ = tickManager.hummingZombies?.Remove(zombie);
+					_ = tickManager.tankZombies?.Remove(zombie);
+					if (zombie.Destroyed == false)
+						zombie.Destroy(DestroyMode.Vanish);
+				}
+			}
+		}
+
 		[Tool("zombieland/incident_scheduling_contract", Description = "Verify zombie incident scheduler skip reasons and positive incident-size calculation.")]
 		public static object IncidentSchedulingContract()
 		{
@@ -10804,6 +10947,180 @@ namespace ZombieLand
 					chainsaw.angle
 				},
 				samples
+			};
+		}
+
+		[Tool("zombieland/chainsaw_hits_building_contract", Description = "Verify a running chainsaw aimed at an adjacent building damages the building, breaks, and drops.")]
+		public static object ChainsawHitsBuildingContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var adjacent = GenAdj.AdjacentCellsAround;
+			var buildingCell = IntVec3.Invalid;
+			var buildingIndex = -1;
+			var zombieCell = IntVec3.Invalid;
+			for (var i = 0; i < adjacent.Length; i++)
+			{
+				var candidate = actorCell + adjacent[i];
+				if (candidate.InBounds(map) == false || candidate.Fogged(map))
+					continue;
+				if (candidate.GetEdifice(map) != null || candidate.GetFirstThing<Mineable>(map) != null)
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+					continue;
+
+				if (buildingCell.IsValid == false)
+				{
+					buildingCell = candidate;
+					buildingIndex = i;
+				}
+				else if (candidate.Standable(map))
+				{
+					zombieCell = candidate;
+					break;
+				}
+			}
+			if (buildingCell.IsValid == false || zombieCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					buildingCell = buildingCell.IsValid ? ZombieRuntimeActions.DescribeCell(buildingCell) : null,
+					zombieCell = zombieCell.IsValid ? ZombieRuntimeActions.DescribeCell(zombieCell) : null,
+					error = "No adjacent building/zombie fixture cells were available for chainsaw building impact."
+				};
+			}
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+			DisablePawnWork(actor);
+			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+
+			var chainsaw = ThingMaker.MakeThing(CustomDefs.Chainsaw) as Chainsaw;
+			if (chainsaw == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create Chainsaw."
+				};
+			}
+
+			GenSpawn.Spawn(chainsaw, actorCell, map, WipeMode.Vanish);
+			var refuelable = chainsaw.TryGetComp<CompRefuelable>();
+			var breakable = chainsaw.TryGetComp<CompBreakable>();
+			if (refuelable == null || breakable == null)
+			{
+				return new
+				{
+					success = false,
+					chainsaw = ZombieRuntimeActions.StableThingId(chainsaw),
+					error = "The spawned chainsaw did not have refuelable and breakable comps."
+				};
+			}
+
+			var wall = ThingMaker.MakeThing(ThingDefOf.Wall, ThingDefOf.WoodLog) as Building;
+			if (wall == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create test wall."
+				};
+			}
+			GenSpawn.Spawn(wall, buildingCell, map, WipeMode.Vanish);
+			wall.SetFaction(Faction.OfPlayer);
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "ZombieGenerator.SpawnZombie returned no chainsaw work-branch zombie."
+				};
+			}
+
+			var fuel = ThingMaker.MakeThing(ThingDefOf.Chemfuel);
+			fuel.stackCount = Math.Min(ThingDefOf.Chemfuel.stackLimit, refuelable.GetFuelCountToFullyRefuel());
+			GenSpawn.Spawn(fuel, actorCell + IntVec3.South, map, WipeMode.Vanish);
+			refuelable.Refuel(new List<Thing> { fuel });
+			chainsaw.DeSpawn();
+			actor.equipment.AddEquipment(chainsaw);
+			actor.drafter.Drafted = true;
+
+			var wallHitPointsBefore = wall.HitPoints;
+			var chainsawHitPointsBefore = chainsaw.HitPoints;
+			var fuelBefore = refuelable.Fuel;
+			var toggle = chainsaw.GetGizmos().OfType<Command_Action>().FirstOrDefault(command => command.disabled == false);
+			toggle?.action();
+			chainsaw.angle = buildingIndex * 45f + 22.5f;
+			var runningAfterToggle = chainsaw.running;
+			AdvanceGameTicks(1);
+
+			var wallHitPointsAfter = wall.Destroyed ? 0 : wall.HitPoints;
+			var chainsawHitPointsAfter = chainsaw.Destroyed ? 0 : chainsaw.HitPoints;
+			var fuelAfter = refuelable.Fuel;
+			var stillEquipped = ReferenceEquals(actor.equipment?.Primary, chainsaw);
+			var trackedAsBroken = map.GetComponent<BrokenManager>()?.brokenThings?.Contains(chainsaw) ?? false;
+
+			return new
+			{
+				success = runningAfterToggle
+					&& wallHitPointsAfter < wallHitPointsBefore
+					&& stillEquipped == false
+					&& chainsaw.Spawned
+					&& breakable.broken
+					&& trackedAsBroken
+					&& chainsawHitPointsAfter < chainsawHitPointsBefore
+					&& fuelAfter < fuelBefore
+					&& zombie.Dead == false,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				zombie = DescribeZombie(zombie),
+				cells = new
+				{
+					actor = ZombieRuntimeActions.DescribeCell(actorCell),
+					building = ZombieRuntimeActions.DescribeCell(buildingCell),
+					zombie = ZombieRuntimeActions.DescribeCell(zombieCell)
+				},
+				buildingIndex,
+				buildingOffset = ZombieRuntimeActions.DescribeCell(adjacent[buildingIndex]),
+				runningAfterToggle,
+				stillEquipped,
+				chainsawSpawned = chainsaw.Spawned,
+				chainsawPosition = chainsaw.Spawned ? ZombieRuntimeActions.DescribeCell(chainsaw.Position) : null,
+				chainsawHitPointsBefore,
+				chainsawHitPointsAfter,
+				chainsawHitPointDelta = chainsawHitPointsBefore - chainsawHitPointsAfter,
+				chainsawBroken = breakable.broken,
+				trackedAsBroken,
+				fuelBefore,
+				fuelAfter,
+				fuelDelta = fuelBefore - fuelAfter,
+				wall = new
+				{
+					id = ZombieRuntimeActions.StableThingId(wall),
+					wall.Destroyed,
+					hitPointsBefore = wallHitPointsBefore,
+					hitPointsAfter = wallHitPointsAfter,
+					hitPointDelta = wallHitPointsBefore - wallHitPointsAfter
+				}
 			};
 		}
 
