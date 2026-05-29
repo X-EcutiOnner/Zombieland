@@ -917,10 +917,11 @@ namespace ZombieLand
 
 			Zombie albino;
 			var spawnedAlbino = false;
+			IntVec3 spawnRoot;
 			if (string.IsNullOrWhiteSpace(target))
 			{
-				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
-				if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+				spawnRoot = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, spawnRoot, 16f, out var cell, out var error) == false)
 					return error;
 
 				albino = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Albino, true);
@@ -937,6 +938,7 @@ namespace ZombieLand
 			else
 			{
 				albino = pawn as Zombie;
+				spawnRoot = albino?.Position ?? new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
 			}
 
 			if (albino == null || albino.isAlbino == false)
@@ -951,14 +953,16 @@ namespace ZombieLand
 
 			var cappedAttempts = Math.Max(4, Math.Min(bulletAttempts, 60));
 			var before = DescribeZombie(albino);
-			var bulletDamageTotals = new float[cappedAttempts];
+			var bulletDamageTotals = new List<float>(cappedAttempts);
 			Rand.PushState(seed);
 			try
 			{
 				for (var i = 0; i < cappedAttempts; i++)
 				{
 					var dinfo = new DamageInfo(DamageDefOf.Bullet, 1f, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
-					bulletDamageTotals[i] = albino.TakeDamage(dinfo).totalDamageDealt;
+					bulletDamageTotals.Add(albino.TakeDamage(dinfo).totalDamageDealt);
+					if ((bulletDamageTotals.Any(total => total > 0f) && bulletDamageTotals.Any(total => total <= 0f)) || albino.Dead)
+						break;
 				}
 			}
 			finally
@@ -966,8 +970,18 @@ namespace ZombieLand
 				Rand.PopState();
 			}
 
+			var explosiveAlbino = albino;
+			var spawnedExplosiveAlbino = false;
+			if (albino.Dead || string.IsNullOrWhiteSpace(target) == false)
+			{
+				if (TryFindClearSpawnCell(map, spawnRoot + new IntVec3(3, 0, 0), 16f, out var explosiveCell, out var explosiveError) == false)
+					return explosiveError;
+				explosiveAlbino = ZombieRuntimeActions.SpawnZombie(explosiveCell, map, ZombieType.Albino, true);
+				spawnedExplosiveAlbino = true;
+			}
+			var explosiveBefore = DescribeZombie(explosiveAlbino);
 			var explosiveInfo = new DamageInfo(DamageDefOf.Bomb, 1f, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
-			var explosiveDamage = albino.TakeDamage(explosiveInfo).totalDamageDealt;
+			var explosiveDamage = explosiveAlbino.TakeDamage(explosiveInfo).totalDamageDealt;
 			var bulletHits = bulletDamageTotals.Count(total => total > 0f);
 			var bulletBlocked = bulletDamageTotals.Count(total => total <= 0f);
 
@@ -975,15 +989,18 @@ namespace ZombieLand
 			{
 				success = bulletHits > 0 && bulletBlocked > 0 && explosiveDamage > 0f,
 				spawnedAlbino,
+				spawnedExplosiveAlbino,
 				seed,
-				bulletAttempts = cappedAttempts,
+				bulletAttempts = bulletDamageTotals.Count,
 				bulletHits,
 				bulletBlocked,
 				bulletDamageTotal = bulletDamageTotals.Sum(),
-				bulletDamageTotals,
+				bulletDamageTotals = bulletDamageTotals.ToArray(),
 				explosiveDamage,
 				before,
-				after = DescribeZombie(albino)
+				after = DescribeZombie(albino),
+				explosiveBefore,
+				explosiveAfter = DescribeZombie(explosiveAlbino)
 			};
 		}
 
