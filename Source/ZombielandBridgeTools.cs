@@ -7448,6 +7448,111 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/tar_smoke_blocks_human_ranged_targeting", Description = "Verify TarSmoke blocks ranged targeting for ordinary human targets too, matching its dense visual-obstruction role.")]
+		public static object TarSmokeBlocksHumanRangedTargeting()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var targetCell = GenRadial.RadialCellsAround(actorCell, 12f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.DistanceTo(actorCell) >= 7f)
+				.Where(cell => GenSight.LineOfSight(actorCell, cell, map, true))
+				.OrderBy(cell => cell.DistanceToSquared(actorCell))
+				.FirstOrDefault();
+			if (targetCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					error = "No clear line-of-sight human target cell was found for the TarSmoke targeting fixture."
+				};
+			}
+
+			ClearGasAt(map, targetCell);
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+			DisablePawnWork(actor);
+			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
+				?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false);
+			var weapon = weaponDef == null ? null : ThingMaker.MakeThing(weaponDef) as ThingWithComps;
+			if (weapon == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "No test ranged weapon def was available."
+				};
+			}
+			actor.equipment.AddEquipment(weapon);
+			actor.drafter.Drafted = true;
+
+			var target = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(target, targetCell, map, Rot4.South);
+			DisablePawnWork(target);
+
+			var verb = actor.equipment?.PrimaryEq?.PrimaryVerb;
+			if (verb == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					weaponDef = weaponDef.defName,
+					error = "The equipped ranged weapon had no primary verb."
+				};
+			}
+
+			var canHitBeforeSmoke = verb.CanHitTargetFrom(actor.Position, target);
+			var aimChanceBeforeSmoke = ShotReport.HitReportFor(actor, verb, target).AimOnTargetChance_StandardTarget;
+			var gasAtTargetBefore = target.Position.GetGas(map)?.def?.defName;
+			var smoke = GenSpawn.Spawn(ThingMaker.MakeThing(CustomDefs.TarSmoke), target.Position, map);
+			var gasAtTargetAfter = target.Position.GetGas(map)?.def?.defName;
+			var canHitAfterSmoke = verb.CanHitTargetFrom(actor.Position, target);
+			var aimChanceAfterSmoke = ShotReport.HitReportFor(actor, verb, target).AimOnTargetChance_StandardTarget;
+
+			return new
+			{
+				success = canHitBeforeSmoke
+					&& aimChanceBeforeSmoke > 0f
+					&& gasAtTargetBefore == null
+					&& smoke?.def == CustomDefs.TarSmoke
+					&& gasAtTargetAfter == CustomDefs.TarSmoke.defName
+					&& canHitAfterSmoke == false
+					&& aimChanceAfterSmoke == 0f,
+				actor = DescribePawn(actor),
+				target = DescribePawn(target),
+				weaponDef = weaponDef.defName,
+				verbLabel = verb.verbProps?.label,
+				actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+				targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+				smoke = ZombieRuntimeActions.StableThingId(smoke),
+				canHitBeforeSmoke,
+				canHitAfterSmoke,
+				aimChanceBeforeSmoke,
+				aimChanceAfterSmoke,
+				gasAtTargetBefore,
+				gasAtTargetAfter
+			};
+		}
+
 		[Tool("zombieland/mine_with_miner", Description = "Place a mineable block next to a miner zombie and verify Zombieland's mining code damages it.")]
 		public static object MineWithMiner(
 			[ToolParameter(Description = "Optional miner zombie id, ThingID, label, or short name. When omitted, a fresh miner is spawned near map center.", Required = false, DefaultValue = "")] string target = "")
