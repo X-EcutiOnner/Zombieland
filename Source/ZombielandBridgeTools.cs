@@ -6740,9 +6740,11 @@ namespace ZombieLand
 			var activeWasElectric = active.IsActiveElectric;
 			var disabledWasElectric = disabled.IsActiveElectric;
 			var activeAvailableVerbs = active.meleeVerbs.GetUpdatedAvailableVerbsList(false);
-			var disabledAvailableVerbs = disabled.meleeVerbs.GetUpdatedAvailableVerbsList(false);
 			var activeHasZombieBite = activeAvailableVerbs.Any(entry => entry.verb.GetDamageDef() == CustomDefs.ZombieBite);
+			var activeAvailableDamageDefs = activeAvailableVerbs.Select(entry => entry.verb.GetDamageDef()?.defName).ToArray();
+			var disabledAvailableVerbs = disabled.meleeVerbs.GetUpdatedAvailableVerbsList(false);
 			var disabledHasZombieBite = disabledAvailableVerbs.Any(entry => entry.verb.GetDamageDef() == CustomDefs.ZombieBite);
+			var disabledAvailableDamageDefs = disabledAvailableVerbs.Select(entry => entry.verb.GetDamageDef()?.defName).ToArray();
 			var activeVerb = active.meleeVerbs.TryGetMeleeVerb(activeTarget);
 			var disabledVerb = disabled.meleeVerbs.TryGetMeleeVerb(disabledTarget);
 
@@ -6789,8 +6791,8 @@ namespace ZombieLand
 				disabledWasElectric,
 				activeVerb = DescribeVerb(activeVerb),
 				disabledVerb = DescribeVerb(disabledVerb),
-				activeAvailableDamageDefs = activeAvailableVerbs.Select(entry => entry.verb.GetDamageDef()?.defName).ToArray(),
-				disabledAvailableDamageDefs = disabledAvailableVerbs.Select(entry => entry.verb.GetDamageDef()?.defName).ToArray(),
+				activeAvailableDamageDefs,
+				disabledAvailableDamageDefs,
 				activeBiteHidden,
 				disabledBiteHidden,
 				activeElectricalShock,
@@ -6799,6 +6801,71 @@ namespace ZombieLand
 				disabledDamageInfos = DescribeDamageInfos(disabledDamageInfos),
 				activeBeltDef = activeBelt.def?.defName,
 				disabledBeltDef = disabledBelt.def?.defName
+			};
+		}
+
+		[Tool("zombieland/albino_melee_bite_hidden_contract", Description = "Verify albino zombies hide ZombieBite from real melee verb selection while normal zombies still expose it.")]
+		public static object AlbinoMeleeBiteHiddenContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var albinoCell, out var albinoSpawnError) == false)
+				return albinoSpawnError;
+			if (TryFindClearSpawnCell(map, albinoCell + new IntVec3(4, 0, 0), 10f, out var normalCell, out var normalSpawnError) == false)
+				return normalSpawnError;
+			if (TryFindClearSpawnCell(map, albinoCell + new IntVec3(2, 0, 0), 8f, out var targetCell, out var targetSpawnError) == false)
+				return targetSpawnError;
+
+			var albino = ZombieRuntimeActions.SpawnZombie(albinoCell, map, ZombieType.Albino, true);
+			var normal = ZombieRuntimeActions.SpawnZombie(normalCell, map, ZombieType.Normal, true);
+			var target = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(target, targetCell, map, Rot4.South);
+			DisablePawnWork(target);
+			NormalizeFireDamagePawn(target);
+			if (albino == null || normal == null)
+			{
+				return new
+				{
+					success = false,
+					albino = DescribeZombie(albino),
+					normal = DescribeZombie(normal),
+					error = "ZombieGenerator.SpawnZombie returned no albino or normal zombie."
+				};
+			}
+
+			var albinoAvailableVerbs = albino.meleeVerbs.GetUpdatedAvailableVerbsList(false);
+			var albinoHasZombieBite = albinoAvailableVerbs.Any(entry => entry.verb.GetDamageDef() == CustomDefs.ZombieBite);
+			var albinoAvailableDamageDefs = albinoAvailableVerbs.Select(entry => entry.verb.GetDamageDef()?.defName).ToArray();
+			var normalAvailableVerbs = normal.meleeVerbs.GetUpdatedAvailableVerbsList(false);
+			var normalHasZombieBite = normalAvailableVerbs.Any(entry => entry.verb.GetDamageDef() == CustomDefs.ZombieBite);
+			var normalAvailableDamageDefs = normalAvailableVerbs.Select(entry => entry.verb.GetDamageDef()?.defName).ToArray();
+			var albinoVerb = albino.meleeVerbs.TryGetMeleeVerb(target);
+			var normalVerb = normal.meleeVerbs.TryGetMeleeVerb(target);
+			var albinoBiteHidden = albinoHasZombieBite == false;
+
+			return new
+			{
+				success = albino?.isAlbino == true && albinoBiteHidden && normalHasZombieBite,
+				destroyedZombies,
+				albino = DescribeZombie(albino),
+				normal = DescribeZombie(normal),
+				target = DescribePawn(target),
+				albinoVerb = DescribeVerb(albinoVerb),
+				normalVerb = DescribeVerb(normalVerb),
+				albinoAvailableDamageDefs,
+				normalAvailableDamageDefs,
+				albinoBiteHidden,
+				normalHasZombieBite
 			};
 		}
 

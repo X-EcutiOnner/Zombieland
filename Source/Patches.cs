@@ -1123,10 +1123,16 @@ namespace ZombieLand
 		[HarmonyPatch(nameof(Pawn_MeleeVerbs.GetUpdatedAvailableVerbsList))]
 		static class Pawn_MeleeVerbs_GetUpdatedAvailableVerbsList_Patch
 		{
-			static void Postfix(List<VerbEntry> __result, Pawn ___pawn)
+			static bool IsZombieBiteVerb(VerbEntry entry)
 			{
-				if (___pawn is Zombie zombie && (zombie.isElectrifier || zombie.isAlbino))
-					_ = __result.RemoveAll(entry => entry.verb.GetDamageDef() == CustomDefs.ZombieBite);
+				var damageDef = entry.verb.GetDamageDef();
+				return damageDef == CustomDefs.ZombieBite || damageDef?.defName == "ZombieBite";
+			}
+
+			static void Postfix(Pawn_MeleeVerbs __instance, List<VerbEntry> __result)
+			{
+				if (__instance.Pawn is Zombie zombie && (zombie.isElectrifier || zombie.isAlbino))
+					_ = __result.RemoveAll(IsZombieBiteVerb);
 			}
 		}
 
