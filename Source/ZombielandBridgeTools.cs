@@ -7072,6 +7072,69 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/zombie_target_cache_excludes_specials", Description = "Verify AttackTargetsCache.TargetsHostileToColony excludes normal, spitter, and blob zombies.")]
+		public static object ZombieTargetCacheExcludesSpecials()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var normalCell, out var normalSpawnError) == false)
+				return normalSpawnError;
+			if (TryFindClearSpawnCell(map, normalCell + new IntVec3(3, 0, 0), 8f, out var spitterCell, out var spitterSpawnError) == false)
+				return spitterSpawnError;
+			if (TryFindClearSpawnCell(map, normalCell + new IntVec3(6, 0, 0), 10f, out var blobCell, out var blobSpawnError) == false)
+				return blobSpawnError;
+
+			var normal = SpawnFireFixturePawn(map, normalCell, "normal");
+			var spitter = SpawnFireFixturePawn(map, spitterCell, "spitter");
+			var blob = SpawnFireFixturePawn(map, blobCell, "blob");
+			map.attackTargetsCache.UpdateTarget(normal);
+			map.attackTargetsCache.UpdateTarget(spitter);
+			map.attackTargetsCache.UpdateTarget(blob);
+			var hostileTargets = map.attackTargetsCache.TargetsHostileToColony;
+			var containsNormal = hostileTargets.Contains(normal);
+			var containsSpitter = hostileTargets.Contains(spitter);
+			var containsBlob = hostileTargets.Contains(blob);
+			var zTypesInCache = hostileTargets
+				.Select(target => target.Thing)
+				.Where(thing => thing is Zombie || thing is ZombieSpitter || thing is ZombieBlob)
+				.Select(thing => thing.def?.defName)
+				.Distinct()
+				.OrderBy(defName => defName)
+				.ToArray();
+
+			return new
+			{
+				success = normal is Zombie
+					&& spitter is ZombieSpitter
+					&& blob is ZombieBlob
+					&& containsNormal == false
+					&& containsSpitter == false
+					&& containsBlob == false,
+				destroyedZombies,
+				normal = DescribePawn(normal),
+				spitter = DescribePawn(spitter),
+				blob = DescribePawn(blob),
+				hostileCount = hostileTargets.Count,
+				contains = new
+				{
+					normal = containsNormal,
+					spitter = containsSpitter,
+					blob = containsBlob
+				},
+				zombielandDefsInCache = zTypesInCache
+			};
+		}
+
 		[Tool("zombieland/zap_zombies_with_shocker", Description = "Build a powered zombie shocker room, run the real ZapZombies job, and verify a zombie in the room is paralyzed.")]
 		public static object ZapZombiesWithShocker()
 		{

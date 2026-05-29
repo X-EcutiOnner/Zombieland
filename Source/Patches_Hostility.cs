@@ -591,6 +591,33 @@ namespace ZombieLand
 		//
 		static readonly Dictionary<Map, HashSet<IAttackTarget>> playerHostilesWithoutZombies = new();
 
+		static bool IsZombielandTarget(IAttackTarget target)
+		{
+			return target?.Thing is Zombie || target?.Thing is ZombieBlob || target?.Thing is ZombieSpitter;
+		}
+
+		static HashSet<IAttackTarget> PlayerHostilesWithoutZombies(Map map)
+		{
+			if (map == null)
+				return new HashSet<IAttackTarget>();
+			if (playerHostilesWithoutZombies.TryGetValue(map, out var targets) == false)
+			{
+				targets = new HashSet<IAttackTarget>();
+				playerHostilesWithoutZombies.Add(map, targets);
+			}
+			return targets;
+		}
+
+		[HarmonyPatch(typeof(AttackTargetsCache))]
+		[HarmonyPatch(nameof(AttackTargetsCache.TargetsHostileToColony), MethodType.Getter)]
+		static class AttackTargetsCache_TargetsHostileToColony_Patch
+		{
+			static void Postfix(Map ___map, ref HashSet<IAttackTarget> __result)
+			{
+				__result = PlayerHostilesWithoutZombies(___map);
+			}
+		}
+
 		// patch to remove the constant danger music because of the constant thread of zombies
 		//
 		[HarmonyPatch(typeof(AttackTargetsCache))]
@@ -600,16 +627,14 @@ namespace ZombieLand
 			static void Postfix(IAttackTarget target)
 			{
 				var thing = target.Thing;
-				if (thing == null || thing is Zombie)
+				if (thing == null || IsZombielandTarget(target))
 					return;
 				if (thing.HostileTo(Faction.OfPlayer) == false)
 					return;
 				var map = thing.Map;
 				if (map == null)
 					return;
-				if (playerHostilesWithoutZombies.ContainsKey(map) == false)
-					playerHostilesWithoutZombies.Add(map, new HashSet<IAttackTarget>());
-				_ = playerHostilesWithoutZombies[map].Add(target);
+				_ = PlayerHostilesWithoutZombies(map).Add(target);
 			}
 		}
 
@@ -620,13 +645,13 @@ namespace ZombieLand
 			static void Postfix(IAttackTarget target)
 			{
 				var thing = target.Thing;
-				if (thing == null || thing is Zombie)
+				if (thing == null || IsZombielandTarget(target))
 					return;
 				var map = thing.Map;
 				if (map == null)
 					return;
-				if (playerHostilesWithoutZombies.ContainsKey(map))
-					_ = playerHostilesWithoutZombies[map].Remove(target);
+				if (playerHostilesWithoutZombies.TryGetValue(map, out var targets))
+					_ = targets.Remove(target);
 			}
 		}
 	}
