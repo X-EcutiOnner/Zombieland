@@ -260,6 +260,7 @@ namespace ZombieLand
 		}
 
 		static readonly MethodInfo pathFollowerCostToMoveIntoCellMethod = typeof(Pawn_PathFollower).GetMethod("CostToMoveIntoCell", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Pawn), typeof(IntVec3) }, null);
+		static readonly MethodInfo fireDoFireDamageMethod = typeof(Fire).GetMethod("DoFireDamage", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Thing) }, null);
 
 		static bool TryCostToMoveIntoCell(Pawn pawn, IntVec3 cell, out float cost, out string error)
 		{
@@ -277,6 +278,24 @@ namespace ZombieLand
 			}
 
 			cost = Convert.ToSingle(pathFollowerCostToMoveIntoCellMethod.Invoke(null, new object[] { pawn, cell }));
+			return true;
+		}
+
+		static bool TryDoFireDamage(Fire fire, Thing target, out string error)
+		{
+			error = null;
+			if (fireDoFireDamageMethod == null)
+			{
+				error = "Could not find Fire.DoFireDamage(Thing).";
+				return false;
+			}
+			if (fire == null || target == null)
+			{
+				error = "Fire and target are required.";
+				return false;
+			}
+
+			fireDoFireDamageMethod.Invoke(fire, new object[] { target });
 			return true;
 		}
 
@@ -2742,6 +2761,107 @@ namespace ZombieLand
 				humanDisabledStillDropsBlood,
 				zombieDisabledDropsNoBlood,
 				spitterDisabledDropsNoBlood
+			};
+		}
+
+		[Tool("zombieland/tar_slime_fire_spread_contract", Description = "Verify real Fire.DoFireDamage on burning TarSlime raises fire size and ignites adjacent TarSlime.")]
+		public static object TarSlimeFireSpreadContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var sourceCell, out var sourceError) == false)
+				return sourceError;
+
+			var adjacentCell = GenAdj.AdjacentCellsAround
+				.Select(offset => sourceCell + offset)
+				.FirstOrDefault(cell => cell.InBounds(map) && cell.Standable(map) && cell.GetThingList(map).Any() == false);
+			if (adjacentCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					sourceCell = ZombieRuntimeActions.DescribeCell(sourceCell),
+					error = "No clear adjacent TarSlime spread cell was found."
+				};
+			}
+
+			ClearFilthAt(map, sourceCell);
+			ClearFilthAt(map, adjacentCell);
+			foreach (var fire in sourceCell.GetThingList(map).OfType<Fire>().Concat(adjacentCell.GetThingList(map).OfType<Fire>()).ToArray())
+				fire.Destroy();
+
+			FilthMaker.TryMakeFilth(sourceCell, map, CustomDefs.TarSlime);
+			FilthMaker.TryMakeFilth(adjacentCell, map, CustomDefs.TarSlime);
+			var sourceTar = map.thingGrid.ThingAt<TarSlime>(sourceCell);
+			var adjacentTar = map.thingGrid.ThingAt<TarSlime>(adjacentCell);
+			if (sourceTar == null || adjacentTar == null)
+			{
+				return new
+				{
+					success = false,
+					sourceCell = ZombieRuntimeActions.DescribeCell(sourceCell),
+					adjacentCell = ZombieRuntimeActions.DescribeCell(adjacentCell),
+					sourceTar = ZombieRuntimeActions.StableThingId(sourceTar),
+					adjacentTar = ZombieRuntimeActions.StableThingId(adjacentTar),
+					error = "Could not create both TarSlime fixtures."
+				};
+			}
+
+			FireUtility.TryStartFireIn(sourceCell, map, 0.1f, null);
+			var sourceFire = sourceCell.GetThingList(map).OfType<Fire>().FirstOrDefault();
+			if (sourceFire == null)
+			{
+				return new
+				{
+					success = false,
+					sourceCell = ZombieRuntimeActions.DescribeCell(sourceCell),
+					adjacentCell = ZombieRuntimeActions.DescribeCell(adjacentCell),
+					sourceTar = ZombieRuntimeActions.StableThingId(sourceTar),
+					adjacentTar = ZombieRuntimeActions.StableThingId(adjacentTar),
+					error = "Could not start a real fire on the source TarSlime cell."
+				};
+			}
+
+			var fireSizeBefore = sourceFire.fireSize;
+			var adjacentBurningBefore = adjacentTar.IsBurning();
+			if (TryDoFireDamage(sourceFire, sourceTar, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			var fireSizeAfter = sourceFire.fireSize;
+			var adjacentBurningAfter = adjacentTar.IsBurning();
+			var adjacentFiresAfter = adjacentCell.GetThingList(map).OfType<Fire>().ToArray();
+
+			return new
+			{
+				success = adjacentBurningBefore == false
+					&& adjacentBurningAfter
+					&& fireSizeAfter >= 0.5f
+					&& adjacentFiresAfter.Length > 0,
+				sourceCell = ZombieRuntimeActions.DescribeCell(sourceCell),
+				adjacentCell = ZombieRuntimeActions.DescribeCell(adjacentCell),
+				sourceTar = ZombieRuntimeActions.StableThingId(sourceTar),
+				adjacentTar = ZombieRuntimeActions.StableThingId(adjacentTar),
+				sourceFire = ZombieRuntimeActions.StableThingId(sourceFire),
+				adjacentFireIds = adjacentFiresAfter.Select(ZombieRuntimeActions.StableThingId).ToArray(),
+				fireSizeBefore,
+				fireSizeAfter,
+				adjacentBurningBefore,
+				adjacentBurningAfter,
+				adjacentFireCountAfter = adjacentFiresAfter.Length
 			};
 		}
 
