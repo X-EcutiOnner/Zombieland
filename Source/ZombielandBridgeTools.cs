@@ -151,6 +151,37 @@ namespace ZombieLand
 			};
 		}
 
+		static object DescribeIncidentParameters(IncidentParameters parameters)
+		{
+			if (parameters == null)
+				return null;
+
+			return new
+			{
+				parameters.spawnMode,
+				parameters.daysBeforeZombies,
+				parameters.maxNumberOfZombies,
+				parameters.numberOfZombiesPerColonist,
+				parameters.colonyMultiplier,
+				parameters.capableColonists,
+				parameters.incapableColonists,
+				parameters.totalColonistCount,
+				parameters.minimumCapableColonists,
+				parameters.daysPassed,
+				parameters.currentZombieCount,
+				parameters.maxBaseLevelZombies,
+				parameters.extendedCount,
+				parameters.maxAdditionalZombies,
+				parameters.calculatedZombies,
+				parameters.rampUpDays,
+				parameters.scaleFactor,
+				parameters.daysStretched,
+				parameters.deltaDays,
+				parameters.incidentSize,
+				parameters.skipReason
+			};
+		}
+
 		static bool ColorsApproximatelyEqual(Color a, Color b, float tolerance = 0.01f)
 		{
 			return Mathf.Abs(a.r - b.r) <= tolerance
@@ -2255,6 +2286,247 @@ namespace ZombieLand
 					_ = tickManager?.tankZombies?.Remove(zombie);
 					if (zombie.Destroyed == false)
 						zombie.Destroy(DestroyMode.Vanish);
+				}
+			}
+		}
+
+		[Tool("zombieland/incident_scheduling_contract", Description = "Verify zombie incident scheduler skip reasons and positive incident-size calculation.")]
+		public static object IncidentSchedulingContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland TickManager is attached to the current map."
+				};
+			}
+
+			var lastIncidentField = typeof(IncidentInfo).GetField("lastIncident", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (lastIncidentField == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find IncidentInfo.lastIncident by reflection."
+				};
+			}
+
+			var originalInfo = tickManager.incidentInfo;
+			var oldDaysBeforeZombies = ZombieSettings.Values.daysBeforeZombiesCome;
+			var oldSpawnWhenType = ZombieSettings.Values.spawnWhenType;
+			var oldMaximumZombies = ZombieSettings.Values.maximumNumberOfZombies;
+			var oldUseDynamicThreatLevel = ZombieSettings.Values.useDynamicThreatLevel;
+			var oldBaseNumberOfZombies = ZombieSettings.Values.baseNumberOfZombiesinEvent;
+			var oldColonyMultiplier = ZombieSettings.Values.colonyMultiplier;
+			var oldExtraDaysBetweenEvents = ZombieSettings.Values.extraDaysBetweenEvents;
+			var temporaryColonists = new List<Pawn>();
+
+			IncidentInfo NewIncidentInfo()
+			{
+				var info = new IncidentInfo
+				{
+					parameters = new IncidentParameters
+					{
+						daysStretched = -10f,
+						scaleFactor = 1f
+					}
+				};
+				lastIncidentField.SetValue(info, -GenDate.TicksPerDay * 100);
+				return info;
+			}
+
+			object RunWithSeed(int seed, Func<object> action)
+			{
+				Rand.PushState(seed);
+				try
+				{
+					return action();
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+			}
+
+			bool HasEnoughCapableColonists()
+			{
+				var colonists = Tools.ColonistsInfo(map);
+				var total = map.mapPawns.FreeHumanlikesSpawnedOfFaction(Faction.OfPlayer).Count();
+				var minimumCapable = (total + 1) / 3;
+				return colonists.Item1 >= minimumCapable;
+			}
+
+			bool EnsureCapableColonistFixture(out object error)
+			{
+				error = null;
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				while (HasEnoughCapableColonists() == false && temporaryColonists.Count < 8)
+				{
+					var candidateRoot = root + new IntVec3(temporaryColonists.Count * 2, 0, 0);
+					if (TryFindClearSpawnCell(map, candidateRoot, 32f, out var cell, out error) == false)
+						return false;
+
+					var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+					GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+					pawn.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+					var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
+						?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false);
+					var weapon = weaponDef == null ? null : ThingMaker.MakeThing(weaponDef) as ThingWithComps;
+					if (weapon == null)
+					{
+						error = new
+						{
+							success = false,
+							error = "No test ranged weapon def was available for the incident scheduler fixture."
+						};
+						return false;
+					}
+					pawn.equipment?.AddEquipment(weapon);
+					temporaryColonists.Add(pawn);
+				}
+
+				if (HasEnoughCapableColonists())
+					return true;
+
+				var colonists = Tools.ColonistsInfo(map);
+				var total = map.mapPawns.FreeHumanlikesSpawnedOfFaction(Faction.OfPlayer).Count();
+				error = new
+				{
+					success = false,
+					error = "Could not create enough temporary capable colonists for the incident scheduler fixture.",
+					capable = colonists.Item1,
+					incapable = colonists.Item2,
+					total,
+					minimumCapable = (total + 1) / 3,
+					temporaryColonists = temporaryColonists.Count
+				};
+				return false;
+			}
+
+			try
+			{
+				if (EnsureCapableColonistFixture(out var fixtureError) == false)
+					return fixtureError;
+
+				ZombieSettings.Values.spawnWhenType = SpawnWhenType.AllTheTime;
+				ZombieSettings.Values.useDynamicThreatLevel = false;
+				ZombieSettings.Values.extraDaysBetweenEvents = 0;
+				ZombieSettings.Values.colonyMultiplier = 1f;
+
+				var waiting = RunWithSeed(1101, () =>
+				{
+					tickManager.incidentInfo = NewIncidentInfo();
+					ZombieSettings.Values.daysBeforeZombiesCome = Mathf.CeilToInt(GenDate.DaysPassedFloat) + 10;
+					ZombieSettings.Values.baseNumberOfZombiesinEvent = 20;
+					ZombieSettings.Values.maximumNumberOfZombies = Math.Max(500, tickManager.ZombieCount() + 100);
+					var result = ZombiesRising.ZombiesForNewIncident(tickManager);
+					var parameters = tickManager.incidentInfo.parameters;
+					var lastIncident = (int)lastIncidentField.GetValue(tickManager.incidentInfo);
+					return new
+					{
+						name = "waiting_for_zombies",
+						success = result == false && parameters.skipReason == "waiting for zombies",
+						result,
+						expectedResult = false,
+						expectedSkipReason = "waiting for zombies",
+						lastIncident,
+						parameters = DescribeIncidentParameters(parameters)
+					};
+				});
+
+				var empty = RunWithSeed(1102, () =>
+				{
+					tickManager.incidentInfo = NewIncidentInfo();
+					ZombieSettings.Values.daysBeforeZombiesCome = 0;
+					ZombieSettings.Values.baseNumberOfZombiesinEvent = 0;
+					ZombieSettings.Values.maximumNumberOfZombies = 0;
+					var result = ZombiesRising.ZombiesForNewIncident(tickManager);
+					var parameters = tickManager.incidentInfo.parameters;
+					var lastIncident = (int)lastIncidentField.GetValue(tickManager.incidentInfo);
+					return new
+					{
+						name = "empty_incident",
+						success = result == false && parameters.skipReason == "empty incident" && parameters.incidentSize == 0,
+						result,
+						expectedResult = false,
+						expectedSkipReason = "empty incident",
+						lastIncident,
+						parameters = DescribeIncidentParameters(parameters)
+					};
+				});
+
+				var positive = RunWithSeed(1103, () =>
+				{
+					tickManager.incidentInfo = NewIncidentInfo();
+					ZombieSettings.Values.daysBeforeZombiesCome = 0;
+					ZombieSettings.Values.baseNumberOfZombiesinEvent = 20;
+					ZombieSettings.Values.maximumNumberOfZombies = Math.Max(500, tickManager.ZombieCount() + 100);
+					var result = ZombiesRising.ZombiesForNewIncident(tickManager);
+					var parameters = tickManager.incidentInfo.parameters;
+					var lastIncident = (int)lastIncidentField.GetValue(tickManager.incidentInfo);
+					return new
+					{
+						name = "positive_incident_size",
+						success = result
+							&& parameters.skipReason == "-"
+							&& parameters.incidentSize > 0
+							&& parameters.calculatedZombies > 0
+							&& parameters.maxAdditionalZombies > 0
+							&& parameters.deltaDays > 0
+							&& lastIncident == GenTicks.TicksAbs,
+						result,
+						expectedResult = true,
+						expectedSkipReason = "-",
+						lastIncident,
+						currentTicks = GenTicks.TicksAbs,
+						parameters = DescribeIncidentParameters(parameters)
+					};
+				});
+
+				var colonists = Tools.ColonistsInfo(map);
+				var cases = new[] { waiting, empty, positive };
+				return new
+				{
+					success = cases.All(sample => sample.GetType().GetProperty("success")?.GetValue(sample) is true),
+					map = map.uniqueID,
+					threatLevel = ZombieWeather.GetThreatLevel(map),
+					colonists = new
+					{
+						capable = colonists.Item1,
+						incapable = colonists.Item2,
+						total = map.mapPawns.FreeHumanlikesSpawnedOfFaction(Faction.OfPlayer).Count()
+					},
+					cases
+				};
+			}
+			finally
+			{
+				tickManager.incidentInfo = originalInfo;
+				ZombieSettings.Values.daysBeforeZombiesCome = oldDaysBeforeZombies;
+				ZombieSettings.Values.spawnWhenType = oldSpawnWhenType;
+				ZombieSettings.Values.maximumNumberOfZombies = oldMaximumZombies;
+				ZombieSettings.Values.useDynamicThreatLevel = oldUseDynamicThreatLevel;
+				ZombieSettings.Values.baseNumberOfZombiesinEvent = oldBaseNumberOfZombies;
+				ZombieSettings.Values.colonyMultiplier = oldColonyMultiplier;
+				ZombieSettings.Values.extraDaysBetweenEvents = oldExtraDaysBetweenEvents;
+				foreach (var pawn in temporaryColonists)
+				{
+					if (pawn.Corpse != null && pawn.Corpse.Destroyed == false)
+						pawn.Corpse.Destroy(DestroyMode.Vanish);
+					if (pawn.Destroyed == false)
+						pawn.Destroy(DestroyMode.Vanish);
 				}
 			}
 		}
