@@ -624,6 +624,8 @@ namespace ZombieLand
 				kind = DescribeZombieKind(zombie, blob, spitter),
 				wasMapPawnBefore = zombie?.wasMapPawnBefore ?? false,
 				isSuicideBomber = zombie?.IsSuicideBomber ?? false,
+				bombWillGoOff = zombie?.bombWillGoOff,
+				bombTickingInterval = zombie?.bombTickingInterval,
 				isToxicSplasher = zombie?.isToxicSplasher ?? false,
 				isTanky = zombie?.IsTanky ?? false,
 				isMiner = zombie?.isMiner ?? false,
@@ -6684,6 +6686,160 @@ namespace ZombieLand
 				afterZombieCount,
 				explosionQueued = queuedAfterKill == queuedBeforeKill + 1,
 				explosionExecuted = queuedAfterExecute == 0
+			};
+		}
+
+		[Tool("zombieland/suicide_bomber_countdown_contract", Description = "Verify a suicide bomber only detonates through the real Stumble countdown after bombWillGoOff is armed.")]
+		public static object SuicideBomberCountdownContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var maxTicks = 12;
+			var sourceCadence = "ZombieStateHandler.ShouldDie uses zombie.EveryNTick(NthTick.Every10)";
+			var explosionQueueObservation = "Full game ticks drain TickManager.explosions after the countdown kill; zombieland/detonate_suicide_bomber covers direct Kill queueing.";
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var allCasesSucceeded = true;
+
+			bool TryFindCountdownCell(IntVec3 rootCell, out IntVec3 cell, out object error)
+			{
+				cell = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(rootCell, 20f, true))
+				{
+					if (candidate.InBounds(map) == false || candidate.Fogged(map) || candidate.Standable(map) == false)
+						continue;
+					if (candidate.GetEdifice(map) != null || candidate.GetFirstThing<Mineable>(map) != null)
+						continue;
+					if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+						continue;
+					var adjacentHasBuilding = false;
+					foreach (var direction in GenAdj.CardinalDirections)
+					{
+						var adjacent = candidate + direction;
+						if (adjacent.InBounds(map) == false)
+							continue;
+						if (adjacent.GetEdifice(map) != null || adjacent.GetFirstThing<Mineable>(map) != null)
+						{
+							adjacentHasBuilding = true;
+							break;
+						}
+					}
+					if (adjacentHasBuilding)
+						continue;
+
+					cell = candidate;
+					return true;
+				}
+
+				error = new
+				{
+					success = false,
+					error = $"No clear suicide-bomber countdown cell was found near ({rootCell.x}, {rootCell.z})."
+				};
+				return false;
+			}
+
+			object RunCase(string name, bool armed, IntVec3 caseRoot)
+			{
+				if (TryFindCountdownCell(caseRoot, out var cell, out var error) == false)
+				{
+					allCasesSucceeded = false;
+					return new { name, success = false, error };
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.SuicideBomber, true);
+				if (zombie == null || zombie.IsSuicideBomber == false)
+				{
+					allCasesSucceeded = false;
+					return new
+					{
+						name,
+						success = false,
+						error = "Could not spawn a suicide bomber.",
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						zombie = DescribeZombie(zombie)
+					};
+				}
+
+				var tickManager = map.GetComponent<TickManager>();
+				tickManager?.allZombiesCached?.RemoveWhere(cached => cached == null || cached.Destroyed || cached.Spawned == false || cached.Dead);
+				_ = tickManager?.allZombiesCached?.Add(zombie);
+				zombie.pather?.StopDead();
+				zombie.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+				zombie.state = ZombieState.Wandering;
+				zombie.bombWillGoOff = armed;
+				zombie.bombTickingInterval = 1f;
+				zombie.lastBombTick = GenTicks.TicksAbs;
+				zombie.Rotation = Rot4.South;
+
+				var before = DescribeZombie(zombie);
+				var queuedBefore = tickManager?.explosions?.Count ?? 0;
+				var samples = new List<object>();
+				zombie.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					var queued = tickManager?.explosions?.Count ?? 0;
+					samples.Add(new
+					{
+						tick,
+						gameTick = Find.TickManager.TicksGame,
+						dead = zombie.Dead,
+						destroyed = zombie.Destroyed,
+						bombWillGoOff = zombie.bombWillGoOff,
+						bombTickingInterval = zombie.bombTickingInterval,
+						queuedExplosions = queued,
+						currentJob = zombie.CurJobDef?.defName
+					});
+					if (zombie.Dead || queued > queuedBefore)
+						break;
+				}
+
+				var queuedAfterCountdown = tickManager?.explosions?.Count ?? 0;
+				if (armed && tickManager != null)
+					tickManager.ExecuteExplosions();
+				var queuedAfterExecute = tickManager?.explosions?.Count ?? 0;
+				var success = armed
+					? zombie.Dead && queuedAfterCountdown == queuedBefore && queuedAfterExecute == queuedBefore
+					: zombie.Dead == false && queuedAfterCountdown == queuedBefore;
+				allCasesSucceeded &= success;
+
+				return new
+				{
+					name,
+					success,
+					armed,
+					sourceCadence,
+					explosionQueueObservation,
+					maxTicks,
+					cell = ZombieRuntimeActions.DescribeCell(cell),
+					before,
+					after = DescribeZombie(zombie),
+					queuedBefore,
+					queuedAfterCountdown,
+					queuedAfterExecute,
+					samples
+				};
+			}
+
+			var unarmedCase = RunCase("unarmedIntervalDoesNotDetonate", false, root + new IntVec3(-10, 0, 10));
+			var armedCase = RunCase("armedIntervalDetonates", true, root + new IntVec3(10, 0, 10));
+			var cases = new[] { unarmedCase, armedCase };
+			return new
+			{
+				success = allCasesSucceeded,
+				sourceCadence,
+				explosionQueueObservation,
+				maxTicks,
+				cases
 			};
 		}
 
