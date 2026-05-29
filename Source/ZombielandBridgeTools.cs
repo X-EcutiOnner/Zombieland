@@ -1650,6 +1650,13 @@ namespace ZombieLand
 			zombie.Rotation = Rot4.South;
 		}
 
+		static void ClearThrottleKey(string key)
+		{
+			var field = typeof(Tools).GetField("nextExecutions", BindingFlags.Static | BindingFlags.NonPublic);
+			if (field?.GetValue(null) is Dictionary<string, float> nextExecutions)
+				_ = nextExecutions.Remove(key);
+		}
+
 		[Tool("zombieland/get_status", Description = "Read a compact live Zombieland status summary for the current RimWorld session.")]
 		public static object GetStatus()
 		{
@@ -10156,6 +10163,124 @@ namespace ZombieLand
 					"wallPushCooldown active"
 				},
 				cases
+			};
+		}
+
+		[Tool("zombieland/wall_push_warning_letter_contract", Description = "Verify wall-push warning letters fire only for home-area walls after a real Stumble wall-push start.")]
+		public static object WallPushWarningLetterContract(
+			[ToolParameter(Description = "Temporary minimumZombiesForWallPushing value for the contract. Defaults to the vanilla Zombieland setting.", Required = false, DefaultValue = 18)] int minimumZombies = 18)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var effectiveMinimum = Math.Max(1, minimumZombies);
+			var primedGridCount = Math.Max(0, effectiveMinimum - 4);
+			var originalMinimum = ZombieSettings.Values.minimumZombiesForWallPushing;
+			var originalDangerousSituationMessage = ZombieSettings.Values.dangerousSituationMessage;
+			var allCasesSucceeded = true;
+
+			int DangerousLetterCount()
+			{
+				return Find.LetterStack?.LettersListForReading?
+					.Count(letter => letter?.def == CustomDefs.DangerousSituation) ?? 0;
+			}
+
+			object[] DangerousLetters()
+			{
+				return Find.LetterStack?.LettersListForReading?
+					.Where(letter => letter?.def == CustomDefs.DangerousSituation)
+					.Select(letter => new
+					{
+						label = letter.Label,
+						defName = letter.def?.defName,
+						arrivalTick = letter.arrivalTick
+					})
+					.Cast<object>()
+					.ToArray() ?? Array.Empty<object>();
+			}
+
+			object RunCase(string name, IntVec3 caseRoot, bool homeWall)
+			{
+				if (TryCreateWallPushFixture(map, caseRoot, 10f, out var fixture, out var setupError) == false)
+				{
+					allCasesSucceeded = false;
+					return new
+					{
+						name,
+						success = false,
+						setupError
+					};
+				}
+
+				var zombie = fixture.zombie;
+				var grid = map.GetGrid();
+				ClearWallPushGridNeighborhood(map, fixture.zombieCell);
+				grid.ChangeZombieCount(fixture.zombieCell, primedGridCount);
+				map.roofGrid.SetRoof(fixture.destinationCell, null);
+				PrepareWallPushZombie(map, zombie, fixture.zombieCell);
+
+				var originalHome = map.areaManager.Home[fixture.wallCell];
+				var beforeLetters = DangerousLetterCount();
+				var startedPush = false;
+				try
+				{
+					map.areaManager.Home[fixture.wallCell] = homeWall;
+					ClearThrottleKey("DangerousSituation");
+					ZombieSettings.Values.minimumZombiesForWallPushing = effectiveMinimum;
+					ZombieSettings.Values.dangerousSituationMessage = true;
+					zombie.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
+					AdvanceGameTicks(1);
+					startedPush = zombie.wallPushProgress >= 0f;
+				}
+				finally
+				{
+					map.areaManager.Home[fixture.wallCell] = originalHome;
+					ZombieSettings.Values.minimumZombiesForWallPushing = originalMinimum;
+					ZombieSettings.Values.dangerousSituationMessage = originalDangerousSituationMessage;
+				}
+
+				var afterLetters = DangerousLetterCount();
+				var letterDelta = afterLetters - beforeLetters;
+				var expectedDelta = homeWall ? 1 : 0;
+				var success = startedPush && letterDelta == expectedDelta;
+				allCasesSucceeded &= success;
+				return new
+				{
+					name,
+					success,
+					homeWall,
+					startedPush,
+					beforeLetters,
+					afterLetters,
+					letterDelta,
+					expectedDelta,
+					zombieCell = ZombieRuntimeActions.DescribeCell(fixture.zombieCell),
+					wallCell = ZombieRuntimeActions.DescribeCell(fixture.wallCell),
+					destinationCell = ZombieRuntimeActions.DescribeCell(fixture.destinationCell),
+					progress = zombie.wallPushProgress,
+					letters = DangerousLetters()
+				};
+			}
+
+			var outsideHome = RunCase("outsideHomeWall", root + new IntVec3(-12, 0, -12), false);
+			var insideHome = RunCase("insideHomeWall", root + new IntVec3(12, 0, -12), true);
+			var caseResults = new[] { outsideHome, insideHome };
+
+			return new
+			{
+				success = allCasesSucceeded,
+				effectiveMinimum,
+				primedGridCount,
+				sourcePath = "ZombieStateHandler.CheckWallPushing -> dangerousSituationMessage && Home[wallCell] -> DangerousSituation letter",
+				cases = caseResults
 			};
 		}
 
