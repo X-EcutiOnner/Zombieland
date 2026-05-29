@@ -496,6 +496,7 @@ namespace ZombieLand
 			var value = contamination.Get(from);
 			if (value == 0)
 				return;
+			var sourceMapIndex = from.Map == null ? (sbyte?)from.mapIndexOrState : (sbyte)from.Map.Index;
 			var subtracted = contamination.Subtract(from, value * factor);
 			if (subtracted == 0)
 				return;
@@ -504,7 +505,14 @@ namespace ZombieLand
 				return;
 			var delta = subtracted / n;
 			for (var j = 0; j < n; j++)
-				contamination.Add(toArray[j], delta);
+			{
+				var thing = toArray[j];
+				var savedMapIndex = thing.mapIndexOrState;
+				if (thing.Map == null && sourceMapIndex.HasValue)
+					thing.mapIndexOrState = sourceMapIndex.Value;
+				contamination.Add(thing, delta);
+				thing.mapIndexOrState = savedMapIndex;
+			}
 		}
 
 		public static void TransferContamination(this Thing from, float factor, params Thing[] toArray)

@@ -4813,6 +4813,128 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_recipe_product_contract", Description = "Verify contamination transfers from spawned recipe ingredients into unspawned recipe products.")]
+		public static object ContaminationRecipeProductContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var benchDef = DefDatabase<ThingDef>.GetNamed("TableButcher", false);
+			var bench = benchDef == null ? null : ThingMaker.MakeThing(benchDef, ThingDefOf.WoodLog);
+			if (bench is not IBillGiver billGiver)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create a butcher-table bill giver fixture."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var workerCell, out var workerSpawnError) == false)
+				return workerSpawnError;
+			if (TryFindClearSpawnCell(map, workerCell + new IntVec3(3, 0, 0), 8f, out var ingredientCell, out var ingredientSpawnError) == false)
+				return ingredientSpawnError;
+
+			var oldRecipeTransfer = ZombieSettings.Values.contamination.receipeTransfer;
+			var oldProduceEqualize = ZombieSettings.Values.contamination.produceEqualize;
+			var oldBenchEqualize = ZombieSettings.Values.contamination.benchEqualize;
+			var oldWorkerTransfer = ZombieSettings.Values.contamination.workerTransfer;
+			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var ingredient = ThingMaker.MakeThing(ThingDefOf.Steel);
+			Thing[] products = Array.Empty<Thing>();
+
+			try
+			{
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+				DisablePawnWork(worker);
+				ingredient.stackCount = 10;
+				GenSpawn.Spawn(ingredient, ingredientCell, map, WipeMode.Vanish);
+
+				ZombieSettings.Values.contamination.receipeTransfer = 0.5f;
+				ZombieSettings.Values.contamination.produceEqualize = 0f;
+				ZombieSettings.Values.contamination.benchEqualize = 0f;
+				ZombieSettings.Values.contamination.workerTransfer = 0f;
+
+				const float ingredientInputContamination = 0.8f;
+				ingredient.SetContamination(ingredientInputContamination);
+				var ingredientBefore = ingredient.GetContamination();
+				var recipe = new RecipeDef
+				{
+					defName = "ZombielandBridgeRecipeProductContract",
+					products = new List<ThingDefCountClass>
+					{
+						new(ThingDefOf.ComponentIndustrial, 1)
+					}
+				};
+
+				products = GenRecipe.MakeRecipeProducts(recipe, worker, new List<Thing> { ingredient }, ingredient, billGiver).ToArray();
+				var product = products.FirstOrDefault();
+				var ingredientAfter = ingredient.GetContamination();
+				var productContamination = product?.GetContamination() ?? -1f;
+				var expectedProductContamination = ingredientInputContamination * ZombieSettings.Values.contamination.receipeTransfer;
+				var expectedIngredientContamination = ingredientInputContamination - expectedProductContamination;
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+				var ingredientTransferred = CloseFloat(ingredientBefore, ingredientInputContamination)
+					&& CloseFloat(ingredientAfter, expectedIngredientContamination);
+				var productReceived = products.Length == 1
+					&& product?.Spawned == false
+					&& product?.def == ThingDefOf.ComponentIndustrial
+					&& CloseFloat(productContamination, expectedProductContamination);
+
+				return new
+				{
+					success = ingredientTransferred && productReceived,
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					ingredient = ZombieRuntimeActions.StableThingId(ingredient),
+					ingredientCell = ZombieRuntimeActions.DescribeCell(ingredientCell),
+					ingredientBefore,
+					ingredientAfter,
+					expectedIngredientContamination,
+					product = ZombieRuntimeActions.StableThingId(product),
+					productDef = product?.def?.defName,
+					productSpawned = product?.Spawned,
+					productContamination,
+					expectedProductContamination,
+					ingredientTransferred,
+					productReceived
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.contamination.receipeTransfer = oldRecipeTransfer;
+				ZombieSettings.Values.contamination.produceEqualize = oldProduceEqualize;
+				ZombieSettings.Values.contamination.benchEqualize = oldBenchEqualize;
+				ZombieSettings.Values.contamination.workerTransfer = oldWorkerTransfer;
+				ingredient.ClearContamination();
+				bench.ClearContamination();
+				foreach (var product in products)
+					product.ClearContamination();
+				if (ingredient is { Destroyed: false, Spawned: true })
+					ingredient.Destroy();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+			}
+		}
+
 		[Tool("zombieland/contamination_zombie_death_contract", Description = "Verify killing a real zombie contaminates its death cell while an ordinary pawn death does not.")]
 		public static object ContaminationZombieDeathContract()
 		{
