@@ -2879,6 +2879,156 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/fix_broken_chainsaw_job", Description = "Break a spawned chainsaw, run the real FixBrokenChainsaw workgiver/job with a component, and verify repair.")]
+		public static object FixBrokenChainsawJob()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+			actor.workSettings?.DisableAll();
+			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			actor.skills?.GetSkill(SkillDefOf.Construction).Notify_SkillDisablesChanged();
+			actor.skills.GetSkill(SkillDefOf.Construction).Level = 20;
+
+			if (TryFindAdjacentClearCell(actor, out var chainsawCell) == false)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "No adjacent cell was available for the broken chainsaw."
+				};
+			}
+
+			var componentCell = actorCell + IntVec3.South;
+			if (componentCell.InBounds(map) == false || componentCell.Standable(map) == false)
+				componentCell = actorCell;
+
+			var chainsaw = ThingMaker.MakeThing(CustomDefs.Chainsaw) as Chainsaw;
+			if (chainsaw == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create Chainsaw."
+				};
+			}
+			GenSpawn.Spawn(chainsaw, chainsawCell, map, WipeMode.Vanish);
+			var breakable = chainsaw.TryGetComp<CompBreakable>();
+			if (breakable == null)
+			{
+				return new
+				{
+					success = false,
+					chainsaw = ZombieRuntimeActions.StableThingId(chainsaw),
+					error = "The spawned chainsaw did not have a breakable comp."
+				};
+			}
+			breakable.DoBreakdown(map);
+			map.areaManager.Home[chainsaw.Position] = true;
+			chainsaw.SetForbidden(false, false);
+
+			var component = ThingMaker.MakeThing(ThingDefOf.ComponentIndustrial);
+			component.stackCount = 1;
+			GenSpawn.Spawn(component, componentCell, map, WipeMode.Vanish);
+			component.SetForbidden(false, false);
+
+			var manager = map.GetComponent<BrokenManager>();
+			var workGiver = new WorkGiver_FixBrokenChainsaw();
+			var hasJob = workGiver.HasJobOnThing(actor, chainsaw, true);
+			var job = hasJob ? workGiver.JobOnThing(actor, chainsaw, true) : null;
+			if (job != null)
+				job.playerForced = true;
+
+			var started = job != null && actor.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
+			var maxTicks = 1250;
+			var tickHit = -1;
+			var samples = new List<object>();
+
+			Rand.PushState(3);
+			try
+			{
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					var brokenNow = breakable.broken;
+					if (tick == 1 || tick == maxTicks || tick % 200 == 0 || brokenNow == false)
+					{
+						samples.Add(new
+						{
+							tick,
+							actorJob = actor.CurJobDef?.defName,
+							broken = brokenNow,
+							componentSpawned = component.Spawned,
+							managerBrokenCount = manager?.brokenThings?.Count ?? 0
+						});
+					}
+
+					if (brokenNow == false)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			var trackedAfter = manager?.brokenThings?.Contains(chainsaw) ?? false;
+
+			return new
+			{
+				success = hasJob
+					&& job != null
+					&& started
+					&& tickHit > 0
+					&& breakable.broken == false
+					&& trackedAfter == false
+					&& component.Destroyed,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				chainsaw = new
+				{
+					id = ZombieRuntimeActions.StableThingId(chainsaw),
+					cell = ZombieRuntimeActions.DescribeCell(chainsawCell),
+					spawned = chainsaw.Spawned,
+					faction = chainsaw.Faction?.Name,
+					forbidden = chainsaw.IsForbidden(actor),
+					breakable.broken,
+					trackedAsBroken = trackedAfter
+				},
+				component = new
+				{
+					id = ZombieRuntimeActions.StableThingId(component),
+					cell = ZombieRuntimeActions.DescribeCell(componentCell),
+					spawned = component.Spawned,
+					destroyed = component.Destroyed
+				},
+				hasJob,
+				jobDef = job?.def?.defName,
+				started,
+				maxTicks,
+				tickHit,
+				samples
+			};
+		}
+
 		[Tool("zombieland/damage_dark_slimer", Description = "Apply real bullet damage to a dark slimer and verify the damage-worker patch creates custom TarSmoke.")]
 		public static object DamageDarkSlimer(
 			[ToolParameter(Description = "Optional dark slimer zombie id, ThingID, label, or short name. When omitted, a fresh dark slimer is spawned near map center.", Required = false, DefaultValue = "")] string target = "",

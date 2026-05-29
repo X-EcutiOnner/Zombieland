@@ -174,7 +174,7 @@ namespace ZombieLand
 		{
 			if (t is not Chainsaw chainsaw)
 				return false;
-			if (t.Faction != pawn.Faction)
+			if (t.Faction != null && t.Faction != pawn.Faction)
 				return false;
 			if (t.IsBroken() == false)
 				return false;
