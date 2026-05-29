@@ -851,17 +851,25 @@ namespace ZombieLand
 
 		static object DescribeCorpse(Corpse corpse)
 		{
-			var compRottable = corpse?.TryGetComp<CompRottable>();
-			var innerPawn = corpse?.InnerPawn;
+			var destroyed = corpse?.Destroyed ?? true;
+			var bugged = corpse?.Bugged ?? true;
+			var compRottable = corpse == null || destroyed ? null : corpse.TryGetComp<CompRottable>();
+			var innerPawn = corpse == null || bugged ? null : corpse.InnerPawn;
+			var label = corpse == null
+				? null
+				: bugged
+					? corpse.def?.label?.CapitalizeFirst()
+					: corpse.LabelCap.ToString();
 			return new
 			{
 				corpseId = ZombieRuntimeActions.StableThingId(corpse),
 				thingId = corpse?.ThingID,
-				label = corpse?.LabelCap,
+				label,
 				spawned = corpse?.Spawned ?? false,
-				destroyed = corpse?.Destroyed ?? true,
+				destroyed,
+				bugged,
 				position = corpse == null || corpse.Spawned == false ? null : ZombieRuntimeActions.DescribeCell(corpse.Position),
-				rotStage = corpse == null || corpse.Destroyed ? null : corpse.GetRotStage().ToString(),
+				rotStage = corpse == null || destroyed ? null : corpse.GetRotStage().ToString(),
 				rotProgress = compRottable?.RotProgress ?? 0f,
 				innerPawnId = ZombieRuntimeActions.StableThingId(innerPawn),
 				innerPawnThingId = innerPawn?.ThingID,

@@ -281,7 +281,7 @@ load_game_ready() {
 	call_game_tool "$load_ready_tool" "$(jq -cn --arg saveName "$save_name" '{saveName:$saveName, readiness:"visual", timeoutMs:120000, pauseIfNeeded:true}')" 130
 }
 
-rimworld_processes="$(ps ax -o pid=,command= | grep "[R]imWorld by Ludeon Studios" || true)"
+rimworld_processes="$(ps ax -o pid=,comm= | awk '$0 ~ /\/RimWorld by Ludeon Studios$/ { print }' || true)"
 rimworld_count="$(printf '%s\n' "$rimworld_processes" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
 if [[ "$rimworld_count" -gt 1 ]]; then
 	printf 'FAIL[multiple_rimworld_processes]: multiple RimWorld processes are running; refusing ambiguous bridge run.\n' >&2
