@@ -5435,11 +5435,10 @@ namespace ZombieLand
 				yield return AccessTools.Method(type, nameof(Pawn_RecordsTracker.Increment));
 			}
 
-			static IEnumerable<CodeInstruction> Transpiler(ILGenerator generator, MethodBase method, IEnumerable<CodeInstruction> instructions)
+			[HarmonyPriority(Priority.First)]
+			static bool Prefix(Pawn ___pawn)
 			{
-				var conditions = Tools.NotZombieInstructions(generator, method);
-				var transpiler = Tools.GenerateReplacementCallTranspiler(conditions, method);
-				return transpiler(generator, instructions);
+				return IsZombielandPawn(___pawn) == false;
 			}
 		}
 		[HarmonyPatch(typeof(Pawn_RecordsTracker))]
@@ -5448,7 +5447,7 @@ namespace ZombieLand
 		{
 			static bool Prefix(Pawn ___pawn, ref float __result)
 			{
-				if (___pawn is Zombie)
+				if (IsZombielandPawn(___pawn))
 				{
 					__result = 0;
 					return false;
@@ -5462,7 +5461,7 @@ namespace ZombieLand
 		{
 			static bool Prefix(Pawn ___pawn, ref int __result)
 			{
-				if (___pawn is Zombie)
+				if (IsZombielandPawn(___pawn))
 				{
 					__result = 0;
 					return false;

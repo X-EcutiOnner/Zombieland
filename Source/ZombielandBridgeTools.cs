@@ -49,6 +49,13 @@ namespace ZombieLand
 			public float? foodLevel;
 		}
 
+		sealed class RecordSnapshot
+		{
+			public float rawValue;
+			public float publicValue;
+			public int publicInt;
+		}
+
 		static readonly LineupEntry[] referenceLineup =
 		{
 			new(ZombieType.Electrifier, 0, 0),
@@ -190,6 +197,56 @@ namespace ZombieLand
 		static int ImmunityRecordCount(Pawn pawn)
 		{
 			return pawn?.health?.immunity?.ImmunityListForReading?.Count ?? 0;
+		}
+
+		static readonly FieldInfo recordsTrackerRecordsField = typeof(Pawn_RecordsTracker).GetField("records", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+		static System.Collections.IList RawRecordValues(Pawn pawn)
+		{
+			var records = recordsTrackerRecordsField?.GetValue(pawn?.records);
+			var valuesField = records?.GetType().GetField("values", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+			return valuesField?.GetValue(records) as System.Collections.IList;
+		}
+
+		static bool TryFindRawRecordDef(Pawn pawn, RecordType recordType, out RecordDef recordDef, out string error)
+		{
+			recordDef = null;
+			error = null;
+			var values = RawRecordValues(pawn);
+			if (values == null)
+			{
+				error = "Could not read Pawn_RecordsTracker.records values.";
+				return false;
+			}
+
+			recordDef = DefDatabase<RecordDef>.AllDefsListForReading
+				.Where(def => def.type == recordType && def.index >= 0 && def.index < values.Count)
+				.OrderBy(def => def.index)
+				.FirstOrDefault();
+			if (recordDef != null)
+				return true;
+
+			error = $"No {recordType} RecordDef has an index inside the pawn's raw record map of size {values.Count}.";
+			return false;
+		}
+
+		static float RawRecordValue(Pawn pawn, RecordDef recordDef)
+		{
+			var values = RawRecordValues(pawn);
+			var value = values != null && recordDef != null && recordDef.index >= 0 && recordDef.index < values.Count
+				? values[recordDef.index]
+				: null;
+			return value == null ? 0f : Convert.ToSingle(value);
+		}
+
+		static RecordSnapshot DescribeRecord(Pawn pawn, RecordDef recordDef)
+		{
+			return new RecordSnapshot
+			{
+				rawValue = RawRecordValue(pawn, recordDef),
+				publicValue = pawn?.records?.GetValue(recordDef) ?? 0f,
+				publicInt = pawn?.records?.GetAsInt(recordDef) ?? 0
+			};
 		}
 
 		static object DescribeZombie(Pawn pawn)
@@ -2146,6 +2203,90 @@ namespace ZombieLand
 				zombieImmunityRecordCountAfter,
 				humanImmunityAdvanced,
 				zombieImmunitySuppressed
+			};
+		}
+
+		[Tool("zombieland/zombie_records_suppression", Description = "Verify zombies cannot mutate or report vanilla pawn records while ordinary pawns still can.")]
+		public static object ZombieRecordsSuppression()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+				corpse.Destroy();
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanSpawnError) == false)
+				return humanSpawnError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(4, 0, 0), 10f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					human = DescribePawn(human),
+					error = "ZombieGenerator.SpawnZombie returned no records test zombie."
+				};
+			}
+
+			if (TryFindRawRecordDef(human, RecordType.Int, out var recordDef, out var recordError) == false)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					error = recordError
+				};
+			}
+
+			var humanBefore = DescribeRecord(human, recordDef);
+			var zombieBefore = DescribeRecord(zombie, recordDef);
+			human.records.Increment(recordDef);
+			human.records.AddTo(recordDef, 2f);
+			zombie.records.Increment(recordDef);
+			zombie.records.AddTo(recordDef, 2f);
+			var humanAfter = DescribeRecord(human, recordDef);
+			var zombieAfter = DescribeRecord(zombie, recordDef);
+
+			var humanRecordsMutated = humanAfter.rawValue == humanBefore.rawValue + 3f
+				&& humanAfter.publicValue == humanBefore.publicValue + 3f
+				&& humanAfter.publicInt == humanBefore.publicInt + 3;
+			var zombieRecordsNotMutated = zombieAfter.rawValue == zombieBefore.rawValue;
+			var zombieRecordsHidden = zombieAfter.publicValue == 0f && zombieAfter.publicInt == 0;
+
+			return new
+			{
+				success = humanRecordsMutated
+					&& zombieRecordsNotMutated
+					&& zombieRecordsHidden,
+				destroyedZombies,
+				recordDef = recordDef.defName,
+				human = DescribePawn(human),
+				zombie = DescribeZombie(zombie),
+				humanBefore,
+				humanAfter,
+				zombieBefore,
+				zombieAfter,
+				humanRecordsMutated,
+				zombieRecordsNotMutated,
+				zombieRecordsHidden
 			};
 		}
 
