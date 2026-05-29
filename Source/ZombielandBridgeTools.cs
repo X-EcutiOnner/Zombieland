@@ -1807,8 +1807,7 @@ namespace ZombieLand
 			var realtimeMotes = RealTime.moteList?.allMotes ?? new List<Mote>();
 			var existingThoughts = realtimeMotes
 				.Where(thing => thing.def == CustomDefs.ZombieThought)
-				.Select(thing => thing.ThingID)
-				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				.ToHashSet();
 
 			Zombie zombie = null;
 			MoteBubble[] spawnedThoughts = Array.Empty<MoteBubble>();
@@ -1828,7 +1827,7 @@ namespace ZombieLand
 				ZombieStateHandler.CastBrainzThought(zombie);
 				spawnedThoughts = realtimeMotes
 					.OfType<MoteBubble>()
-					.Where(mote => mote.def == CustomDefs.ZombieThought && existingThoughts.Contains(mote.ThingID) == false)
+					.Where(mote => mote.def == CustomDefs.ZombieThought && existingThoughts.Contains(mote) == false)
 					.ToArray();
 				var thought = spawnedThoughts
 					.OrderBy(mote => mote.Position.DistanceToSquared(zombie.Position))
@@ -1853,6 +1852,94 @@ namespace ZombieLand
 					expectedPosition = ZombieRuntimeActions.DescribeCell(zombie.Position),
 					iconMaterial = thought?.iconMat?.name,
 					expectedMaterial = Constants.BRRAINZ.name
+				};
+			}
+			finally
+			{
+				foreach (var thought in spawnedThoughts)
+					if (thought.Destroyed == false)
+						thought.Destroy(DestroyMode.Vanish);
+				if (zombie != null && zombie.Destroyed == false)
+					zombie.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		[Tool("zombieland/zombie_thought_bubble_materials_contract", Description = "Verify every custom zombie thought-bubble material spawns through RimWorld's realtime mote path.")]
+		public static object ZombieThoughtBubbleMaterialsContract()
+		{
+			if (TryFindSpawnCell(-1, -1, out var map, out var cell, out var spawnError) == false)
+				return spawnError;
+
+			var cases = new (string label, Material material, Action<Pawn> cast)[]
+			{
+				("BRRAINZ", Constants.BRRAINZ, ZombieStateHandler.CastBrainzThought),
+				("Eating", Constants.EATING, pawn => Tools.CastThoughtBubble(pawn, Constants.EATING)),
+				("Hacking", Constants.HACKING, pawn => Tools.CastThoughtBubble(pawn, Constants.HACKING)),
+				("Raging", Constants.RAGING, pawn => Tools.CastThoughtBubble(pawn, Constants.RAGING))
+			};
+
+			var realtimeMotes = RealTime.moteList?.allMotes ?? new List<Mote>();
+			Zombie zombie = null;
+			var spawnedThoughts = new List<MoteBubble>();
+			try
+			{
+				zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						error = "ZombieGenerator.SpawnZombie returned no thought-bubble material test zombie."
+					};
+				}
+
+				var results = cases.Select(testCase =>
+				{
+					var before = realtimeMotes
+						.Where(mote => mote.def == CustomDefs.ZombieThought)
+						.ToHashSet();
+
+					testCase.cast(zombie);
+					var newThoughts = realtimeMotes
+						.OfType<MoteBubble>()
+						.Where(mote => mote.def == CustomDefs.ZombieThought && before.Contains(mote) == false)
+						.ToArray();
+					spawnedThoughts.AddRange(newThoughts);
+
+					var thought = newThoughts
+						.OrderBy(mote => mote.Position.DistanceToSquared(zombie.Position))
+						.FirstOrDefault();
+					var thoughtPosition = thought?.Position ?? IntVec3.Invalid;
+					var materialMatches = thought?.iconMat == testCase.material;
+					var positionMatches = thoughtPosition == zombie.Position;
+					var ok = thought != null
+						&& thought.Spawned
+						&& thought.Map == map
+						&& positionMatches
+						&& materialMatches;
+
+					return new
+					{
+						label = testCase.label,
+						success = ok,
+						expectedMaterial = testCase.material.name,
+						iconMaterial = thought?.iconMat?.name,
+						materialMatches,
+						spawnedThoughtCount = newThoughts.Length,
+						thoughtThingId = thought?.ThingID,
+						thoughtSpawned = thought?.Spawned ?? false,
+						thoughtPosition = thoughtPosition.IsValid ? ZombieRuntimeActions.DescribeCell(thoughtPosition) : null,
+						expectedPosition = ZombieRuntimeActions.DescribeCell(zombie.Position),
+						positionMatches
+					};
+				}).ToArray();
+
+				return new
+				{
+					success = results.All(result => result.success),
+					zombie = DescribeZombie(zombie),
+					results
 				};
 			}
 			finally
@@ -2018,6 +2105,158 @@ namespace ZombieLand
 				count = results.Length,
 				results
 			};
+		}
+
+		static bool MatchesRequestedZombieType(Zombie zombie, ZombieType type)
+		{
+			if (zombie == null)
+				return false;
+
+			return type switch
+			{
+				ZombieType.SuicideBomber => zombie.IsSuicideBomber,
+				ZombieType.ToxicSplasher => zombie.isToxicSplasher,
+				ZombieType.TankyOperator => zombie.IsTanky,
+				ZombieType.Miner => zombie.isMiner,
+				ZombieType.Electrifier => zombie.isElectrifier,
+				ZombieType.Albino => zombie.isAlbino,
+				ZombieType.DarkSlimer => zombie.isDarkSlimer,
+				ZombieType.Healer => zombie.isHealer,
+				ZombieType.Normal => zombie.IsSuicideBomber == false
+					&& zombie.isToxicSplasher == false
+					&& zombie.IsTanky == false
+					&& zombie.isMiner == false
+					&& zombie.isElectrifier == false
+					&& zombie.isAlbino == false
+					&& zombie.isDarkSlimer == false
+					&& zombie.isHealer == false,
+				_ => false,
+			};
+		}
+
+		[Tool("zombieland/incident_special_type_spawn_contract", Description = "Verify the ZombiesRising event spawn core preserves explicit special zombie type requests.")]
+		public static object IncidentSpecialTypeSpawnContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var spawnEventProcess = typeof(ZombiesRising).GetMethod("SpawnEventProcess", BindingFlags.Static | BindingFlags.NonPublic);
+			if (spawnEventProcess == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find ZombiesRising.SpawnEventProcess by reflection."
+				};
+			}
+
+			var cellValidator = Tools.ZombieSpawnLocator(map, true);
+			var spot = ZombiesRising.GetValidSpot(map, IntVec3.Invalid, cellValidator);
+			if (spot.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					error = "No valid event spawn spot was found."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			var initialIds = CurrentZombies(map)
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			var spawnedZombies = new List<Zombie>();
+			var samples = new List<object>();
+			var types = new[]
+			{
+				ZombieType.SuicideBomber,
+				ZombieType.ToxicSplasher,
+				ZombieType.TankyOperator,
+				ZombieType.Miner,
+				ZombieType.Electrifier,
+				ZombieType.Albino,
+				ZombieType.DarkSlimer,
+				ZombieType.Healer,
+				ZombieType.Normal
+			};
+
+			try
+			{
+				var success = true;
+				foreach (var type in types)
+				{
+					var beforeIds = CurrentZombies(map)
+						.Select(ZombieRuntimeActions.StableThingId)
+						.ToHashSet(StringComparer.OrdinalIgnoreCase);
+					var iterator = spawnEventProcess.Invoke(null, new object[] { map, 1, spot, cellValidator, false, true, type }) as System.Collections.IEnumerator;
+					if (iterator == null)
+					{
+						success = false;
+						samples.Add(new
+						{
+							type = type.ToString(),
+							success = false,
+							error = "SpawnEventProcess did not return an IEnumerator."
+						});
+						continue;
+					}
+
+					var steps = 0;
+					while (steps < 2048 && iterator.MoveNext())
+						steps++;
+
+					var after = CurrentZombies(map)
+						.OfType<Zombie>()
+						.Where(zombie => beforeIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+						.ToArray();
+					spawnedZombies.AddRange(after);
+					var best = after
+						.OrderBy(zombie => zombie.Position.DistanceToSquared(spot))
+						.FirstOrDefault();
+					var matched = MatchesRequestedZombieType(best, type);
+					success &= matched && steps < 2048 && after.Length == 1;
+					samples.Add(new
+					{
+						type = type.ToString(),
+						success = matched && steps < 2048 && after.Length == 1,
+						matched,
+						steps,
+						spawnedCount = after.Length,
+						spawned = DescribeZombie(best)
+					});
+				}
+
+				var currentIds = CurrentZombies(map)
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				var totalNewZombies = currentIds.Count(id => initialIds.Contains(id) == false);
+				return new
+				{
+					success,
+					spot = ZombieRuntimeActions.DescribeCell(spot),
+					requestedTypes = types.Select(type => type.ToString()).ToArray(),
+					totalNewZombies,
+					samples
+				};
+			}
+			finally
+			{
+				foreach (var zombie in spawnedZombies.Distinct())
+				{
+					_ = tickManager?.allZombiesCached?.Remove(zombie);
+					_ = tickManager?.hummingZombies?.Remove(zombie);
+					_ = tickManager?.tankZombies?.Remove(zombie);
+					if (zombie.Destroyed == false)
+						zombie.Destroy(DestroyMode.Vanish);
+				}
+			}
 		}
 
 		[Tool("zombieland/remove_all_zombies", Description = "Destroy all spawned Zombieland pawns on the current map and clear the cached zombie set.")]
