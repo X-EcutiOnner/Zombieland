@@ -99,6 +99,15 @@ namespace ZombieLand
 			};
 		}
 
+		static void DisablePawnWork(Pawn pawn)
+		{
+			if (pawn?.workSettings == null)
+				return;
+
+			pawn.workSettings.EnableAndInitializeIfNotAlreadyInitialized();
+			pawn.workSettings.DisableAll();
+		}
+
 		static object DescribeTankyArmor(Zombie zombie)
 		{
 			return zombie == null ? null : new
@@ -611,6 +620,55 @@ namespace ZombieLand
 			{
 				success = false,
 				error = $"No clear zombie shocker fixture area was found near ({root.x}, {root.z})."
+			};
+			return false;
+		}
+
+		static bool TryFindFogRoomFixtureDoorCell(Map map, IntVec3 root, float radius, out IntVec3 doorCell, out object error)
+		{
+			doorCell = IntVec3.Invalid;
+			error = null;
+			if (map == null)
+			{
+				error = new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+				return false;
+			}
+
+			foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+			{
+				var fixtureRect = CellRect.FromLimits(candidate.x - 3, candidate.z - 1, candidate.x + 3, candidate.z + 6);
+				if (fixtureRect.InBounds(map) == false)
+					continue;
+
+				var clear = true;
+				foreach (var cell in fixtureRect.Cells)
+				{
+					if (cell.Fogged(map)
+						|| cell.Standable(map) == false
+						|| cell.GetEdifice(map) != null
+						|| cell.GetFirstThing<Mineable>(map) != null
+						|| cell.GetThingList(map).Any(thing => thing is Pawn))
+					{
+						clear = false;
+						break;
+					}
+				}
+
+				if (clear)
+				{
+					doorCell = candidate;
+					return true;
+				}
+			}
+
+			error = new
+			{
+				success = false,
+				error = $"No clear fog-room fixture area was found near ({root.x}, {root.z})."
 			};
 			return false;
 		}
@@ -1231,7 +1289,7 @@ namespace ZombieLand
 
 			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
-			actor.workSettings?.DisableAll();
+			DisablePawnWork(actor);
 			if (TryFindAdjacentClearCell(actor, out var victimCell) == false
 				&& TryFindClearSpawnCell(map, actor.Position, 8f, out victimCell, out var spawnError) == false)
 				return spawnError;
@@ -1393,7 +1451,7 @@ namespace ZombieLand
 
 				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 				GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
-				actor.workSettings?.DisableAll();
+				DisablePawnWork(actor);
 
 				if (TryFindAdjacentClearCell(actor, out var zombieCell) == false
 					&& TryFindClearSpawnCell(map, actor.Position, 8f, out zombieCell, out var zombieSpawnError) == false)
@@ -1530,7 +1588,7 @@ namespace ZombieLand
 
 			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
-			actor.workSettings?.DisableAll();
+			DisablePawnWork(actor);
 
 			if (TryFindAdjacentClearCell(actor, out var zombieCell) == false
 				&& TryFindClearSpawnCell(map, actor.Position, 8f, out zombieCell, out var zombieSpawnError) == false)
@@ -1722,7 +1780,7 @@ namespace ZombieLand
 
 				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
-				actor.workSettings?.DisableAll();
+				DisablePawnWork(actor);
 				var config = ColonistSettings.Values.ConfigFor(actor);
 				if (config != null)
 					config.autoAvoidZombies = true;
@@ -1862,7 +1920,7 @@ namespace ZombieLand
 
 				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
-				actor.workSettings?.DisableAll();
+				DisablePawnWork(actor);
 				var config = ColonistSettings.Values.ConfigFor(actor);
 				if (config != null)
 					config.autoDoubleTap = true;
@@ -2006,7 +2064,7 @@ namespace ZombieLand
 
 				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
-				actor.workSettings?.DisableAll();
+				DisablePawnWork(actor);
 				var config = ColonistSettings.Values.ConfigFor(actor);
 				if (config != null)
 					config.autoAvoidZombies = true;
@@ -2163,7 +2221,7 @@ namespace ZombieLand
 
 				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
-				actor.workSettings?.DisableAll();
+				DisablePawnWork(actor);
 				var config = ColonistSettings.Values.ConfigFor(actor);
 				if (config != null)
 					config.autoAvoidZombies = true;
@@ -2368,7 +2426,7 @@ namespace ZombieLand
 
 			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
-			actor.workSettings?.DisableAll();
+			DisablePawnWork(actor);
 			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
 			if (zombie == null)
 			{
@@ -2497,7 +2555,7 @@ namespace ZombieLand
 			if (actorCell.IsValid == false)
 				actorCell = normalDoorCell;
 			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
-			actor.workSettings?.DisableAll();
+			DisablePawnWork(actor);
 
 			var normalDoor = ThingMaker.MakeThing(ThingDefOf.Door, GenStuff.DefaultStuffFor(ThingDefOf.Door)) as Building_Door;
 			var albinoDoor = ThingMaker.MakeThing(ThingDefOf.Door, GenStuff.DefaultStuffFor(ThingDefOf.Door)) as Building_Door;
@@ -2563,6 +2621,149 @@ namespace ZombieLand
 				normalTicksAfter,
 				albinoTicksAfter
 			};
+		}
+
+		[Tool("zombieland/fogged_door_spawns_room_zombies", Description = "Build a fogged sealed room, call RimWorld FogGrid.Notify_PawnEnteringDoor, and verify Zombieland spawns sudden room zombies before vanilla unfogging.")]
+		public static object FoggedDoorSpawnsRoomZombies()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindFogRoomFixtureDoorCell(map, root, 32f, out var doorCell, out var fixtureError) == false)
+				return fixtureError;
+
+			var wallDef = ThingDefOf.Wall;
+			var doorDef = ThingDefOf.Door;
+			var stuffDef = ThingDefOf.WoodLog;
+			var fixtureThings = new List<Thing>();
+			var interiorRect = CellRect.FromLimits(doorCell.x - 2, doorCell.z + 1, doorCell.x + 2, doorCell.z + 5);
+			var fixtureRect = CellRect.FromLimits(doorCell.x - 3, doorCell.z, doorCell.x + 3, doorCell.z + 6);
+			foreach (var cell in fixtureRect.EdgeCells)
+			{
+				if (cell == doorCell)
+					continue;
+
+				var wall = ThingMaker.MakeThing(wallDef, stuffDef) as Building;
+				if (wall == null)
+					continue;
+				GenSpawn.Spawn(wall, cell, map, WipeMode.Vanish);
+				wall.SetFaction(Faction.OfPlayer);
+				fixtureThings.Add(wall);
+			}
+
+			var door = ThingMaker.MakeThing(doorDef, stuffDef) as Building_Door;
+			if (door == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create test door."
+				};
+			}
+			GenSpawn.Spawn(door, doorCell, map, WipeMode.Vanish);
+			door.SetFaction(Faction.OfPlayer);
+			fixtureThings.Add(door);
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+
+			var playerCell = doorCell + IntVec3.South;
+			var hostileCell = doorCell + IntVec3.South + IntVec3.East;
+			var player = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var hostile = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfAncientsHostile);
+			GenSpawn.Spawn(player, playerCell, map, Rot4.North);
+			GenSpawn.Spawn(hostile, hostileCell, map, Rot4.North);
+			DisablePawnWork(player);
+			DisablePawnWork(hostile);
+
+			map.fogGrid.Refog(interiorRect);
+			map.fogGrid.Unfog(doorCell);
+			map.fogGrid.Unfog(playerCell);
+			map.fogGrid.Unfog(hostileCell);
+			var roomBefore = interiorRect.CenterCell.GetRoom(map);
+			var roomFoggedBefore = roomBefore?.Fogged ?? false;
+			var interiorFoggedBefore = interiorRect.Cells.Count(cell => cell.Fogged(map));
+			var roomCellCount = roomBefore?.CellCount ?? 0;
+			var zombiesBeforeHostile = CurrentZombies(map).Length;
+			var oldInfectedRaidsChance = ZombieSettings.Values.infectedRaidsChance;
+			var oldUseDynamicThreatLevel = ZombieSettings.Values.useDynamicThreatLevel;
+			try
+			{
+				ZombieSettings.Values.infectedRaidsChance = 1f;
+				ZombieSettings.Values.useDynamicThreatLevel = false;
+
+				map.fogGrid.Notify_PawnEnteringDoor(door, hostile);
+				var zombiesAfterHostile = CurrentZombies(map).Length;
+				var roomFoggedAfterHostile = roomBefore?.Fogged ?? false;
+				var interiorFoggedAfterHostile = interiorRect.Cells.Count(cell => cell.Fogged(map));
+
+				map.fogGrid.Notify_PawnEnteringDoor(door, player);
+				var zombiesAfterPlayer = CurrentZombies(map).Length;
+				var roomAfter = interiorRect.CenterCell.GetRoom(map);
+				var roomFoggedAfterPlayer = roomAfter?.Fogged ?? false;
+				var interiorFoggedAfterPlayer = interiorRect.Cells.Count(cell => cell.Fogged(map));
+				var spawnedZombies = CurrentZombies(map)
+					.OfType<Zombie>()
+					.Where(zombie => interiorRect.Contains(zombie.Position))
+					.Select(DescribeZombie)
+					.ToArray();
+
+				return new
+				{
+					success = roomBefore != null
+						&& roomFoggedBefore
+						&& roomCellCount >= 10
+						&& zombiesAfterHostile == zombiesBeforeHostile
+						&& roomFoggedAfterHostile
+						&& zombiesAfterPlayer > zombiesAfterHostile
+						&& spawnedZombies.Length > 0
+						&& roomFoggedAfterPlayer == false,
+					destroyedZombies,
+					door = new
+					{
+						id = ZombieRuntimeActions.StableThingId(door),
+						position = ZombieRuntimeActions.DescribeCell(door.Position),
+						door.Open
+					},
+					player = DescribePawn(player),
+					hostile = DescribePawn(hostile),
+					room = new
+					{
+						center = ZombieRuntimeActions.DescribeCell(interiorRect.CenterCell),
+						cellCountBefore = roomCellCount,
+						foggedBefore = roomFoggedBefore,
+						foggedAfterHostile = roomFoggedAfterHostile,
+						foggedAfterPlayer = roomFoggedAfterPlayer,
+						interiorCellCount = interiorRect.Area,
+						interiorFoggedBefore,
+						interiorFoggedAfterHostile,
+						interiorFoggedAfterPlayer
+					},
+					settings = new
+					{
+						infectedRaidsChance = ZombieSettings.Values.infectedRaidsChance,
+						useDynamicThreatLevel = ZombieSettings.Values.useDynamicThreatLevel,
+						threatLevel = ZombieWeather.GetThreatLevel(map)
+					},
+					zombiesBeforeHostile,
+					zombiesAfterHostile,
+					zombiesAfterPlayer,
+					zombieDelta = zombiesAfterPlayer - zombiesAfterHostile,
+					spawnedZombies
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.infectedRaidsChance = oldInfectedRaidsChance;
+				ZombieSettings.Values.useDynamicThreatLevel = oldUseDynamicThreatLevel;
+			}
 		}
 
 		[Tool("zombieland/detonate_suicide_bomber", Description = "Kill a suicide bomber through Zombie.Kill, verify it queued a Zombieland explosion, then execute the explosion.")]
@@ -3318,7 +3519,7 @@ namespace ZombieLand
 
 			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
-			actor.workSettings?.DisableAll();
+			DisablePawnWork(actor);
 
 			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
 			if (zombie == null)
@@ -3586,7 +3787,7 @@ namespace ZombieLand
 
 			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
-			actor.workSettings?.DisableAll();
+			DisablePawnWork(actor);
 			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
 			var chainsawCell = actorCell + IntVec3.East;
 			if (chainsawCell.InBounds(map) == false || chainsawCell.Standable(map) == false)
@@ -3716,7 +3917,7 @@ namespace ZombieLand
 
 			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
-			actor.workSettings?.DisableAll();
+			DisablePawnWork(actor);
 			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
 
 			var zombieCell = IntVec3.Invalid;
@@ -3887,7 +4088,7 @@ namespace ZombieLand
 
 			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
-			actor.workSettings?.DisableAll();
+			DisablePawnWork(actor);
 			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
 			actor.skills?.GetSkill(SkillDefOf.Construction).Notify_SkillDisablesChanged();
 			actor.skills.GetSkill(SkillDefOf.Construction).Level = 20;
@@ -4139,7 +4340,7 @@ namespace ZombieLand
 
 			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
-			actor.workSettings?.DisableAll();
+			DisablePawnWork(actor);
 			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
 			var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
 				?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false);
