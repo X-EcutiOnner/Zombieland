@@ -5589,6 +5589,7 @@ namespace ZombieLand
 				var maxTicks = sourceDerivedWorkTicks + 10;
 
 				var job = JobMaker.MakeJob(JobDefOf.ClearSnow, snowCell);
+				var jobDefAtCreation = job.def.defName;
 				job.playerForced = true;
 				worker.jobs.StartJob(job, JobCondition.InterruptForced, null, false, true);
 
@@ -5615,7 +5616,7 @@ namespace ZombieLand
 					worker = DescribePawn(worker),
 					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
 					snowCell = ZombieRuntimeActions.DescribeCell(snowCell),
-					jobDef = job.def.defName,
+					jobDefAtCreation,
 					finalJob = worker.CurJobDef?.defName,
 					laborSpeed,
 					sourceDerivedWorkTicks,
