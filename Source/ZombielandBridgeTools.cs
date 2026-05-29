@@ -1821,6 +1821,164 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/workgiver_respects_avoid_grid", Description = "Verify a non-forced DoubleTap workgiver rejects an infected corpse in avoid danger while a forced command still creates the job.")]
+		public static object WorkgiverRespectsAvoidGrid()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			var oldHours = ZombieSettings.Values.hoursAfterDeathToBecomeZombie;
+			ZombieSettings.Values.betterZombieAvoidance = true;
+			ZombieSettings.Values.hoursAfterDeathToBecomeZombie = Math.Max(1, oldHours);
+			try
+			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				foreach (var zombieCorpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+					zombieCorpse.Destroy();
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				actor.workSettings?.DisableAll();
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoDoubleTap = true;
+
+				var victimCell = GenRadial.RadialCellsAround(actor.Position, 14f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.DistanceTo(actor.Position) >= 10f)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.OrderBy(cell => cell.DistanceToSquared(actor.Position))
+					.FirstOrDefault();
+				if (victimCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "No distant victim cell was found for the avoid-grid workgiver fixture."
+					};
+				}
+
+				var victim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(victim, victimCell, map, WipeMode.Vanish);
+				if (ZombieRuntimeActions.AddZombieBite(victim, "final", out var bite, out var error) == false)
+				{
+					return new
+					{
+						success = false,
+						victim = DescribePawn(victim),
+						error
+					};
+				}
+
+				if (ZombieRuntimeActions.KillPawnToCorpse(victim, out var corpse, out error) == false)
+				{
+					return new
+					{
+						success = false,
+						victim = DescribePawn(victim),
+						biteLabel = bite.LabelCap,
+						error
+					};
+				}
+
+				var zombieCell = GenRadial.RadialCellsAround(corpse.Position, 3f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.OrderBy(cell => cell.DistanceToSquared(corpse.Position))
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						corpse = DescribeCorpse(corpse),
+						error = "No nearby zombie cell was found for the avoid-grid workgiver fixture."
+					};
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						corpse = DescribeCorpse(corpse),
+						error = "ZombieGenerator.SpawnZombie returned no avoid-grid zombie."
+					};
+				}
+
+				zombie.state = ZombieState.Tracking;
+				var tickManager = map.GetComponent<TickManager>();
+				var specs = new List<ZombieCostSpecs>
+				{
+					new()
+					{
+						position = zombie.Position,
+						radius = Tools.ZombieAvoidRadius(zombie),
+						maxCosts = TickManager.ZombieMaxCosts(zombie)
+					}
+				};
+				tickManager.avoidGrid = Tools.avoider.UpdateZombiePositionsImmediately(map, specs);
+				var targetAvoidCost = tickManager.avoidGrid.GetCosts()[corpse.Position.x + corpse.Position.z * map.Size.x];
+				var targetShouldAvoid = tickManager.avoidGrid.ShouldAvoid(map, corpse.Position);
+				var actorShouldAvoid = tickManager.avoidGrid.ShouldAvoid(map, actor.Position);
+
+				var workGiver = new WorkGiver_DoubleTap();
+				var hasUnforcedJob = workGiver.HasJobOnThing(actor, corpse, false);
+				var unforcedJob = hasUnforcedJob ? workGiver.JobOnThing(actor, corpse, false) : null;
+				var hasForcedJob = workGiver.HasJobOnThing(actor, corpse, true);
+				var forcedJob = workGiver.JobOnThing(actor, corpse, true);
+
+				return new
+				{
+					success = targetShouldAvoid
+						&& actorShouldAvoid == false
+						&& hasUnforcedJob == false
+						&& unforcedJob == null
+						&& hasForcedJob
+						&& forcedJob?.def == CustomDefs.DoubleTap,
+					destroyedZombies,
+					actor = DescribePawn(actor),
+					corpse = DescribeCorpse(corpse),
+					zombie = DescribeZombie(zombie),
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					victimCell = ZombieRuntimeActions.DescribeCell(victimCell),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					targetAvoidCost,
+					targetShouldAvoid,
+					actorShouldAvoid,
+					hasUnforcedJob,
+					unforcedJobDef = unforcedJob?.def?.defName,
+					hasForcedJob,
+					forcedJobDef = forcedJob?.def?.defName
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+				ZombieSettings.Values.hoursAfterDeathToBecomeZombie = oldHours;
+			}
+		}
+
 		[Tool("zombieland/detonate_suicide_bomber", Description = "Kill a suicide bomber through Zombie.Kill, verify it queued a Zombieland explosion, then execute the explosion.")]
 		public static object DetonateSuicideBomber(
 			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned suicide bomber is used.", Required = false, DefaultValue = "")] string target = "")

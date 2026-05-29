@@ -27,6 +27,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 - Latest verified: `zombieland/zombie_ball_in_flight` launches a real `ZombieBall`, derives the travel window from projectile distance and `SpeedTilesPerTick`, advances to the halfway tick, verifies that the projectile is still spawned, moved, not at target, and rotating, then advances through impact and verifies that the projectile is gone and a delivered zombie was spawned.
 - Latest verified: `zombieland/flee_ignores_harmless_zombies` restores the old 1.4 `SelfDefenseUtility.ShouldFleeFrom` semantic on RimWorld 1.6's `FleeUtility.ShouldFleeFrom`: a normal nearby zombie remains a flee threat, but roped, paralyzed/confused, active electrifier, and albino zombies are filtered through `SeesZombieAsThreat` and no longer trigger flee.
 - Latest verified: `zombieland/colonist_avoidance_interrupts_job` generates a real `AvoidGrid` from a nearby tracking zombie, starts a non-forced colonist `Wait_Combat` job, lets `JobDriver.DriverTick` run, and verifies it interrupts into a player-forced `Flee` job whose destination is outside the avoid grid.
+- Latest verified: `zombieland/workgiver_respects_avoid_grid` verifies work assignment gating around zombie danger: a non-forced `WorkGiver_DoubleTap` rejects an infected corpse positioned in the avoid grid while the actor is outside danger, and the same target still creates a forced `DoubleTap` command job.
 - Next blocker cluster: validate special zombie behaviors beyond visuals.
 
 ## Decisions
