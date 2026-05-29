@@ -4117,6 +4117,148 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_tending_contract", Description = "Verify real TendUtility.DoTend transfers contamination from medicine and equalizes doctor/patient contamination.")]
+		public static object ContaminationTendingContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var doctorCell, out var doctorSpawnError) == false)
+				return doctorSpawnError;
+			if (TryFindClearSpawnCell(map, doctorCell + new IntVec3(2, 0, 0), 8f, out var patientCell, out var patientSpawnError) == false)
+				return patientSpawnError;
+			if (TryFindClearSpawnCell(map, doctorCell + new IntVec3(0, 0, 2), 8f, out var medicineCell, out var medicineSpawnError) == false)
+				return medicineSpawnError;
+
+			var doctor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var patient = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(doctor, doctorCell, map, Rot4.South);
+			GenSpawn.Spawn(patient, patientCell, map, Rot4.South);
+			DisablePawnWork(doctor);
+			DisablePawnWork(patient);
+			doctor.needs?.AddOrRemoveNeedsAsAppropriate();
+			patient.needs?.AddOrRemoveNeedsAsAppropriate();
+			doctor.jobs?.StopAll(false, false);
+			patient.jobs?.StopAll(false, false);
+			doctor.ClearContamination();
+			patient.ClearContamination();
+			doctor.skills.GetSkill(SkillDefOf.Medicine).Level = 0;
+
+			var part = patient.health.hediffSet.GetNotMissingParts()
+				.FirstOrDefault(record => record.def == BodyPartDefOf.Torso)
+				?? patient.health.hediffSet.GetNotMissingParts().FirstOrDefault(record => record.def.alive)
+				?? patient.health.hediffSet.GetNotMissingParts().FirstOrDefault();
+			var wound = HediffMaker.MakeHediff(HediffDefOf.Cut, patient, part);
+			wound.Severity = 5f;
+			patient.health.AddHediff(wound, part);
+
+			var medicine = (Medicine)ThingMaker.MakeThing(ThingDefOf.MedicineIndustrial);
+			medicine.stackCount = 2;
+			GenSpawn.Spawn(medicine, medicineCell, map, WipeMode.Vanish);
+			medicine.ClearContamination();
+
+			const float medicineInitial = 0.50f;
+			const float doctorInitial = 0.10f;
+			const float patientInitial = 0.00f;
+			medicine.AddContamination(medicineInitial);
+			doctor.AddContamination(doctorInitial);
+
+			var medicineBefore = medicine.GetContamination();
+			var doctorBefore = DescribeContamination(doctor);
+			var patientBefore = DescribeContamination(patient);
+			var woundNeededTendBefore = patient.health.HasHediffsNeedingTend();
+
+			TendUtility.DoTend(doctor, patient, medicine);
+
+			var medicineAfter = medicine.GetContamination();
+			var doctorAfter = DescribeContamination(doctor);
+			var patientAfter = DescribeContamination(patient);
+			var woundTended = wound.IsTended();
+
+			var medicineTransfer = ZombieSettings.Values.contamination.medicineTransfer;
+			var medicineAfterPatient = medicineInitial * (1f - medicineTransfer);
+			var expectedPatientAfterMedicine = patientInitial + medicineInitial * medicineTransfer;
+			var medicineDoctorTransfer = medicineAfterPatient * medicineTransfer;
+			var expectedMedicineAfter = medicineAfterPatient - medicineDoctorTransfer;
+			var expectedDoctorAfterMedicine = doctorInitial + medicineDoctorTransfer;
+			var equalizeWeight = GenMath.LerpDoubleClamped(
+				0,
+				20,
+				ZombieSettings.Values.contamination.tendEqualizeWorst,
+				ZombieSettings.Values.contamination.tendEqualizeBest,
+				doctor.skills.GetSkill(SkillDefOf.Medicine).Level
+			);
+			var high = Mathf.Max(expectedDoctorAfterMedicine, expectedPatientAfterMedicine);
+			var low = Mathf.Min(expectedDoctorAfterMedicine, expectedPatientAfterMedicine);
+			var highAfterEqualize = high * (1f - equalizeWeight) + low * equalizeWeight;
+			var lowAfterEqualize = low + high - highAfterEqualize;
+			var expectedDoctorAfter = expectedDoctorAfterMedicine >= expectedPatientAfterMedicine ? highAfterEqualize : lowAfterEqualize;
+			var expectedPatientAfter = expectedPatientAfterMedicine >= expectedDoctorAfterMedicine ? highAfterEqualize : lowAfterEqualize;
+			static bool Close(float? value, float expected) => value.HasValue && Mathf.Abs(value.Value - expected) < 0.0001f;
+			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+			var medicineTransferred = CloseFloat(medicineAfter, expectedMedicineAfter)
+				&& medicine.stackCount == 1
+				&& medicine.Destroyed == false;
+			var doctorPatientEqualized = CloseFloat(doctorAfter.stored, expectedDoctorAfter)
+				&& Close(doctorAfter.needLevel, expectedDoctorAfter)
+				&& Close(doctorAfter.hediffSeverity, expectedDoctorAfter)
+				&& CloseFloat(patientAfter.stored, expectedPatientAfter)
+				&& Close(patientAfter.needLevel, expectedPatientAfter)
+				&& Close(patientAfter.hediffSeverity, expectedPatientAfter);
+
+			return new
+			{
+				success = woundNeededTendBefore && woundTended && medicineTransferred && doctorPatientEqualized,
+				doctor = DescribePawn(doctor),
+				patient = DescribePawn(patient),
+				medicine = new
+				{
+					id = ZombieRuntimeActions.StableThingId(medicine),
+					thingId = medicine.ThingID,
+					defName = medicine.def?.defName,
+					spawned = medicine.Spawned,
+					destroyed = medicine.Destroyed,
+					stackCount = medicine.stackCount
+				},
+				doctorCell = ZombieRuntimeActions.DescribeCell(doctorCell),
+				patientCell = ZombieRuntimeActions.DescribeCell(patientCell),
+				medicineCell = ZombieRuntimeActions.DescribeCell(medicineCell),
+				woundNeededTendBefore,
+				woundTended,
+				medicineBefore,
+				medicineAfter,
+				expectedMedicineAfter,
+				medicineStackAfter = medicine.stackCount,
+				medicineTransfer,
+				equalizeWeight,
+				doctorBefore,
+				doctorAfter,
+				expectedDoctorAfter,
+				patientBefore,
+				patientAfter,
+				expectedPatientAfter,
+				medicineTransferred,
+				doctorPatientEqualized
+			};
+		}
+
 		[Tool("zombieland/zombie_records_suppression", Description = "Verify zombies cannot mutate or report vanilla pawn records while ordinary pawns still can.")]
 		public static object ZombieRecordsSuppression()
 		{
