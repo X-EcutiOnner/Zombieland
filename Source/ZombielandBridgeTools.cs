@@ -7206,6 +7206,207 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_plant_harvest_contract", Description = "Harvest a contaminated plant through the real PlantHarvest job and verify harvested products receive plant-transfer contamination.")]
+		public static object ContaminationPlantHarvestContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var plantDef = DefDatabase<ThingDef>.GetNamedSilentFail("Plant_Rice");
+			var productDef = plantDef?.plant?.harvestedThingDef;
+			var harvestJobDef = DefDatabase<JobDef>.GetNamedSilentFail("Harvest");
+			if (plantDef == null || productDef == null || harvestJobDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Plant_Rice, its harvested product, or JobDef Harvest is unavailable."
+				};
+			}
+
+			bool TryFindPlantCell(IntVec3 root, float radius, out IntVec3 cell, out object error)
+			{
+				cell = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+				{
+					if (candidate.InBounds(map) == false)
+						continue;
+					if (candidate.Fogged(map))
+						continue;
+					if (candidate.GetEdifice(map) != null)
+						continue;
+					if (candidate.GetThingList(map).Any(thing =>
+						thing is Pawn
+						|| thing is Blueprint
+						|| thing is Frame
+						|| thing.def.category == ThingCategory.Plant
+						|| thing.def.category == ThingCategory.Building))
+						continue;
+
+					cell = candidate;
+					return true;
+				}
+
+				error = new
+				{
+					success = false,
+					error = $"No clear plant fixture cell was found near ({root.x}, {root.z})."
+				};
+				return false;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindPlantCell(root, 24f, out var plantCell, out var plantCellError) == false)
+				return plantCellError;
+			if (TryFindClearSpawnCell(map, plantCell + IntVec3.East, 8f, out var workerCell, out var workerCellError) == false)
+				return workerCellError;
+
+			var plant = (Plant)null;
+			var worker = (Pawn)null;
+			var products = new List<Thing>();
+			try
+			{
+				worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(worker, workerCell, map, WipeMode.Vanish);
+				DisablePawnWork(worker);
+				worker.skills?.GetSkill(SkillDefOf.Plants).Notify_SkillDisablesChanged();
+				worker.skills.GetSkill(SkillDefOf.Plants).Level = 20;
+
+				plant = ThingMaker.MakeThing(plantDef) as Plant;
+				if (plant == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not create Plant_Rice fixture."
+					};
+				}
+
+				GenSpawn.Spawn(plant, plantCell, map, Rot4.South, WipeMode.Vanish, false);
+				plant.Growth = 1f;
+
+				const float plantContamination = 0.64f;
+				plant.SetContamination(plantContamination);
+				var plantBefore = plant.GetContamination();
+				var productIdsBefore = map.listerThings.ThingsOfDef(productDef)
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				var harvestable = plant.HarvestableNow;
+				var workPerTick = JobDriver_PlantWork.WorkDonePerTick(worker, plant);
+				var sourceDerivedWorkTicks = Mathf.CeilToInt(plant.def.plant.harvestWork / workPerTick);
+				var maxTicks = sourceDerivedWorkTicks + 60;
+				var job = JobMaker.MakeJob(harvestJobDef, plant);
+				job.playerForced = true;
+				var started = worker.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
+				var tickHit = -1;
+				var samples = new List<object>();
+
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					products = map.listerThings.ThingsOfDef(productDef)
+						.Where(thing => productIdsBefore.Contains(ZombieRuntimeActions.StableThingId(thing)) == false)
+						.ToList();
+					var produced = products.Count > 0;
+					if (tick == 1 || tick == sourceDerivedWorkTicks || tick == maxTicks || produced)
+					{
+						samples.Add(new
+						{
+							tick,
+							workerJob = worker.CurJobDef?.defName,
+							plantSpawned = plant.Spawned,
+							plantDestroyed = plant.Destroyed,
+							productCount = products.Count,
+							productStackCount = products.Sum(thing => thing.stackCount)
+						});
+					}
+					if (produced)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var product = products.FirstOrDefault();
+				var productContamination = product?.GetContamination() ?? -1f;
+				var plantAfter = plant.GetContamination();
+				var expectedProductContamination = plantContamination * ZombieSettings.Values.contamination.plantTransfer;
+				var expectedSourceAfterTransferBeforeCollection = plantContamination - expectedProductContamination;
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+				var productContaminated = product != null
+					&& CloseFloat(productContamination, expectedProductContamination);
+
+				return new
+				{
+					success = harvestable
+						&& started
+						&& tickHit > 0
+						&& product != null
+						&& productContaminated
+						&& plant.Destroyed,
+					worker = DescribePawn(worker),
+					cells = new
+					{
+						worker = ZombieRuntimeActions.DescribeCell(workerCell),
+						plant = ZombieRuntimeActions.DescribeCell(plantCell)
+					},
+					jobDef = harvestJobDef.defName,
+					started,
+					tickHit,
+					maxTicks,
+					sourceDerivedWorkTicks,
+					workPerTick,
+					harvestWork = plant.def.plant.harvestWork,
+					harvestable,
+					plant = ZombieRuntimeActions.StableThingId(plant),
+					plantDef = plant.def.defName,
+					plantBefore,
+					plantAfter,
+					expectedSourceAfterTransferBeforeCollection,
+					plantDestroyed = plant.Destroyed,
+					product = ZombieRuntimeActions.StableThingId(product),
+					productDef = product?.def?.defName,
+					productStackCount = product?.stackCount ?? 0,
+					productContamination,
+					expectedProductContamination,
+					plantTransfer = ZombieSettings.Values.contamination.plantTransfer,
+					productContaminated,
+					samples
+				};
+			}
+			finally
+			{
+				foreach (var product in products)
+				{
+					product?.ClearContamination();
+					if (product is { Destroyed: false, Spawned: true })
+						product.Destroy();
+				}
+				plant?.ClearContamination();
+				if (plant is { Destroyed: false, Spawned: true })
+					plant.Destroy();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+			}
+		}
+
 		[Tool("zombieland/contamination_roof_collapse_contract", Description = "Verify contaminated ground transfers into collapsed roof rock through real RoofCollapserImmediate.DropRoofInCellPhaseOne.")]
 		public static object ContaminationRoofCollapseContract()
 		{
