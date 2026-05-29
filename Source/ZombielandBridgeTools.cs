@@ -2451,6 +2451,87 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/rimconnect_super_drop_contract", Description = "Verify the RimConnect super zombie drop action creates RimWorld drop-pod things without errors.")]
+		public static object RimConnectSuperDropContract(
+			[ToolParameter(Description = "Number of super zombies to put in the drop raid.", Required = false, DefaultValue = 2)] int amount = 2)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland TickManager is attached to the current map."
+				};
+			}
+
+			amount = Math.Max(1, Math.Min(amount, 8));
+			var destroyedExisting = ZombieRuntimeActions.DestroyZombies(map);
+			var oldMaximumZombies = ZombieSettings.Values.maximumNumberOfZombies;
+			var beforeIds = map.listerThings.AllThings
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			try
+			{
+				ZombieSettings.Values.maximumNumberOfZombies = Math.Max(
+					ZombieSettings.Values.maximumNumberOfZombies,
+					tickManager.ZombieCount() + amount + 16
+				);
+				var (message, spot) = RimConnectSupport.SuperZombieDropRaid(amount, "Bridge");
+				var afterThings = map.listerThings.AllThings
+					.Where(thing => beforeIds.Contains(ZombieRuntimeActions.StableThingId(thing)) == false)
+					.ToArray();
+				var dropPodThings = afterThings
+					.Where(thing => thing is Skyfaller || thing.def?.defName?.IndexOf("DropPod", StringComparison.OrdinalIgnoreCase) >= 0)
+					.ToArray();
+				var messageMatches = message?.Contains($"Bridge created an drop raid with {amount} super zombies", StringComparison.OrdinalIgnoreCase) == true;
+				var spotValid = spot.IsValid && spot.InBounds(map);
+				return new
+				{
+					success = messageMatches
+						&& spotValid
+						&& dropPodThings.Length > 0,
+					amount,
+					destroyedExisting,
+					message,
+					messageMatches,
+					spot = spotValid ? ZombieRuntimeActions.DescribeCell(spot) : null,
+					spotValid,
+					newThingCount = afterThings.Length,
+					dropPodThingCount = dropPodThings.Length,
+					newThings = afterThings.Select(thing => new
+					{
+						id = ZombieRuntimeActions.StableThingId(thing),
+						def = thing.def?.defName,
+						type = thing.GetType().FullName,
+						position = ZombieRuntimeActions.DescribeCell(thing.Position),
+						spawned = thing.Spawned
+					}).ToArray()
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.maximumNumberOfZombies = oldMaximumZombies;
+				var createdThings = map.listerThings.AllThings
+					.Where(thing => beforeIds.Contains(ZombieRuntimeActions.StableThingId(thing)) == false)
+					.ToArray();
+				foreach (var thing in createdThings)
+					if (thing.Destroyed == false)
+						thing.Destroy(DestroyMode.Vanish);
+				tickManager.allZombiesCached?.Clear();
+			}
+		}
+
 		[Tool("zombieland/remove_all_zombies", Description = "Destroy all spawned Zombieland pawns on the current map and clear the cached zombie set.")]
 		public static object RemoveAllZombies()
 		{
