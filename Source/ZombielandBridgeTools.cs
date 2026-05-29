@@ -249,6 +249,27 @@ namespace ZombieLand
 			};
 		}
 
+		static readonly MethodInfo pathFollowerCostToMoveIntoCellMethod = typeof(Pawn_PathFollower).GetMethod("CostToMoveIntoCell", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Pawn), typeof(IntVec3) }, null);
+
+		static bool TryCostToMoveIntoCell(Pawn pawn, IntVec3 cell, out float cost, out string error)
+		{
+			cost = 0f;
+			error = null;
+			if (pathFollowerCostToMoveIntoCellMethod == null)
+			{
+				error = "Could not find Pawn_PathFollower.CostToMoveIntoCell(Pawn, IntVec3).";
+				return false;
+			}
+			if (pawn == null)
+			{
+				error = "Pawn is null.";
+				return false;
+			}
+
+			cost = Convert.ToSingle(pathFollowerCostToMoveIntoCellMethod.Invoke(null, new object[] { pawn, cell }));
+			return true;
+		}
+
 		static object DescribeZombie(Pawn pawn)
 		{
 			var zombie = pawn as Zombie;
@@ -2408,6 +2429,135 @@ namespace ZombieLand
 				zombieEffectCount,
 				spitterEffectCount,
 				blobEffectCount
+			};
+		}
+
+		[Tool("zombieland/tar_slime_move_cost_contract", Description = "Verify TarSlime applies the Zombieland movement-cost formula to zombies and spitters while ordinary pawns use the non-zombie formula.")]
+		public static object TarSlimeMoveCostContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+				corpse.Destroy();
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanSpawnError) == false)
+				return humanSpawnError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 0), 8f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(6, 0, 0), 10f, out var spitterCell, out var spitterSpawnError) == false)
+				return spitterSpawnError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(0, 0, 3), 8f, out var clearCell, out var clearSpawnError) == false)
+				return clearSpawnError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 3), 10f, out var tarCell, out var tarSpawnError) == false)
+				return tarSpawnError;
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					human = DescribePawn(human),
+					error = "ZombieGenerator.SpawnZombie returned no tar-cost test zombie."
+				};
+			}
+
+			var existingSpitters = CurrentZombies(map).OfType<ZombieSpitter>().Select(ZombieRuntimeActions.StableThingId).ToHashSet();
+			ZombieSpitter.Spawn(map, spitterCell);
+			var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+				.FirstOrDefault(candidate => existingSpitters.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
+			if (spitter == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					error = "ZombieSpitter.Spawn returned no tar-cost test spitter."
+				};
+			}
+
+			FilthMaker.TryMakeFilth(tarCell, map, CustomDefs.TarSlime);
+			var tarSlime = map.thingGrid.ThingAt<TarSlime>(tarCell);
+			if (tarSlime == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					spitter = DescribeZombie(spitter),
+					tarCell = ZombieRuntimeActions.DescribeCell(tarCell),
+					error = "Could not create TarSlime in the tar-cost test cell."
+				};
+			}
+
+			if (TryCostToMoveIntoCell(human, clearCell, out var humanClearCost, out var error) == false)
+				return new { success = false, error };
+			if (TryCostToMoveIntoCell(human, tarCell, out var humanTarCost, out error) == false)
+				return new { success = false, error };
+			if (TryCostToMoveIntoCell(zombie, clearCell, out var zombieClearCost, out error) == false)
+				return new { success = false, error };
+			if (TryCostToMoveIntoCell(zombie, tarCell, out var zombieTarCost, out error) == false)
+				return new { success = false, error };
+			if (TryCostToMoveIntoCell(spitter, clearCell, out var spitterClearCost, out error) == false)
+				return new { success = false, error };
+			if (TryCostToMoveIntoCell(spitter, tarCell, out var spitterTarCost, out error) == false)
+				return new { success = false, error };
+
+			var difficulty = Tools.Difficulty();
+			var expectedZombieTarCost = (float)GenMath.LerpDouble(0, 5, 150, 14, difficulty);
+			var expectedHumanTarCost = (float)GenMath.LerpDouble(0, 5, 14, 400, difficulty);
+			var humanMatchesTarFormula = Mathf.Abs(humanTarCost - expectedHumanTarCost) < 0.001f;
+			var zombieMatchesTarFormula = Mathf.Abs(zombieTarCost - expectedZombieTarCost) < 0.001f;
+			var spitterMatchesTarFormula = Mathf.Abs(spitterTarCost - expectedZombieTarCost) < 0.001f;
+			var clearCostsDifferFromTar = Mathf.Abs(humanClearCost - humanTarCost) > 0.001f
+				&& Mathf.Abs(zombieClearCost - zombieTarCost) > 0.001f
+				&& Mathf.Abs(spitterClearCost - spitterTarCost) > 0.001f;
+
+			return new
+			{
+				success = humanMatchesTarFormula
+					&& zombieMatchesTarFormula
+					&& spitterMatchesTarFormula
+					&& clearCostsDifferFromTar,
+				destroyedZombies,
+				difficulty,
+				clearCell = ZombieRuntimeActions.DescribeCell(clearCell),
+				tarCell = ZombieRuntimeActions.DescribeCell(tarCell),
+				tarSlimeId = ZombieRuntimeActions.StableThingId(tarSlime),
+				human = DescribePawn(human),
+				zombie = DescribeZombie(zombie),
+				spitter = DescribeZombie(spitter),
+				humanClearCost,
+				humanTarCost,
+				zombieClearCost,
+				zombieTarCost,
+				spitterClearCost,
+				spitterTarCost,
+				expectedHumanTarCost,
+				expectedZombieTarCost,
+				humanMatchesTarFormula,
+				zombieMatchesTarFormula,
+				spitterMatchesTarFormula,
+				clearCostsDifferFromTar
 			};
 		}
 

@@ -5485,7 +5485,7 @@ namespace ZombieLand
 			{
 				if (pawn.Map.thingGrid.ThingAt<TarSlime>(c) == null)
 					return;
-				if (pawn is Zombie)
+				if (IsZombielandPawn(pawn))
 					__result = GenMath.LerpDouble(0, 5, 150, 14, Tools.Difficulty());
 				else
 					__result = GenMath.LerpDouble(0, 5, 14, 400, Tools.Difficulty());
