@@ -7,6 +7,7 @@ PROJECT_SRC="$ROOT/Originals/Effects"
 PROJECT_TMP="${TMPDIR:-/tmp}/zombieland-unity-validate"
 LOG_DIR="$ROOT/logs"
 LOG_FILE="$LOG_DIR/unity-validate-assets.log"
+RESOURCES_DIR="${ZOMBIELAND_RESOURCES_DIR:-$ROOT/Resources}"
 
 if [[ ! -x "$UNITY" ]]; then
   echo "missing Unity executable: $UNITY" >&2
@@ -17,7 +18,7 @@ mkdir -p "$LOG_DIR"
 rm -rf "$PROJECT_TMP"
 ditto "$PROJECT_SRC" "$PROJECT_TMP"
 
-ZOMBIELAND_RESOURCES_DIR="$ROOT/Resources" "$UNITY" \
+ZOMBIELAND_RESOURCES_DIR="$RESOURCES_DIR" "$UNITY" \
   -batchmode \
   -quit \
   -projectPath "$PROJECT_TMP" \
