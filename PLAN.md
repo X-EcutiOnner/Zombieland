@@ -32,7 +32,7 @@ New scenario saves should use `ZL_<cluster>_<purpose>_base.rws`, be registered h
 | --- | --- | --- |
 | Startup, load folders, config | Load structure and GABS launch are working; Harmony ordering issue was user-corrected | Recheck from clean start before release packaging |
 | Core zombie movement/pathing | Async path jitter and avoid-grid costs fixed with contracts | Scenario-level horde movement through doors/walls on a controlled save |
-| Rendering and Unity assets | Toxic, spitter, blob, suicide bomber, tar smoke, and thumper have focused fixes | Real-step visual sweep on `ZombielandVisualLineup` plus asset-backed effects |
+| Rendering and Unity assets | Toxic, spitter, blob, suicide bomber, tar smoke, and thumper have focused fixes; `ZombielandVisualLineup` rechecked after 30 real paused ticks on 2026-05-29 with artifact `~/Library/Application Support/RimWorld/Screenshots/zl_visual_lineup_recheck_tightest_20260529__cell_rect.png` | Asset-backed effects sweep across save/load once Unity project import/export is next in scope |
 | Special zombies | Many direct contracts exist for tanky, albino, miner, healer, electrifier, toxic, dark slimer | End-to-end special zombie scenario: spawn, move, attack/take damage, special effect, death/cleanup |
 | Infection, corpses, serum | Bite/cure/serum/double-tap/rope flows covered by contracts | Scenario save with corpse conversion chain across save/load |
 | Incidents and director | Scheduling, letters, random weights, special spawning covered | Player-facing incident wave on clean map with real stepping |
