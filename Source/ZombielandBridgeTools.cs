@@ -4649,6 +4649,134 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns create contaminated blood filth and contaminated destroyed things transfer contamination into real GenLeaving outputs.")]
+		public static object ContaminationFilthLeavingsContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var shipChunkDef = DefDatabase<ThingDef>.GetNamedSilentFail("ShipChunk");
+			if (shipChunkDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "ShipChunk def is unavailable."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var pawnCell, out var pawnSpawnError) == false)
+				return pawnSpawnError;
+			if (TryFindClearBuildingFootprint(map, shipChunkDef, pawnCell + new IntVec3(5, 0, 0), 16f, out var shipChunkCell, out var shipChunkSpawnError) == false)
+				return shipChunkSpawnError;
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var shipChunk = (Thing)null;
+			var bloodFilth = (Filth)null;
+			var leavings = new List<Thing>();
+			try
+			{
+				ClearFilthAt(map, pawnCell);
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+				DisablePawnWork(pawn);
+				pawn.ClearContamination();
+
+				const float pawnContamination = 0.7f;
+				pawn.SetContamination(pawnContamination);
+				pawn.health.DropBloodFilth();
+				bloodFilth = pawnCell.GetThingList(map).OfType<Filth>().OrderByDescending(filth => filth.GetContamination()).FirstOrDefault();
+				var bloodContamination = bloodFilth?.GetContamination() ?? -1f;
+				var expectedBloodContamination = pawnContamination * ZombieSettings.Values.contamination.filthEqualize;
+				var bloodProduced = bloodFilth != null && bloodFilth.def == ThingDefOf.Filth_Blood;
+
+				shipChunk = ThingMaker.MakeThing(shipChunkDef);
+				GenSpawn.Spawn(shipChunk, shipChunkCell, map, Rot4.North, WipeMode.Vanish, false);
+				const float shipChunkContamination = 0.8f;
+				shipChunk.SetContamination(shipChunkContamination);
+				var shipChunkBefore = shipChunk.GetContamination();
+				var leavingsTransfer = ZombieSettings.Values.contamination.leavingsTransfer;
+
+				GenLeaving.DoLeavingsFor(shipChunk, map, DestroyMode.KillFinalize, leavings);
+
+				var shipChunkAfter = shipChunk.GetContamination();
+				var leavingsContamination = leavings.Select(thing => thing.GetContamination()).ToArray();
+				var totalLeavingsContamination = leavingsContamination.Sum();
+				var expectedTotalLeavingsContamination = shipChunkBefore * leavingsTransfer;
+				var expectedShipChunkAfter = shipChunkBefore * (1f - leavingsTransfer);
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var bloodContaminated = bloodProduced && CloseFloat(bloodContamination, expectedBloodContamination);
+				var leavingsContaminated = leavings.Count > 0
+					&& leavings.All(thing => thing.Spawned)
+					&& leavingsContamination.All(value => value > 0f)
+					&& CloseFloat(totalLeavingsContamination, expectedTotalLeavingsContamination)
+					&& CloseFloat(shipChunkAfter, expectedShipChunkAfter);
+
+				return new
+				{
+					success = bloodContaminated && leavingsContaminated,
+					pawn = DescribePawn(pawn),
+					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+					pawnContamination,
+					bloodFilth = ZombieRuntimeActions.StableThingId(bloodFilth),
+					bloodDef = bloodFilth?.def?.defName,
+					bloodContamination,
+					expectedBloodContamination,
+					bloodProduced,
+					bloodContaminated,
+					shipChunk = ZombieRuntimeActions.StableThingId(shipChunk),
+					shipChunkCell = ZombieRuntimeActions.DescribeCell(shipChunkCell),
+					shipChunkBefore,
+					shipChunkAfter,
+					expectedShipChunkAfter,
+					leavingsTransfer,
+					leavings = leavings.Select(thing => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(thing),
+						def = thing.def?.defName,
+						stackCount = thing.stackCount,
+						contamination = thing.GetContamination()
+					}).ToArray(),
+					totalLeavingsContamination,
+					expectedTotalLeavingsContamination,
+					leavingsContaminated
+				};
+			}
+			finally
+			{
+				pawn?.ClearContamination();
+				if (bloodFilth is { Destroyed: false, Spawned: true })
+					bloodFilth.Destroy();
+				foreach (var leaving in leavings)
+				{
+					leaving.ClearContamination();
+					if (leaving is { Destroyed: false, Spawned: true })
+						leaving.Destroy();
+				}
+				shipChunk?.ClearContamination();
+				if (shipChunk is { Destroyed: false, Spawned: true })
+					shipChunk.Destroy();
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+			}
+		}
+
 		[Tool("zombieland/contamination_building_install_contract", Description = "Verify contamination follows minified buildings through install and reinstall blueprints into the final building.")]
 		public static object ContaminationBuildingInstallContract()
 		{
@@ -4904,6 +5032,111 @@ namespace ZombieLand
 				reinstallBlueprintTransferred,
 				reinstallFinalTransferred
 			};
+		}
+
+		[Tool("zombieland/contamination_smooth_wall_contract", Description = "Verify contaminated natural smoothable walls transfer through real SmoothableWallUtility.SmoothWall into the smoothed wall.")]
+		public static object ContaminationSmoothWallContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var smoothableDef = DefDatabase<ThingDef>.AllDefs
+				.Where(def => def.category == ThingCategory.Building && def.building?.smoothedThing != null)
+				.OrderBy(def => def.defName)
+				.FirstOrDefault();
+			if (smoothableDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No loaded smoothable building def with a smoothedThing was found."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var wallCell, out var wallCellError) == false)
+				return wallCellError;
+			if (TryFindClearSpawnCell(map, wallCell + new IntVec3(3, 0, 0), 8f, out var workerCell, out var workerCellError) == false)
+				return workerCellError;
+
+			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var naturalWall = (Thing)null;
+			var smoothedWall = (Thing)null;
+			try
+			{
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+				DisablePawnWork(worker);
+				naturalWall = ThingMaker.MakeThing(smoothableDef);
+				GenSpawn.Spawn(naturalWall, wallCell, map, WipeMode.Vanish);
+
+				const float wallContaminationBefore = 0.58f;
+				naturalWall.SetContamination(wallContaminationBefore);
+				var naturalBefore = naturalWall.GetContamination();
+				var groundBefore = map.GetContamination(wallCell);
+
+				smoothedWall = SmoothableWallUtility.SmoothWall(naturalWall, worker);
+				var smoothedContamination = smoothedWall?.GetContamination() ?? -1f;
+				var groundAfter = map.GetContamination(wallCell);
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var smoothed = naturalWall.Destroyed
+					&& smoothedWall != null
+					&& smoothedWall.Spawned
+					&& smoothedWall.Position == wallCell
+					&& smoothedWall.def == smoothableDef.building.smoothedThing;
+				var contaminationTransferred = smoothed
+					&& CloseFloat(naturalBefore, wallContaminationBefore)
+					&& CloseFloat(smoothedContamination, wallContaminationBefore);
+
+				return new
+				{
+					success = smoothed && contaminationTransferred,
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					wallCell = ZombieRuntimeActions.DescribeCell(wallCell),
+					smoothableDef = smoothableDef.defName,
+					smoothedDef = smoothableDef.building.smoothedThing.defName,
+					naturalWall = ZombieRuntimeActions.StableThingId(naturalWall),
+					naturalDestroyed = naturalWall.Destroyed,
+					smoothedWall = ZombieRuntimeActions.StableThingId(smoothedWall),
+					smoothedWallDef = smoothedWall?.def?.defName,
+					smoothedWallSpawned = smoothedWall?.Spawned,
+					naturalBefore,
+					groundBefore,
+					smoothedContamination,
+					groundAfter,
+					expectedSmoothedContamination = wallContaminationBefore,
+					smoothed,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				smoothedWall?.ClearContamination();
+				if (smoothedWall is { Destroyed: false, Spawned: true })
+					smoothedWall.Destroy(DestroyMode.Vanish);
+				if (naturalWall is { Destroyed: false, Spawned: true })
+					naturalWall.Destroy(DestroyMode.Vanish);
+				if (wallCell.IsValid && wallCell.InBounds(map))
+					map.SetContamination(wallCell, 0f);
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+			}
 		}
 
 		[Tool("zombieland/contamination_rest_comfort_contract", Description = "Verify the real GainComfortFromCellIfPossible cadence equalizes contaminated ground into a resting pawn.")]
