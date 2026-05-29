@@ -1481,6 +1481,83 @@ namespace ZombieLand
 			return false;
 		}
 
+		static bool TryFindWallPushFixtureCells(Map map, IntVec3 root, float radius, out IntVec3 zombieCell, out IntVec3 wallCell, out IntVec3 destinationCell, out object error)
+		{
+			zombieCell = IntVec3.Invalid;
+			wallCell = IntVec3.Invalid;
+			destinationCell = IntVec3.Invalid;
+			error = null;
+			if (map == null)
+			{
+				error = new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+				return false;
+			}
+
+			var directions = new[] { IntVec3.East, IntVec3.West, IntVec3.North, IntVec3.South };
+			foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+			{
+				if (candidate.InBounds(map) == false || candidate.Fogged(map) || candidate.Standable(map) == false)
+					continue;
+				if (candidate.GetEdifice(map) != null || candidate.GetFirstThing<Mineable>(map) != null)
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+					continue;
+
+				foreach (var direction in directions)
+				{
+					var wall = candidate + direction;
+					var destination = wall + direction;
+					if (wall.InBounds(map) == false || destination.InBounds(map) == false)
+						continue;
+					if (wall.Fogged(map) || destination.Fogged(map))
+						continue;
+					if (wall.GetEdifice(map) != null || wall.GetFirstThing<Mineable>(map) != null)
+						continue;
+					if (wall.GetThingList(map).Any(thing => thing is Pawn))
+						continue;
+					if (destination.Standable(map) == false)
+						continue;
+					if (destination.GetEdifice(map) != null || destination.GetFirstThing<Mineable>(map) != null)
+						continue;
+					if (destination.GetThingList(map).Any(thing => thing is Pawn))
+						continue;
+
+					var otherWallCount = 0;
+					foreach (var adjacentDirection in directions)
+					{
+						var adjacent = candidate + adjacentDirection;
+						if (adjacent == wall)
+							continue;
+						if (adjacent.InBounds(map) && adjacent.GetThingList(map).Any(thing => thing is Pawn))
+						{
+							otherWallCount = int.MaxValue;
+							break;
+						}
+						if (adjacent.InBounds(map) && adjacent.IsWallOrDoor(map))
+							otherWallCount++;
+					}
+					if (otherWallCount > 0)
+						continue;
+
+					zombieCell = candidate;
+					wallCell = wall;
+					destinationCell = destination;
+					return true;
+				}
+			}
+
+			error = new
+			{
+				success = false,
+				error = $"No clear wall-push fixture triplet was found near ({root.x}, {root.z})."
+			};
+			return false;
+		}
+
 		[Tool("zombieland/get_status", Description = "Read a compact live Zombieland status summary for the current RimWorld session.")]
 		public static object GetStatus()
 		{
@@ -9673,6 +9750,192 @@ namespace ZombieLand
 				hitPointDelta = hitPointsAfter - hitPointsBefore,
 				before,
 				after = DescribeZombie(tanky),
+				samples
+			};
+		}
+
+		[Tool("zombieland/wall_push_over_wall_contract", Description = "Build a real single-wall fixture, run the real Stumble job, and verify a zombie is pushed over the wall across the source-derived progress window.")]
+		public static object WallPushOverWallContract(
+			[ToolParameter(Description = "Optional x cell near which the fixture should be placed. Negative values use map center.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Optional z cell near which the fixture should be placed. Negative values use map center.", Required = false, DefaultValue = -1)] int z = -1,
+			[ToolParameter(Description = "Temporary minimumZombiesForWallPushing value for the contract. Defaults to the vanilla Zombieland setting.", Required = false, DefaultValue = 18)] int minimumZombies = 18)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = x >= 0 && z >= 0 ? new IntVec3(x, 0, z) : new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (root.InBounds(map) == false)
+			{
+				return new
+				{
+					success = false,
+					error = $"Cell ({root.x}, {root.z}) is outside the current map."
+				};
+			}
+
+			if (TryFindWallPushFixtureCells(map, root, 20f, out var zombieCell, out var wallCell, out var destinationCell, out var error) == false)
+				return error;
+
+			var wall = ThingMaker.MakeThing(ThingDefOf.Wall, ThingDefOf.WoodLog) as Building;
+			if (wall == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create test wall."
+				};
+			}
+			GenSpawn.Spawn(wall, wallCell, map, WipeMode.Vanish);
+			wall.SetFaction(Faction.OfPlayer);
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not spawn wall-push test zombie.",
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					wallCell = ZombieRuntimeActions.DescribeCell(wallCell),
+					destinationCell = ZombieRuntimeActions.DescribeCell(destinationCell)
+				};
+			}
+
+			var grid = map.GetGrid();
+			var nearbyCells = new[] { zombieCell, zombieCell + IntVec3.East, zombieCell + IntVec3.West, zombieCell + IntVec3.North, zombieCell + IntVec3.South };
+			foreach (var cell in nearbyCells)
+			{
+				if (cell.InBounds(map) == false)
+					continue;
+				var current = grid.GetZombieCount(cell);
+				if (current != 0)
+					grid.ChangeZombieCount(cell, -current);
+			}
+
+			var sourceDerivedProgressDelta = 0.01f;
+			var expectedLandingTicks = 102;
+			var maxTicks = 110;
+			var effectiveMinimum = Math.Max(1, minimumZombies);
+			var primedGridCount = Math.Max(0, effectiveMinimum - 4);
+			grid.ChangeZombieCount(zombieCell, primedGridCount);
+
+			var tickManager = map.GetComponent<TickManager>();
+			tickManager?.allZombiesCached?.RemoveWhere(cached => cached == null || cached.Destroyed || cached.Spawned == false || cached.Dead);
+			_ = tickManager?.allZombiesCached?.Add(zombie);
+
+			var roofBefore = map.roofGrid.RoofAt(destinationCell);
+			map.roofGrid.SetRoof(destinationCell, RoofDefOf.RoofConstructed);
+			var roofAfterSetup = map.roofGrid.RoofAt(destinationCell);
+			var originalMinimum = ZombieSettings.Values.minimumZombiesForWallPushing;
+			var originalDangerousSituationMessage = ZombieSettings.Values.dangerousSituationMessage;
+
+			zombie.pather?.StopDead();
+			zombie.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+			zombie.state = ZombieState.Wandering;
+			zombie.wallPushProgress = -1f;
+			zombie.wallPushStart = Vector3.zero;
+			zombie.wallPushDestination = Vector3.zero;
+			zombie.wallPushCooldown = 0;
+			zombie.lastGotoPosition = zombieCell;
+			zombie.Rotation = Rot4.South;
+
+			object CaptureSample(int tick)
+			{
+				return new
+				{
+					tick,
+					gameTick = Find.TickManager.TicksGame,
+					absoluteTick = GenTicks.TicksAbs,
+					position = ZombieRuntimeActions.DescribeCell(zombie.Position),
+					drawPos = DescribeVector(zombie.DrawPos),
+					progress = zombie.wallPushProgress,
+					pushStart = DescribeVector(zombie.wallPushStart),
+					pushDestination = DescribeVector(zombie.wallPushDestination),
+					wallPushCooldown = zombie.wallPushCooldown,
+					rotation = zombie.Rotation.AsInt,
+					currentJob = zombie.CurJobDef?.defName,
+					spawned = zombie.Spawned,
+					dead = zombie.Dead
+				};
+			}
+
+			var samples = new List<object>();
+			var startedPush = false;
+			var landed = false;
+			var landingTick = -1;
+			try
+			{
+				ZombieSettings.Values.minimumZombiesForWallPushing = effectiveMinimum;
+				ZombieSettings.Values.dangerousSituationMessage = false;
+				zombie.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
+				samples.Add(CaptureSample(0));
+
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					if (zombie.wallPushProgress >= 0f)
+						startedPush = true;
+					if (tick == 1 || tick % 10 == 0 || zombie.Position == destinationCell || zombie.wallPushProgress < 0f && startedPush)
+						samples.Add(CaptureSample(tick));
+					if (zombie.Position == destinationCell && zombie.wallPushProgress < 0f)
+					{
+						landed = true;
+						landingTick = tick;
+						break;
+					}
+				}
+			}
+			finally
+			{
+				ZombieSettings.Values.minimumZombiesForWallPushing = originalMinimum;
+				ZombieSettings.Values.dangerousSituationMessage = originalDangerousSituationMessage;
+			}
+
+			var roofAfterLanding = map.roofGrid.RoofAt(destinationCell);
+			var wallDestroyed = wall.Destroyed;
+			var wallAtCellAfter = wallCell.GetEdifice(map);
+			var gridCountAtZombieCell = grid.GetZombieCount(zombieCell);
+			var gridCountAtDestinationCell = grid.GetZombieCount(destinationCell);
+			var wallStillPresent = wallDestroyed == false && wallAtCellAfter == wall;
+			var roofCleared = roofAfterLanding == null;
+
+			return new
+			{
+				success = startedPush
+					&& landed
+					&& zombie.Position == destinationCell
+					&& wallStillPresent
+					&& roofCleared,
+				sourceDerivedProgressDelta,
+				expectedLandingTicks,
+				maxTicks,
+				startedPush,
+				landed,
+				landingTick,
+				effectiveMinimum,
+				primedGridCount,
+				gridCountAtZombieCell,
+				gridCountAtDestinationCell,
+				root = ZombieRuntimeActions.DescribeCell(root),
+				zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+				wallCell = ZombieRuntimeActions.DescribeCell(wallCell),
+				destinationCell = ZombieRuntimeActions.DescribeCell(destinationCell),
+				wallId = ZombieRuntimeActions.StableThingId(wall),
+				wallDestroyed,
+				wallStillPresent,
+				wallAtCellAfter = wallAtCellAfter?.def?.defName,
+				roofBefore = roofBefore?.defName,
+				roofAfterSetup = roofAfterSetup?.defName,
+				roofAfterLanding = roofAfterLanding?.defName,
+				roofCleared,
+				zombie = DescribeZombie(zombie),
 				samples
 			};
 		}
