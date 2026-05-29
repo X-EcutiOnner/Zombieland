@@ -4657,9 +4657,14 @@ namespace ZombieLand
 
 		// patch for disallowing social interaction with zombies
 		//
-		static bool IsZombielandSocialPawn(Pawn pawn)
+		static bool IsZombielandPawn(Pawn pawn)
 		{
 			return pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter;
+		}
+
+		static bool IsZombielandSocialPawn(Pawn pawn)
+		{
+			return IsZombielandPawn(pawn);
 		}
 
 		[HarmonyPatch(typeof(RelationsUtility))]
@@ -5276,7 +5281,7 @@ namespace ZombieLand
 			[HarmonyPriority(Priority.First)]
 			static bool Prefix(ImmunityHandler __instance)
 			{
-				return __instance.pawn is not Zombie;
+				return IsZombielandPawn(__instance.pawn) == false;
 			}
 		}
 
@@ -5338,32 +5343,58 @@ namespace ZombieLand
 
 		// patches so that zombies do not have needs
 		//
+		static readonly FieldInfo needsTrackerPawnField = AccessTools.Field(typeof(Pawn_NeedsTracker), "pawn");
+		static readonly FieldInfo needsTrackerNeedsField = AccessTools.Field(typeof(Pawn_NeedsTracker), "needs");
+		static readonly FieldInfo needsTrackerMiscNeedsField = AccessTools.Field(typeof(Pawn_NeedsTracker), "needsMisc");
+
+		static Pawn PawnForNeedsTracker(Pawn_NeedsTracker needsTracker)
+		{
+			return needsTrackerPawnField?.GetValue(needsTracker) as Pawn;
+		}
+
+		static void ClearNeeds(Pawn_NeedsTracker needsTracker)
+		{
+			(needsTrackerNeedsField?.GetValue(needsTracker) as List<Need>)?.Clear();
+			(needsTrackerMiscNeedsField?.GetValue(needsTracker) as List<Need>)?.Clear();
+			needsTracker.BindDirectNeedFields();
+		}
+
 		[HarmonyPatch(typeof(Pawn_NeedsTracker))]
 		[HarmonyPatch(nameof(Pawn_NeedsTracker.AllNeeds), MethodType.Getter)]
 		static class Pawn_NeedsTracker_AllNeeds_Patch
 		{
-			static List<Need> Replacement()
+			[HarmonyPriority(Priority.First)]
+			static bool Prefix(Pawn_NeedsTracker __instance, ref List<Need> __result)
 			{
-				return new List<Need>();
-			}
+				if (IsZombielandPawn(PawnForNeedsTracker(__instance)) == false)
+					return true;
 
-			static IEnumerable<CodeInstruction> Transpiler(ILGenerator generator, MethodBase method, IEnumerable<CodeInstruction> instructions)
-			{
-				var conditions = Tools.NotZombieInstructions(generator, method);
-				var replacement = SymbolExtensions.GetMethodInfo(() => Replacement());
-				var transpiler = Tools.GenerateReplacementCallTranspiler(conditions, method, replacement);
-				return transpiler(generator, instructions);
+				__result = new List<Need>();
+				return false;
 			}
 		}
 		[HarmonyPatch(typeof(Pawn_NeedsTracker))]
 		[HarmonyPatch(nameof(Pawn_NeedsTracker.AddOrRemoveNeedsAsAppropriate))]
 		static class Pawn_NeedsTracker_AddOrRemoveNeedsAsAppropriate_Patch
 		{
-			static IEnumerable<CodeInstruction> Transpiler(ILGenerator generator, MethodBase method, IEnumerable<CodeInstruction> instructions)
+			[HarmonyPriority(Priority.First)]
+			static bool Prefix(Pawn_NeedsTracker __instance)
 			{
-				var conditions = Tools.NotZombieInstructions(generator, method);
-				var transpiler = Tools.GenerateReplacementCallTranspiler(conditions, method);
-				return transpiler(generator, instructions);
+				if (IsZombielandPawn(PawnForNeedsTracker(__instance)) == false)
+					return true;
+
+				ClearNeeds(__instance);
+				return false;
+			}
+		}
+		[HarmonyPatch(typeof(Pawn_NeedsTracker))]
+		[HarmonyPatch(nameof(Pawn_NeedsTracker.NeedsTrackerTickInterval))]
+		static class Pawn_NeedsTracker_NeedsTrackerTickInterval_Patch
+		{
+			[HarmonyPriority(Priority.First)]
+			static bool Prefix(Pawn_NeedsTracker __instance)
+			{
+				return IsZombielandPawn(PawnForNeedsTracker(__instance)) == false;
 			}
 		}
 

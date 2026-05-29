@@ -35,6 +35,20 @@ namespace ZombieLand
 			public Building targetWall;
 		}
 
+		sealed class NeedSnapshot
+		{
+			public bool hasTracker;
+			public int allCount;
+			public int internalCount;
+			public int miscCount;
+			public string[] allDefs;
+			public string[] internalDefs;
+			public string[] miscDefs;
+			public bool hasFoodField;
+			public bool hasMoodField;
+			public float? foodLevel;
+		}
+
 		static readonly LineupEntry[] referenceLineup =
 		{
 			new(ZombieType.Electrifier, 0, 0),
@@ -104,6 +118,78 @@ namespace ZombieLand
 		static int TotalMemoryCount(Pawn pawn)
 		{
 			return pawn?.needs?.mood?.thoughts?.memories?.Memories?.Count ?? 0;
+		}
+
+		static readonly FieldInfo needsTrackerNeedsField = typeof(Pawn_NeedsTracker).GetField("needs", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+		static readonly FieldInfo needsTrackerMiscNeedsField = typeof(Pawn_NeedsTracker).GetField("needsMisc", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+		static readonly MethodInfo needsTrackerAddNeedMethod = typeof(Pawn_NeedsTracker).GetMethod("AddNeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+		static List<Need> InternalNeeds(Pawn_NeedsTracker needsTracker, FieldInfo field)
+		{
+			return field?.GetValue(needsTracker) as List<Need> ?? new List<Need>();
+		}
+
+		static string[] NeedDefNames(IEnumerable<Need> needs)
+		{
+			return needs?
+				.Select(need => need?.def?.defName ?? "<null>")
+				.OrderBy(name => name)
+				.ToArray() ?? Array.Empty<string>();
+		}
+
+		static NeedSnapshot DescribeNeeds(Pawn pawn)
+		{
+			var needsTracker = pawn?.needs;
+			var allNeeds = needsTracker?.AllNeeds ?? new List<Need>();
+			var internalNeeds = InternalNeeds(needsTracker, needsTrackerNeedsField);
+			var miscNeeds = InternalNeeds(needsTracker, needsTrackerMiscNeedsField);
+			return new NeedSnapshot
+			{
+				hasTracker = needsTracker != null,
+				allCount = allNeeds.Count,
+				internalCount = internalNeeds.Count,
+				miscCount = miscNeeds.Count,
+				allDefs = NeedDefNames(allNeeds),
+				internalDefs = NeedDefNames(internalNeeds),
+				miscDefs = NeedDefNames(miscNeeds),
+				hasFoodField = needsTracker?.food != null,
+				hasMoodField = needsTracker?.mood != null,
+				foodLevel = needsTracker?.food?.CurLevel
+			};
+		}
+
+		static bool TryForceAddNeed(Pawn pawn, NeedDef needDef, out string error)
+		{
+			error = null;
+			if (pawn?.needs == null)
+			{
+				error = "Pawn has no needs tracker.";
+				return false;
+			}
+			if (needDef == null)
+			{
+				error = "NeedDef is null.";
+				return false;
+			}
+			if (needsTrackerAddNeedMethod == null)
+			{
+				error = "Could not find Pawn_NeedsTracker.AddNeed by reflection.";
+				return false;
+			}
+
+			if (pawn.needs.TryGetNeed(needDef) == null)
+				needsTrackerAddNeedMethod.Invoke(pawn.needs, new object[] { needDef });
+			return true;
+		}
+
+		static float ImmunityFor(Pawn pawn, HediffDef hediffDef)
+		{
+			return pawn?.health?.immunity?.GetImmunity(hediffDef, true) ?? 0f;
+		}
+
+		static int ImmunityRecordCount(Pawn pawn)
+		{
+			return pawn?.health?.immunity?.ImmunityListForReading?.Count ?? 0;
 		}
 
 		static object DescribeZombie(Pawn pawn)
@@ -1913,6 +1999,153 @@ namespace ZombieLand
 				humanVictimDefsAfter,
 				zombieVictimDefsBefore,
 				zombieVictimDefsAfter
+			};
+		}
+
+		[Tool("zombieland/zombie_health_needs_upkeep_suppression", Description = "Verify zombie needs reconciliation, needs ticking, and immunity ticking are suppressed while normal pawns still use the vanilla upkeep paths.")]
+		public static object ZombieHealthNeedsUpkeepSuppression()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+				corpse.Destroy();
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanSpawnError) == false)
+				return humanSpawnError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(4, 0, 0), 10f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					human = DescribePawn(human),
+					error = "ZombieGenerator.SpawnZombie returned no health/needs test zombie."
+				};
+			}
+
+			var needDef = NeedDefOf.Food;
+			var humanNeedsBefore = DescribeNeeds(human);
+			human.needs.AddOrRemoveNeedsAsAppropriate();
+			var humanNeedsAfterReconcile = DescribeNeeds(human);
+
+			var zombieNeedsBefore = DescribeNeeds(zombie);
+			if (TryForceAddNeed(zombie, needDef, out var needError) == false)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					zombieNeedsBefore,
+					error = needError
+				};
+			}
+			var zombieNeedsAfterForcedNeed = DescribeNeeds(zombie);
+			zombie.needs.AddOrRemoveNeedsAsAppropriate();
+			var zombieNeedsAfterReconcile = DescribeNeeds(zombie);
+
+			if (TryForceAddNeed(zombie, needDef, out needError) == false)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					zombieNeedsAfterReconcile,
+					error = needError
+				};
+			}
+			var zombieFoodBeforeTick = zombie.needs.TryGetNeed(needDef)?.CurLevel ?? -1f;
+			zombie.needs.NeedsTrackerTickInterval(150);
+			var zombieFoodAfterTick = zombie.needs.TryGetNeed(needDef)?.CurLevel ?? -1f;
+			var zombieNeedsAfterTick = DescribeNeeds(zombie);
+			zombie.needs.AddOrRemoveNeedsAsAppropriate();
+			var zombieNeedsAfterFinalReconcile = DescribeNeeds(zombie);
+
+			var diseaseDef = HediffDefOf.Plague;
+			human.health.AddHediff(HediffMaker.MakeHediff(diseaseDef, human));
+			zombie.health.AddHediff(HediffMaker.MakeHediff(diseaseDef, zombie));
+			var humanImmunityBefore = ImmunityFor(human, diseaseDef);
+			var zombieImmunityBefore = ImmunityFor(zombie, diseaseDef);
+			var humanImmunityRecordCountBefore = ImmunityRecordCount(human);
+			var zombieImmunityRecordCountBefore = ImmunityRecordCount(zombie);
+			const int oneDayTicks = 60000;
+			human.health.immunity.ImmunityHandlerTickInterval(oneDayTicks);
+			zombie.health.immunity.ImmunityHandlerTickInterval(oneDayTicks);
+			var humanImmunityAfter = ImmunityFor(human, diseaseDef);
+			var zombieImmunityAfter = ImmunityFor(zombie, diseaseDef);
+			var humanImmunityRecordCountAfter = ImmunityRecordCount(human);
+			var zombieImmunityRecordCountAfter = ImmunityRecordCount(zombie);
+
+			var humanNeedsPopulated = humanNeedsAfterReconcile.internalCount > 0;
+			var zombieForcedNeedVisibleInternally = zombieNeedsAfterForcedNeed.internalCount > 0;
+			var zombieNeedsClearedByReconcile = zombieNeedsAfterReconcile.internalCount == 0
+				&& zombieNeedsAfterReconcile.allCount == 0
+				&& zombieNeedsAfterReconcile.hasFoodField == false;
+			var zombieNeedTickSkipped = zombieFoodAfterTick == zombieFoodBeforeTick;
+			var zombieNeedsClearedAfterTick = zombieNeedsAfterFinalReconcile.internalCount == 0
+				&& zombieNeedsAfterFinalReconcile.allCount == 0;
+			var humanImmunityAdvanced = humanImmunityAfter > humanImmunityBefore && humanImmunityRecordCountAfter > humanImmunityRecordCountBefore;
+			var zombieImmunitySuppressed = zombieImmunityAfter == zombieImmunityBefore && zombieImmunityRecordCountAfter == zombieImmunityRecordCountBefore;
+
+			return new
+			{
+				success = humanNeedsPopulated
+					&& zombieForcedNeedVisibleInternally
+					&& zombieNeedsClearedByReconcile
+					&& zombieNeedTickSkipped
+					&& zombieNeedsClearedAfterTick
+					&& humanImmunityAdvanced
+					&& zombieImmunitySuppressed,
+				destroyedZombies,
+				human = DescribePawn(human),
+				zombie = DescribeZombie(zombie),
+				needDef = needDef.defName,
+				diseaseDef = diseaseDef.defName,
+				immunityTickWindow = oneDayTicks,
+				humanNeedsBefore,
+				humanNeedsAfterReconcile,
+				zombieNeedsBefore,
+				zombieNeedsAfterForcedNeed,
+				zombieNeedsAfterReconcile,
+				zombieFoodBeforeTick,
+				zombieFoodAfterTick,
+				zombieNeedsAfterTick,
+				zombieNeedsAfterFinalReconcile,
+				humanNeedsPopulated,
+				zombieForcedNeedVisibleInternally,
+				zombieNeedsClearedByReconcile,
+				zombieNeedTickSkipped,
+				zombieNeedsClearedAfterTick,
+				humanImmunityBefore,
+				humanImmunityAfter,
+				zombieImmunityBefore,
+				zombieImmunityAfter,
+				humanImmunityRecordCountBefore,
+				humanImmunityRecordCountAfter,
+				zombieImmunityRecordCountBefore,
+				zombieImmunityRecordCountAfter,
+				humanImmunityAdvanced,
+				zombieImmunitySuppressed
 			};
 		}
 
