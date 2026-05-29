@@ -1828,6 +1828,94 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/zombie_damage_memory_suppression", Description = "Verify normal pawn damage can create harm memories while zombie-instigated damage does not create social memories about zombies.")]
+		public static object ZombieDamageMemorySuppression()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+				corpse.Destroy();
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var humanAttackerCell, out var humanAttackerSpawnError) == false)
+				return humanAttackerSpawnError;
+			if (TryFindClearSpawnCell(map, humanAttackerCell + new IntVec3(3, 0, 0), 10f, out var humanVictimCell, out var humanVictimSpawnError) == false)
+				return humanVictimSpawnError;
+			if (TryFindClearSpawnCell(map, humanAttackerCell + new IntVec3(6, 0, 0), 12f, out var zombieAttackerCell, out var zombieAttackerSpawnError) == false)
+				return zombieAttackerSpawnError;
+			if (TryFindClearSpawnCell(map, humanAttackerCell + new IntVec3(9, 0, 0), 14f, out var zombieVictimCell, out var zombieVictimSpawnError) == false)
+				return zombieVictimSpawnError;
+
+			var humanAttacker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var humanVictim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var zombieVictim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(humanAttacker, humanAttackerCell, map, Rot4.South);
+			GenSpawn.Spawn(humanVictim, humanVictimCell, map, Rot4.South);
+			GenSpawn.Spawn(zombieVictim, zombieVictimCell, map, Rot4.South);
+			DisablePawnWork(humanAttacker);
+			DisablePawnWork(humanVictim);
+			DisablePawnWork(zombieVictim);
+			var zombieAttacker = ZombieRuntimeActions.SpawnZombie(zombieAttackerCell, map, ZombieType.Normal, true);
+			if (zombieAttacker == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					humanAttacker = DescribePawn(humanAttacker),
+					humanVictim = DescribePawn(humanVictim),
+					zombieVictim = DescribePawn(zombieVictim),
+					error = "ZombieGenerator.SpawnZombie returned no damage-memory test zombie."
+				};
+			}
+
+			var humanVictimMemoriesBefore = TotalMemoryCount(humanVictim);
+			var humanVictimDefsBefore = MemoryDefCounts(humanVictim);
+			var humanDamage = humanVictim.TakeDamage(new DamageInfo(DamageDefOf.Blunt, 2f, 0f, -1f, humanAttacker, null, null, DamageInfo.SourceCategory.ThingOrUnknown, humanVictim, true, true));
+			var humanVictimMemoriesAfter = TotalMemoryCount(humanVictim);
+			var humanVictimDefsAfter = MemoryDefCounts(humanVictim);
+			var humanDamageMemoryDelta = humanVictimMemoriesAfter - humanVictimMemoriesBefore;
+
+			var zombieVictimMemoriesBefore = TotalMemoryCount(zombieVictim);
+			var zombieVictimDefsBefore = MemoryDefCounts(zombieVictim);
+			var zombieDamage = zombieVictim.TakeDamage(new DamageInfo(DamageDefOf.Blunt, 2f, 0f, -1f, zombieAttacker, null, null, DamageInfo.SourceCategory.ThingOrUnknown, zombieVictim, true, true));
+			var zombieVictimMemoriesAfter = TotalMemoryCount(zombieVictim);
+			var zombieVictimDefsAfter = MemoryDefCounts(zombieVictim);
+			var zombieDamageMemoryDelta = zombieVictimMemoriesAfter - zombieVictimMemoriesBefore;
+
+			return new
+			{
+				success = humanDamageMemoryDelta > 0
+					&& zombieDamageMemoryDelta == 0,
+				destroyedZombies,
+				humanAttacker = DescribePawn(humanAttacker),
+				humanVictim = DescribePawn(humanVictim),
+				zombieAttacker = DescribeZombie(zombieAttacker),
+				zombieVictim = DescribePawn(zombieVictim),
+				humanDamageTotal = humanDamage.totalDamageDealt,
+				zombieDamageTotal = zombieDamage.totalDamageDealt,
+				humanVictimMemoriesBefore,
+				humanVictimMemoriesAfter,
+				humanDamageMemoryDelta,
+				zombieVictimMemoriesBefore,
+				zombieVictimMemoriesAfter,
+				zombieDamageMemoryDelta,
+				humanVictimDefsBefore,
+				humanVictimDefsAfter,
+				zombieVictimDefsBefore,
+				zombieVictimDefsAfter
+			};
+		}
+
 		[Tool("zombieland/convert_infected_corpse_to_zombie", Description = "Create an infected rotting corpse from a spawned pawn, verify Corpse.RotStageChanged queued it, then run that queued conversion.")]
 		public static object ConvertInfectedCorpseToZombie(
 			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
