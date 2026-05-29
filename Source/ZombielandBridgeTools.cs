@@ -66,6 +66,20 @@ namespace ZombieLand
 			public int delta;
 		}
 
+		sealed class DamageLogSnapshot
+		{
+			public object pawn;
+			public float damageAmount;
+			public int beforeHediffCount;
+			public int afterHediffCount;
+			public float damageTotal;
+			public int resultPartCount;
+			public int resultHediffCount;
+			public int combatTextBefore;
+			public int combatTextAfter;
+			public int combatTextDelta;
+		}
+
 		static readonly LineupEntry[] referenceLineup =
 		{
 			new(ZombieType.Electrifier, 0, 0),
@@ -378,6 +392,43 @@ namespace ZombieLand
 				suit = zombie.hasTankySuit,
 				isTanky = zombie.IsTanky
 			};
+		}
+
+		static DamageLogSnapshot DamageAndAssociateWithLog(Pawn pawn, float amount)
+		{
+			var beforeHediffCount = pawn?.health?.hediffSet?.hediffs?.Count ?? 0;
+			var part = pawn.health.hediffSet.GetNotMissingParts().FirstOrDefault(record => record.def.alive)
+				?? pawn.health.hediffSet.GetNotMissingParts().FirstOrDefault();
+			var hediff = HediffMaker.MakeHediff(HediffDefOf.Cut, pawn, part);
+			hediff.Severity = amount;
+			pawn.health.AddHediff(hediff, part);
+
+			var result = new DamageWorker.DamageResult
+			{
+				hitThing = pawn,
+				totalDamageDealt = amount
+			};
+			result.AddPart(pawn, part);
+			result.AddHediff(hediff);
+
+			var combatTextBefore = string.IsNullOrEmpty(hediff.combatLogText) ? 0 : 1;
+			var log = new BattleLogEntry_DamageTaken(pawn, RulePackDefOf.DamageEvent_Fire);
+			result.AssociateWithLog(log);
+			var combatTextAfter = string.IsNullOrEmpty(hediff.combatLogText) ? 0 : 1;
+
+			return new DamageLogSnapshot
+			{
+				pawn = DescribePawn(pawn),
+				damageAmount = amount,
+				beforeHediffCount = beforeHediffCount,
+				afterHediffCount = pawn?.health?.hediffSet?.hediffs?.Count ?? 0,
+				damageTotal = result.totalDamageDealt,
+				resultPartCount = result.parts?.Count ?? 0,
+				resultHediffCount = result.hediffs?.Count ?? 0,
+				combatTextBefore = combatTextBefore,
+				combatTextAfter = combatTextAfter,
+					combatTextDelta = combatTextAfter - combatTextBefore
+				};
 		}
 
 		static object DescribeCorpse(Corpse corpse)
@@ -3047,6 +3098,88 @@ namespace ZombieLand
 				expectedExcludingZombie,
 				expectedIncludingZombie,
 				tolerance
+			};
+		}
+
+		[Tool("zombieland/zombie_damage_log_association_suppression", Description = "Verify RimWorld DamageResult combat-log association fills human hediff logs but skips all Zombieland pawn types.")]
+		public static object ZombieDamageLogAssociationSuppression()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanError) == false)
+				return humanError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 0), 10f, out var zombieCell, out var zombieError) == false)
+				return zombieError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(-3, 0, 0), 10f, out var spitterCell, out var spitterError) == false)
+				return spitterError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(0, 0, 3), 10f, out var blobCell, out var blobError) == false)
+				return blobError;
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+
+			var existingSpitters = CurrentZombies(map).OfType<ZombieSpitter>()
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			ZombieSpitter.Spawn(map, spitterCell);
+			var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+				.FirstOrDefault(candidate => existingSpitters.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
+
+			var existingBlobs = CurrentZombies(map).OfType<ZombieBlob>()
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			ZombieBlob.Spawn(map, blobCell);
+			var blob = CurrentZombies(map).OfType<ZombieBlob>()
+				.FirstOrDefault(candidate => existingBlobs.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(blobCell)).FirstOrDefault();
+
+			if (zombie == null || spitter == null || blob == null)
+			{
+				return new
+				{
+					success = false,
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					spitter = DescribeZombie(spitter),
+					blob = DescribeZombie(blob),
+					error = "Could not create all damage-log fixture pawns."
+				};
+			}
+
+			var humanResult = DamageAndAssociateWithLog(human, 2f);
+			var zombieResult = DamageAndAssociateWithLog(zombie, 2f);
+			var spitterResult = DamageAndAssociateWithLog(spitter, 0.5f);
+			var blobResult = DamageAndAssociateWithLog(blob, 0.5f);
+
+			var humanAssociated = humanResult.resultHediffCount > 0 && humanResult.combatTextDelta > 0;
+			var zombieSuppressed = zombieResult.resultHediffCount > 0 && zombieResult.combatTextDelta == 0;
+			var spitterSuppressed = spitterResult.resultHediffCount > 0 && spitterResult.combatTextDelta == 0;
+			var blobSuppressed = blobResult.resultHediffCount > 0 && blobResult.combatTextDelta == 0;
+
+			return new
+			{
+				success = humanAssociated && zombieSuppressed && spitterSuppressed && blobSuppressed,
+				humanAssociated,
+				zombieSuppressed,
+				spitterSuppressed,
+				blobSuppressed,
+				human = humanResult,
+				zombie = zombieResult,
+				spitter = spitterResult,
+				blob = blobResult
 			};
 		}
 

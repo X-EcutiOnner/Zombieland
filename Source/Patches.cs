@@ -4193,7 +4193,7 @@ namespace ZombieLand
 		{
 			static bool Prefix(DamageWorker.DamageResult __instance)
 			{
-				return __instance.hitThing is not Zombie;
+				return IsZombielandPawn(__instance.hitThing as Pawn) == false;
 			}
 		}
 
