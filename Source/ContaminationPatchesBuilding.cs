@@ -10,6 +10,34 @@ using static HarmonyLib.Code;
 
 namespace ZombieLand
 {
+	readonly struct ReplacementContaminationState
+	{
+		readonly float contamination;
+		readonly sbyte? mapIndex;
+
+		ReplacementContaminationState(float contamination, sbyte? mapIndex)
+		{
+			this.contamination = contamination;
+			this.mapIndex = mapIndex;
+		}
+
+		public static ReplacementContaminationState Capture(Thing thing)
+		{
+			if (thing == null)
+				return default;
+			var mapIndex = thing.Map == null ? (sbyte?)thing.mapIndexOrState : (sbyte)thing.Map.Index;
+			return new ReplacementContaminationState(thing.GetContamination(), mapIndex);
+		}
+
+		public void Move(Thing source, Thing target)
+		{
+			if (target == null || contamination <= 0)
+				return;
+			source?.ClearContamination();
+			target.AddContamination(contamination, target.Map == null ? mapIndex : null);
+		}
+	}
+
 	[HarmonyPatch(typeof(Frame), nameof(Frame.CompleteConstruction))]
 	static class Frame_CompleteConstruction_Patch
 	{
@@ -78,11 +106,14 @@ namespace ZombieLand
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static void Postfix(MinifiedThing __result, Thing thing)
+		static void Prefix(Thing thing, out ReplacementContaminationState __state)
 		{
-			if (thing == null || __result == null)
-				return;
-			thing.TransferContamination(__result);
+			__state = ReplacementContaminationState.Capture(thing);
+		}
+
+		static void Postfix(MinifiedThing __result, Thing thing, ReplacementContaminationState __state)
+		{
+			__state.Move(thing, __result);
 		}
 	}
 
@@ -91,11 +122,14 @@ namespace ZombieLand
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static void Postfix(Blueprint_Install __result, MinifiedThing itemToInstall)
+		static void Prefix(MinifiedThing itemToInstall, out ReplacementContaminationState __state)
 		{
-			if (itemToInstall == null || __result == null)
-				return;
-			itemToInstall.TransferContamination(__result);
+			__state = ReplacementContaminationState.Capture(itemToInstall);
+		}
+
+		static void Postfix(Blueprint_Install __result, MinifiedThing itemToInstall, ReplacementContaminationState __state)
+		{
+			__state.Move(itemToInstall, __result);
 		}
 	}
 
@@ -104,11 +138,14 @@ namespace ZombieLand
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static void Postfix(Blueprint_Install __result, Building buildingToReinstall)
+		static void Prefix(Building buildingToReinstall, out ReplacementContaminationState __state)
 		{
-			if (buildingToReinstall == null || __result == null)
-				return;
-			buildingToReinstall.TransferContamination(__result);
+			__state = ReplacementContaminationState.Capture(buildingToReinstall);
+		}
+
+		static void Postfix(Blueprint_Install __result, Building buildingToReinstall, ReplacementContaminationState __state)
+		{
+			__state.Move(buildingToReinstall, __result);
 		}
 	}
 
@@ -117,11 +154,14 @@ namespace ZombieLand
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static void Postfix(ref Thing createdThing, Blueprint __instance)
+		static void Prefix(Blueprint __instance, out ReplacementContaminationState __state)
 		{
-			if (createdThing == null)
-				return;
-			__instance.TransferContamination(createdThing);
+			__state = ReplacementContaminationState.Capture(__instance);
+		}
+
+		static void Postfix(ref Thing createdThing, Blueprint __instance, ReplacementContaminationState __state)
+		{
+			__state.Move(__instance, createdThing);
 		}
 	}
 

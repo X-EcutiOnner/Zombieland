@@ -4556,6 +4556,263 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/contamination_building_install_contract", Description = "Verify contamination follows minified buildings through install and reinstall blueprints into the final building.")]
+		public static object ContaminationBuildingInstallContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var buildingDef = DefDatabase<ThingDef>.GetNamed("Stool", false);
+			var stuffDef = ThingDefOf.WoodLog;
+			if (buildingDef?.Minifiable != true || buildingDef.installBlueprintDef == null || buildingDef.minifiedDef == null || stuffDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "The Stool building def is not available as a minifiable installable fixture."
+				};
+			}
+
+			var reservedCells = new HashSet<IntVec3>();
+
+			bool TryFindBuildingCell(IntVec3 root, float radius, out IntVec3 cell, out object error)
+			{
+				cell = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+				{
+					if (reservedCells.Contains(candidate))
+						continue;
+					if (candidate.InBounds(map) == false)
+						continue;
+					if (candidate.Standable(map) == false)
+						continue;
+					if (candidate.Fogged(map))
+						continue;
+					if (candidate.GetEdifice(map) != null)
+						continue;
+					if (candidate.GetThingList(map).Any(thing =>
+						thing is Pawn
+						|| thing is Blueprint
+						|| thing.def.category == ThingCategory.Plant
+						|| thing.def.category == ThingCategory.Building
+						|| thing.def.passability == Traversability.Impassable))
+						continue;
+
+					cell = candidate;
+					reservedCells.Add(candidate);
+					return true;
+				}
+
+				error = new
+				{
+					success = false,
+					error = $"No clear 1x1 building fixture cell was found near ({root.x}, {root.z})."
+				};
+				return false;
+			}
+
+			void DestroySpawned(Thing thing)
+			{
+				if (thing is { Destroyed: false, Spawned: true })
+					thing.Destroy();
+			}
+
+			static object DescribeBlueprint(Blueprint blueprint)
+				=> blueprint == null
+					? null
+					: new
+					{
+						id = ZombieRuntimeActions.StableThingId(blueprint),
+						spawned = blueprint.Spawned,
+						destroyed = blueprint.Destroyed,
+						mapIndex = blueprint.Map?.Index,
+						position = ZombieRuntimeActions.DescribeCell(blueprint.Position),
+						contamination = blueprint.GetContamination()
+					};
+
+			static bool TryReplaceBlueprint(Blueprint blueprint, Pawn worker, out Thing createdThing, out bool jobEnded, out string error)
+			{
+				createdThing = null;
+				jobEnded = false;
+				error = null;
+				try
+				{
+					return blueprint?.TryReplaceWithSolidThing(worker, out createdThing, out jobEnded) ?? false;
+				}
+				catch (Exception ex)
+				{
+					error = ex.GetType().Name + ": " + ex.Message;
+					return false;
+				}
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var workerCell, out var workerSpawnError) == false)
+				return workerSpawnError;
+			if (TryFindBuildingCell(workerCell + new IntVec3(3, 0, 0), 16f, out var sourceCell, out var sourceCellError) == false)
+				return sourceCellError;
+			if (TryFindBuildingCell(sourceCell + new IntVec3(3, 0, 0), 16f, out var installCell, out var installCellError) == false)
+				return installCellError;
+			if (TryFindBuildingCell(installCell + new IntVec3(3, 0, 0), 16f, out var reinstallSourceCell, out var reinstallSourceError) == false)
+				return reinstallSourceError;
+			if (TryFindBuildingCell(reinstallSourceCell + new IntVec3(3, 0, 0), 16f, out var reinstallDestCell, out var reinstallDestError) == false)
+				return reinstallDestError;
+
+			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+			DisablePawnWork(worker);
+
+			var sourceBuilding = GenSpawn.Spawn(ThingMaker.MakeThing(buildingDef, stuffDef), sourceCell, map, Rot4.South) as Building;
+			var reinstallBuilding = GenSpawn.Spawn(ThingMaker.MakeThing(buildingDef, stuffDef), reinstallSourceCell, map, Rot4.South) as Building;
+			if (sourceBuilding == null || reinstallBuilding == null)
+			{
+				DestroySpawned(worker);
+				DestroySpawned(sourceBuilding);
+				DestroySpawned(reinstallBuilding);
+				return new
+				{
+					success = false,
+					error = "Could not spawn Stool building fixtures."
+				};
+			}
+
+			const float installInputContamination = 0.6f;
+			const float reinstallInputContamination = 0.45f;
+			sourceBuilding.SetContamination(installInputContamination);
+			reinstallBuilding.SetContamination(reinstallInputContamination);
+
+			var sourceBeforeMinify = sourceBuilding.GetContamination();
+			var minified = MinifyUtility.MakeMinified(sourceBuilding);
+			var sourceAfterMinify = sourceBuilding.GetContamination();
+			var minifiedAfterMinify = minified?.GetContamination() ?? -1f;
+			var minifiedSpawnedForInstall = false;
+			if (minified != null && minified.Spawned == false)
+			{
+				GenSpawn.Spawn(minified, sourceCell, map, Rot4.South, WipeMode.Vanish, false);
+				minifiedSpawnedForInstall = minified.Spawned;
+			}
+			var minifiedAfterSpawn = minified?.GetContamination() ?? -1f;
+			var installBlueprint = minified == null ? null : GenConstruct.PlaceBlueprintForInstall(minified, installCell, map, Rot4.South, Faction.OfPlayer, false);
+			var minifiedAfterBlueprint = minified?.GetContamination() ?? -1f;
+			var installBlueprintAfterPlace = installBlueprint?.GetContamination() ?? -1f;
+			var installBlueprintStateAfterPlace = DescribeBlueprint(installBlueprint);
+			var installInnerForcedUnspawned = false;
+			if (minified?.InnerThing != null)
+			{
+				minified.InnerThing.ForceSetStateToUnspawned();
+				installInnerForcedUnspawned = minified.InnerThing.Spawned == false;
+			}
+			var installReplaced = TryReplaceBlueprint(installBlueprint, worker, out var installedThing, out var installJobEnded, out var installReplaceError);
+			var installBlueprintAfterReplace = installBlueprint?.Destroyed == false ? installBlueprint.GetContamination() : 0f;
+			var installedContamination = installedThing?.GetContamination() ?? -1f;
+
+			var reinstallSourceBefore = reinstallBuilding.GetContamination();
+			var reinstallBlueprint = GenConstruct.PlaceBlueprintForReinstall(reinstallBuilding, reinstallDestCell, map, Rot4.South, Faction.OfPlayer, false);
+			var reinstallSourceAfterBlueprint = reinstallBuilding.GetContamination();
+			var reinstallBlueprintAfterPlace = reinstallBlueprint?.GetContamination() ?? -1f;
+			var reinstallBlueprintStateAfterPlace = DescribeBlueprint(reinstallBlueprint);
+			if (reinstallBuilding.Spawned)
+				reinstallBuilding.DeSpawn();
+			var reinstallReplaced = TryReplaceBlueprint(reinstallBlueprint, worker, out var reinstalledThing, out var reinstallJobEnded, out var reinstallReplaceError);
+			var reinstallBlueprintAfterReplace = reinstallBlueprint?.Destroyed == false ? reinstallBlueprint.GetContamination() : 0f;
+			var reinstalledContamination = reinstalledThing?.GetContamination() ?? -1f;
+
+			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+			var minifyTransferred = CloseFloat(sourceBeforeMinify, installInputContamination)
+				&& CloseFloat(sourceAfterMinify, 0f)
+				&& CloseFloat(minifiedAfterMinify, installInputContamination)
+				&& minifiedSpawnedForInstall
+				&& CloseFloat(minifiedAfterSpawn, installInputContamination);
+			var installBlueprintTransferred = installBlueprint != null
+				&& CloseFloat(minifiedAfterBlueprint, 0f)
+				&& CloseFloat(installBlueprintAfterPlace, installInputContamination);
+			var installFinalTransferred = installReplaced
+				&& installJobEnded == false
+				&& installedThing != null
+				&& CloseFloat(installBlueprintAfterReplace, 0f)
+				&& CloseFloat(installedContamination, installInputContamination);
+			var reinstallBlueprintTransferred = reinstallBlueprint != null
+				&& CloseFloat(reinstallSourceBefore, reinstallInputContamination)
+				&& CloseFloat(reinstallSourceAfterBlueprint, 0f)
+				&& CloseFloat(reinstallBlueprintAfterPlace, reinstallInputContamination);
+			var reinstallFinalTransferred = reinstallReplaced
+				&& reinstallJobEnded == false
+				&& reinstalledThing != null
+				&& CloseFloat(reinstallBlueprintAfterReplace, 0f)
+				&& CloseFloat(reinstalledContamination, reinstallInputContamination);
+
+			var workerDescription = DescribePawn(worker);
+
+			DestroySpawned(worker);
+			DestroySpawned(installedThing);
+			DestroySpawned(reinstalledThing);
+			DestroySpawned(sourceBuilding);
+			DestroySpawned(minified);
+			DestroySpawned(reinstallBuilding);
+			DestroySpawned(installBlueprint);
+			DestroySpawned(reinstallBlueprint);
+
+			return new
+			{
+				success = minifyTransferred
+					&& installBlueprintTransferred
+					&& installFinalTransferred
+					&& reinstallBlueprintTransferred
+					&& reinstallFinalTransferred,
+				worker = workerDescription,
+				workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+				sourceCell = ZombieRuntimeActions.DescribeCell(sourceCell),
+				installCell = ZombieRuntimeActions.DescribeCell(installCell),
+				reinstallSourceCell = ZombieRuntimeActions.DescribeCell(reinstallSourceCell),
+				reinstallDestCell = ZombieRuntimeActions.DescribeCell(reinstallDestCell),
+				sourceBeforeMinify,
+				sourceAfterMinify,
+				minifiedAfterMinify,
+				minifiedSpawnedForInstall,
+				minifiedAfterSpawn,
+				minifiedAfterBlueprint,
+				installBlueprintAfterPlace,
+				installBlueprintStateAfterPlace,
+				installInnerForcedUnspawned,
+				installReplaced,
+				installJobEnded,
+				installReplaceError,
+				installBlueprintAfterReplace,
+				installedContamination,
+				reinstallSourceBefore,
+				reinstallSourceAfterBlueprint,
+				reinstallBlueprintAfterPlace,
+				reinstallBlueprintStateAfterPlace,
+				reinstallReplaced,
+				reinstallJobEnded,
+				reinstallReplaceError,
+				reinstallBlueprintAfterReplace,
+				reinstalledContamination,
+				minifyTransferred,
+				installBlueprintTransferred,
+				installFinalTransferred,
+				reinstallBlueprintTransferred,
+				reinstallFinalTransferred
+			};
+		}
+
 		[Tool("zombieland/contamination_zombie_death_contract", Description = "Verify killing a real zombie contaminates its death cell while an ordinary pawn death does not.")]
 		public static object ContaminationZombieDeathContract()
 		{
@@ -10651,6 +10908,163 @@ namespace ZombieLand
 				ZombieTicker.zombiesTicked = originalZombiesTicked;
 				ZombieTicker.maxTicking = originalMaxTicking;
 				ZombieTicker.currentTicking = originalCurrentTicking;
+				tickManager.currentZombiesTicking = Array.Empty<Zombie>();
+				tickManager.currentZombiesTickingIndex = 0;
+			}
+		}
+
+		[Tool("zombieland/zombie_ticking_feedback_contract", Description = "Verify the TickManagerUpdate patch resets, sizes, and feeds back the adaptive zombie tick budget.")]
+		public static object ZombieTickingFeedbackContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			var gameTickManager = Find.TickManager;
+			if (tickManager == null || gameTickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland or RimWorld tick manager is available."
+				};
+			}
+
+			var patch = typeof(Patches).GetNestedType("Verse_TickManager_TickManagerUpdate_Patch", BindingFlags.NonPublic);
+			var prefix = patch?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+			var postfix = patch?.GetMethod("Postfix", BindingFlags.Static | BindingFlags.NonPublic);
+			if (prefix == null || postfix == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find TickManagerUpdate prefix/postfix by reflection.",
+					prefixFound = prefix != null,
+					postfixFound = postfix != null
+				};
+			}
+
+			var originalTimeSpeed = gameTickManager.CurTimeSpeed;
+			var originalRealTimeToTickThrough = gameTickManager.realTimeToTickThrough;
+			var originalPercents = (float[])ZombieTicker.percentZombiesTicked.Clone();
+			var originalPercentIndex = ZombieTicker.percentZombiesTickedIndex;
+			var originalZombiesTicked = ZombieTicker.zombiesTicked;
+			var originalMaxTicking = ZombieTicker.maxTicking;
+			var originalCurrentTicking = ZombieTicker.currentTicking;
+			var originalManagers = ZombieTicker.managers;
+			var destroyedExisting = ZombieRuntimeActions.DestroyZombies(map);
+			var spawned = new List<Zombie>();
+
+			try
+			{
+				const int targetCount = 20;
+				const float prefixPercent = 0.25f;
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				for (var i = 0; i < targetCount; i++)
+				{
+					var candidateRoot = root + new IntVec3((i % 5) * 3, 0, (i / 5) * 3);
+					if (TryFindClearSpawnCell(map, candidateRoot, 16f, out var cell, out var spawnError) == false)
+						return spawnError;
+
+					var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+					if (zombie == null)
+					{
+						return new
+						{
+							success = false,
+							destroyedExisting,
+							spawnedCount = spawned.Count,
+							error = "ZombieGenerator.SpawnZombie returned no normal zombie."
+						};
+					}
+					spawned.Add(zombie);
+				}
+
+				tickManager.allZombiesCached.RemoveWhere(zombie => zombie == null || zombie.Destroyed || zombie.Spawned == false || zombie.Dead);
+				foreach (var zombie in spawned)
+					_ = tickManager.allZombiesCached.Add(zombie);
+
+				FillZombieTickPercent(prefixPercent);
+				ZombieTicker.zombiesTicked = 12345;
+				gameTickManager.CurTimeSpeed = TimeSpeed.Normal;
+				gameTickManager.realTimeToTickThrough = gameTickManager.CurTimePerTick * 2f;
+				prefix.Invoke(null, new object[] { gameTickManager });
+
+				var liveCached = tickManager.allZombiesCached.Count(zombie => zombie.Spawned && zombie.Dead == false);
+				var prefixPercentRead = ZombieTicker.PercentTicking;
+				var prefixMaxTicking = ZombieTicker.maxTicking;
+				var prefixCurrentTicking = ZombieTicker.currentTicking;
+				var prefixExpectedCurrent = Mathf.FloorToInt(prefixMaxTicking * prefixPercentRead);
+				var prefixResetCounter = ZombieTicker.zombiesTicked == 0;
+				var prefixSizedBudget = liveCached == targetCount
+					&& prefixMaxTicking >= liveCached
+					&& prefixCurrentTicking == prefixExpectedCurrent
+					&& prefixCurrentTicking > 0
+					&& prefixCurrentTicking < prefixMaxTicking;
+
+				FillZombieTickPercent(1f);
+				ZombieTicker.currentTicking = 400;
+				ZombieTicker.zombiesTicked = 100;
+				postfix.Invoke(null, new object[] { gameTickManager });
+
+				var postfixSlot = ZombieTicker.percentZombiesTicked[0];
+				var postfixIndex = ZombieTicker.percentZombiesTickedIndex;
+				var postfixAverage = ZombieTicker.PercentTicking;
+				var expectedPostfixSlot = 0.25f;
+				var expectedPostfixAverage = 0.90625f;
+				var postfixReducedBudget = Mathf.Abs(postfixSlot - expectedPostfixSlot) < 0.0001f
+					&& postfixIndex == 1
+					&& Mathf.Abs(postfixAverage - expectedPostfixAverage) < 0.0001f;
+
+				return new
+				{
+					success = prefixResetCounter
+						&& prefixSizedBudget
+						&& postfixReducedBudget,
+					destroyedExisting,
+					spawnedCount = spawned.Count,
+					liveCached,
+					prefix = new
+					{
+						prefixPercentRead,
+						prefixMaxTicking,
+						prefixCurrentTicking,
+						prefixExpectedCurrent,
+						prefixResetCounter,
+						prefixSizedBudget,
+						timeSpeed = gameTickManager.CurTimeSpeed.ToString()
+					},
+					postfix = new
+					{
+						inputCurrentTicking = 400,
+						inputZombiesTicked = 100,
+						postfixSlot,
+						expectedPostfixSlot,
+						postfixIndex,
+						postfixAverage,
+						expectedPostfixAverage,
+						postfixReducedBudget
+					}
+				};
+			}
+			finally
+			{
+				ZombieRuntimeActions.DestroyZombies(map);
+				gameTickManager.CurTimeSpeed = originalTimeSpeed;
+				gameTickManager.realTimeToTickThrough = originalRealTimeToTickThrough;
+				ZombieTicker.percentZombiesTicked = originalPercents;
+				ZombieTicker.percentZombiesTickedIndex = originalPercentIndex;
+				ZombieTicker.zombiesTicked = originalZombiesTicked;
+				ZombieTicker.maxTicking = originalMaxTicking;
+				ZombieTicker.currentTicking = originalCurrentTicking;
+				ZombieTicker.managers = originalManagers;
 				tickManager.currentZombiesTicking = Array.Empty<Zombie>();
 				tickManager.currentZombiesTickingIndex = 0;
 			}

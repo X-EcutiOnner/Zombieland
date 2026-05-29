@@ -378,7 +378,7 @@ namespace ZombieLand
 				tickManager.currentZombiesTicking = zombies.ToArray();
 			else
 			{
-				var partition = Mathf.FloorToInt(zombies.Count() * f);
+				var partition = Mathf.FloorToInt(zombies.Count * f);
 				if (partition <= 0)
 					tickManager.currentZombiesTicking = Array.Empty<Zombie>();
 				else
