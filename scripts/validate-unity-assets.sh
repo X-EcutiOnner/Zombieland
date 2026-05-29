@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UNITY="${UNITY:-/Applications/Unity/Hub/Editor/2022.3.62f3/Unity.app/Contents/MacOS/Unity}"
 PROJECT_SRC="$ROOT/Originals/Effects"
-PROJECT_TMP="${TMPDIR:-/tmp}/zombieland-unity-validate"
+TMP_BASE="${TMPDIR:-/tmp}"
+PROJECT_TMP="$(mktemp -d "${TMP_BASE%/}/zombieland-unity-validate.XXXXXX")"
 LOG_DIR="$ROOT/logs"
 LOG_FILE="$LOG_DIR/unity-validate-assets.log"
 RESOURCES_DIR="${ZOMBIELAND_RESOURCES_DIR:-$ROOT/Resources}"
@@ -15,8 +16,7 @@ if [[ ! -x "$UNITY" ]]; then
 fi
 
 mkdir -p "$LOG_DIR"
-rm -rf "$PROJECT_TMP"
-mkdir -p "$PROJECT_TMP"
+trap 'rm -rf "$PROJECT_TMP"' EXIT
 for dir in Assets ProjectSettings Packages; do
   if [[ -d "$PROJECT_SRC/$dir" ]]; then
     ditto "$PROJECT_SRC/$dir" "$PROJECT_TMP/$dir"

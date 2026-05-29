@@ -4,8 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UNITY="${UNITY:-/Applications/Unity/Hub/Editor/2022.3.62f3/Unity.app/Contents/MacOS/Unity}"
 PROJECT_SRC="$ROOT/Originals/Effects"
-PROJECT_TMP="${TMPDIR:-/tmp}/zombieland-unity-export"
-EXPORT_RESOURCES_TMP="${TMPDIR:-/tmp}/zombieland-unity-export-staging-resources"
+TMP_BASE="${TMPDIR:-/tmp}"
+PROJECT_TMP="$(mktemp -d "${TMP_BASE%/}/zombieland-unity-export.XXXXXX")"
+EXPORT_RESOURCES_TMP="$(mktemp -d "${TMP_BASE%/}/zombieland-unity-export-resources.XXXXXX")"
 LOG_DIR="$ROOT/logs"
 LOG_FILE="$LOG_DIR/unity-export.log"
 RESOURCES_DIR="${ZOMBIELAND_RESOURCES_DIR:-$ROOT/Resources}"
@@ -16,15 +17,12 @@ if [[ ! -x "$UNITY" ]]; then
 fi
 
 mkdir -p "$LOG_DIR"
-rm -rf "$PROJECT_TMP"
-rm -rf "$EXPORT_RESOURCES_TMP"
-mkdir -p "$PROJECT_TMP"
+trap 'rm -rf "$PROJECT_TMP" "$EXPORT_RESOURCES_TMP"' EXIT
 for dir in Assets ProjectSettings Packages; do
   if [[ -d "$PROJECT_SRC/$dir" ]]; then
     ditto "$PROJECT_SRC/$dir" "$PROJECT_TMP/$dir"
   fi
 done
-mkdir -p "$EXPORT_RESOURCES_TMP"
 
 ZOMBIELAND_RESOURCES_DIR="$EXPORT_RESOURCES_TMP" "$UNITY" \
   -batchmode \
