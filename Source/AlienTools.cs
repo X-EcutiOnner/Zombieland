@@ -8,7 +8,7 @@ namespace ZombieLand
 {
 	public static class AlienTools
 	{
-		public static Func<Pawn, bool> IsFleshPawn = pawn => pawn.RaceProps.Humanlike;
+		public static Func<Pawn, bool> IsFleshPawn = pawn => pawn?.RaceProps?.IsFlesh ?? false;
 
 		public static void Init()
 		{

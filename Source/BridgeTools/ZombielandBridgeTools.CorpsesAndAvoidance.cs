@@ -1,0 +1,1685 @@
+using RimBridgeServer.Annotations;
+using RimWorld;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using UnityEngine;
+using Verse;
+using Verse.AI;
+
+namespace ZombieLand
+{
+	public sealed partial class ZombielandBridgeTools
+	{
+		[Tool("zombieland/convert_infected_corpse_to_zombie", Description = "Create an infected rotting corpse from a spawned pawn, verify Corpse.RotStageChanged queued it, then run that queued conversion.")]
+		public static object ConvertInfectedCorpseToZombie(
+			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
+			[ToolParameter(Description = "Bite state to apply before death: harmful, final, or harmless.", Required = false, DefaultValue = "final")] string stage = "final")
+		{
+			var map = CurrentMap;
+			if (ZombieRuntimeActions.TryFindPawn(map, target, out var pawn, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					error
+				};
+			}
+			if (pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
+			{
+				return new
+				{
+					success = false,
+					error = "Target is already a Zombieland pawn."
+				};
+			}
+
+			var before = CurrentZombies(map);
+			var beforeIds = new HashSet<string>(before.Select(ZombieRuntimeActions.StableThingId));
+			var targetId = ZombieRuntimeActions.StableThingId(pawn);
+			var targetThingId = pawn.ThingID;
+			var targetLabel = pawn.LabelCap;
+
+			if (ZombieRuntimeActions.AddZombieBite(pawn, stage, out var bite, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					targetId,
+					targetThingId,
+					targetLabel,
+					error
+				};
+			}
+
+			if (ZombieRuntimeActions.KillPawnToCorpse(pawn, out var corpse, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					targetId,
+					targetThingId,
+					targetLabel,
+					biteLabel = bite.LabelCap,
+					error
+				};
+			}
+
+			var corpseBeforeRot = DescribeCorpse(corpse);
+			if (ZombieRuntimeActions.TriggerCorpseRotStageChanged(corpse, out var rotStageBefore, out var rotStageAfter, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					targetId,
+					targetThingId,
+					targetLabel,
+					biteLabel = bite.LabelCap,
+					corpse = corpseBeforeRot,
+					error
+				};
+			}
+
+			var corpseAfterRot = DescribeCorpse(corpse);
+			var convertedQueuedCorpse = ZombieRuntimeActions.RunQueuedConversion(map, corpse, out var queueCountBeforeRun, out var queueCountAfterRun, out error);
+			var after = CurrentZombies(map);
+			var newZombies = after
+				.Where(zombie => beforeIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+				.Select(DescribeZombie)
+				.ToArray();
+
+			return new
+			{
+				success = convertedQueuedCorpse && newZombies.Length > 0,
+				targetId,
+				targetThingId,
+				targetLabel,
+				stage = stage ?? "final",
+				biteLabel = bite.LabelCap,
+				rotStageBefore = rotStageBefore.ToString(),
+				rotStageAfter = rotStageAfter.ToString(),
+				corpseBeforeRot,
+				corpseAfterRot,
+				queuedConversionFound = convertedQueuedCorpse,
+				queueCountBeforeRun,
+				queueCountAfterRun,
+				error,
+				beforeCount = before.Length,
+				afterCount = after.Length,
+				newZombieCount = newZombies.Length,
+				newZombies
+			};
+		}
+
+		[Tool("zombieland/double_tap_infected_corpse", Description = "Run the real DoubleTap job on an infected corpse and verify the missing brain prevents corpse conversion.")]
+		public static object DoubleTapInfectedCorpse()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var zombieCorpses = map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray();
+			foreach (var zombieCorpse in zombieCorpses)
+				zombieCorpse.Destroy();
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+			DisablePawnWork(actor);
+			if (TryFindAdjacentClearCell(actor, out var victimCell) == false
+				&& TryFindClearSpawnCell(map, actor.Position, 8f, out victimCell, out var spawnError) == false)
+				return spawnError;
+
+			var victim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(victim, victimCell, map, WipeMode.Vanish);
+			if (ZombieRuntimeActions.AddZombieBite(victim, "final", out var bite, out var error) == false)
+			{
+				return new
+				{
+					success = false,
+					victim = DescribePawn(victim),
+					error
+				};
+			}
+
+			if (ZombieRuntimeActions.KillPawnToCorpse(victim, out var corpse, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					victim = DescribePawn(victim),
+					biteLabel = bite.LabelCap,
+					error
+				};
+			}
+
+			var oldHours = ZombieSettings.Values.hoursAfterDeathToBecomeZombie;
+			ZombieSettings.Values.hoursAfterDeathToBecomeZombie = Math.Max(1, oldHours);
+			try
+			{
+				actor.pather?.StopDead();
+				actor.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+
+				var workGiver = new WorkGiver_DoubleTap();
+				var hasForcedJob = workGiver.HasJobOnThing(actor, corpse, true);
+				var job = workGiver.JobOnThing(actor, corpse, true);
+				if (hasForcedJob == false || job == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						corpse = DescribeCorpse(corpse),
+						hasForcedJob,
+						jobDef = job?.def?.defName,
+						error = "WorkGiver_DoubleTap did not create a forced DoubleTap job."
+					};
+				}
+
+				var meleeDps = Math.Max(0.1f, actor.GetStatValue(StatDefOf.MeleeDPS, true));
+				var maxHitWindows = (int)Math.Ceiling(100f / (meleeDps * 4f)) + 1;
+				var maxTicks = 2 + maxHitWindows * 80;
+				var samples = new List<object>();
+				var brainBefore = corpse.InnerPawn?.health?.hediffSet?.GetBrain()?.def?.defName;
+				job.playerForced = true;
+				var jobDefName = job.def?.defName;
+				actor.jobs.StartJob(job, JobCondition.InterruptForced, null, true, true);
+				var startedJob = actor.CurJobDef?.defName;
+
+				var tickHit = -1;
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					var brainMissing = corpse.InnerPawn?.health?.hediffSet?.GetBrain() == null;
+					if (tick == 1 || tick == maxTicks || tick % 80 == 0 || brainMissing)
+					{
+						samples.Add(new
+						{
+							tick,
+							actorJob = actor.CurJobDef?.defName,
+							brainMissing,
+							corpseSpawned = corpse.Spawned,
+							corpseDestroyed = corpse.Destroyed
+						});
+					}
+
+					if (brainMissing)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var brainMissingAfter = corpse.InnerPawn?.health?.hediffSet?.GetBrain() == null;
+				var queue = map.GetComponent<TickManager>()?.colonistsToConvert;
+				var queueCountBeforeRot = queue?.Count ?? -1;
+				var queuedBeforeRot = queue?.Contains(corpse) ?? false;
+				var rotTriggered = ZombieRuntimeActions.TriggerCorpseRotStageChanged(corpse, out var rotStageBefore, out var rotStageAfter, out error);
+				var queueCountAfterRot = queue?.Count ?? -1;
+				var queuedAfterRot = queue?.Contains(corpse) ?? false;
+
+				return new
+				{
+					success = brainBefore != null
+						&& brainMissingAfter
+						&& tickHit > 0
+						&& rotTriggered
+						&& queuedBeforeRot == false
+						&& queuedAfterRot == false,
+					destroyedZombies,
+					destroyedZombieCorpses = zombieCorpses.Length,
+					actor = DescribePawn(actor),
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					corpse = DescribeCorpse(corpse),
+					victimCell = ZombieRuntimeActions.DescribeCell(victimCell),
+					biteLabel = bite.LabelCap,
+					restoredHoursAfterDeathToBecomeZombie = oldHours,
+					hasForcedJob,
+					jobDef = jobDefName,
+					startedJob,
+					meleeDps,
+					maxHitWindows,
+					maxTicks,
+					tickHit,
+					brainBefore,
+					brainMissingAfter,
+					rotTriggered,
+					rotStageBefore = rotStageBefore.ToString(),
+					rotStageAfter = rotStageAfter.ToString(),
+					rotError = error,
+					queueCountBeforeRot,
+					queueCountAfterRot,
+					queuedBeforeRot,
+					queuedAfterRot,
+					samples
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.hoursAfterDeathToBecomeZombie = oldHours;
+			}
+		}
+
+		[Tool("zombieland/extract_serum_from_zombie_corpse", Description = "Kill a real zombie into a ZombieCorpse, run the ExtractZombieSerum job, and verify extract is produced.")]
+		public static object ExtractSerumFromZombieCorpse()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldAmount = ZombieSettings.Values.corpsesExtractAmount;
+			ZombieSettings.Values.corpsesExtractAmount = Math.Max(1f, oldAmount);
+			try
+			{
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+				foreach (var existingCorpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+					existingCorpse.Destroy();
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+				DisablePawnWork(actor);
+
+				if (TryFindAdjacentClearCell(actor, out var zombieCell) == false
+					&& TryFindClearSpawnCell(map, actor.Position, 8f, out zombieCell, out var zombieSpawnError) == false)
+					return zombieSpawnError;
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "ZombieGenerator.SpawnZombie returned no zombie."
+					};
+				}
+
+				zombie.Kill(null);
+				var corpse = zombie.Corpse as ZombieCorpse
+					?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(zombieCell)).FirstOrDefault();
+				if (corpse == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						zombie = DescribeZombie(zombie),
+						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+						error = "Killing the zombie did not leave a ZombieCorpse."
+					};
+				}
+
+				var tickManager = map.GetComponent<TickManager>();
+				if (tickManager?.allZombieCorpses?.Contains(corpse) == false)
+					tickManager.allZombieCorpses.Add(corpse);
+
+				var workGiver = new WorkGiver_ExtractZombieSerum();
+				var hasForcedJob = workGiver.HasJobOnThing(actor, corpse, true);
+				var job = workGiver.JobOnThing(actor, corpse, true);
+				if (hasForcedJob == false || job == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						corpse = DescribeCorpse(corpse),
+						hasForcedJob,
+						jobDef = job?.def?.defName,
+						error = "WorkGiver_ExtractZombieSerum did not create a forced extract job."
+					};
+				}
+
+				var extractBefore = map.listerThings.AllThings.Where(thing => thing.def == CustomDefs.ZombieExtract).Sum(thing => thing.stackCount);
+				var tendSpeed = Math.Max(0.1f, actor.GetStatValue(StatDefOf.MedicalTendSpeed, true));
+				var maxTicks = 120 + (int)Math.Ceiling(100f / (tendSpeed / 2f));
+				var samples = new List<object>();
+				job.playerForced = true;
+				var jobDefName = job.def?.defName;
+				actor.jobs.StartJob(job, JobCondition.InterruptForced, null, true, true);
+				var startedJob = actor.CurJobDef?.defName;
+				var tickHit = -1;
+
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					var extractNow = map.listerThings.AllThings.Where(thing => thing.def == CustomDefs.ZombieExtract).Sum(thing => thing.stackCount);
+					var corpseGone = corpse.Destroyed || corpse.Spawned == false;
+					if (tick == 1 || tick == maxTicks || tick % 80 == 0 || corpseGone || extractNow > extractBefore)
+					{
+						samples.Add(new
+						{
+							tick,
+							actorJob = actor.CurJobDef?.defName,
+							corpseGone,
+							extractNow
+						});
+					}
+
+					if (corpseGone && extractNow > extractBefore)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var extractAfter = map.listerThings.AllThings.Where(thing => thing.def == CustomDefs.ZombieExtract).Sum(thing => thing.stackCount);
+				var corpseDestroyed = corpse.Destroyed || corpse.Spawned == false;
+
+				return new
+				{
+					success = corpseDestroyed && extractAfter > extractBefore && tickHit > 0,
+					actor = DescribePawn(actor),
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					corpse = DescribeCorpse(corpse),
+					restoredCorpsesExtractAmount = oldAmount,
+					hasForcedJob,
+					jobDef = jobDefName,
+					startedJob,
+					tendSpeed,
+					maxTicks,
+					tickHit,
+					extractBefore,
+					extractAfter,
+					extractDelta = extractAfter - extractBefore,
+					expectedExtractPerZombie = Tools.ExtractPerZombie(),
+					corpseDestroyed,
+					trackedCorpseCount = tickManager?.allZombieCorpses?.Count ?? -1,
+					samples
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.corpsesExtractAmount = oldAmount;
+			}
+		}
+
+		[Tool("zombieland/zombie_extract_filter_visibility", Description = "Verify the broad zombie ThingFilter patch still allows zombie extract and serum defs while blocking actual zombie defs.")]
+		public static object ZombieExtractFilterVisibility()
+		{
+			var serumDef = DefDatabase<ThingDef>.GetNamed("ZombieSerumSimple", false);
+			if (serumDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "ZombieSerumSimple def was not loaded."
+				};
+			}
+
+			var filter = new ThingFilter();
+			filter.SetAllow(CustomDefs.ZombieExtract, true);
+			filter.SetAllow(serumDef, true);
+			filter.SetAllow(CustomDefs.Corpse_Zombie, true);
+			filter.SetAllow(CustomDefs.Zombie, true);
+			var allowedDefs = filter.AllowedThingDefs.ToHashSet();
+			var extractAllowed = allowedDefs.Contains(CustomDefs.ZombieExtract);
+			var serumAllowed = allowedDefs.Contains(serumDef);
+			var zombieCorpseAllowed = allowedDefs.Contains(CustomDefs.Corpse_Zombie);
+			var zombiePawnAllowed = allowedDefs.Contains(CustomDefs.Zombie);
+
+			var extractThing = ThingMaker.MakeThing(CustomDefs.ZombieExtract);
+			var serumFilterWorker = new ZombieSerumFilterWorker();
+			var extractExcludedBySerumFilter = serumFilterWorker.Matches(extractThing);
+
+			return new
+			{
+				success = extractAllowed
+					&& serumAllowed
+					&& zombieCorpseAllowed == false
+					&& zombiePawnAllowed == false
+					&& extractExcludedBySerumFilter == false,
+				extract = new
+				{
+					defName = CustomDefs.ZombieExtract.defName,
+					allowed = extractAllowed,
+					excludedBySerumFilter = extractExcludedBySerumFilter
+				},
+				serum = new
+				{
+					defName = serumDef.defName,
+					allowed = serumAllowed
+				},
+				blockedZombieDefs = new
+				{
+					corpse = new
+					{
+						defName = CustomDefs.Corpse_Zombie.defName,
+						allowed = zombieCorpseAllowed
+					},
+					pawn = new
+					{
+						defName = CustomDefs.Zombie.defName,
+						allowed = zombiePawnAllowed
+					}
+				}
+			};
+		}
+
+		[Tool("zombieland/rope_zombie_job", Description = "Run the real RopeZombie job from a colonist to a live zombie and verify the zombie becomes roped.")]
+		public static object RopeZombieJob()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+			DisablePawnWork(actor);
+
+			if (TryFindAdjacentClearCell(actor, out var zombieCell) == false
+				&& TryFindClearSpawnCell(map, actor.Position, 8f, out zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "ZombieGenerator.SpawnZombie returned no zombie."
+				};
+			}
+
+			var job = JobMaker.MakeJob(CustomDefs.RopeZombie, zombie);
+			job.playerForced = true;
+			var canReserveAndReach = actor.CanReach(zombie, PathEndMode.Touch, Danger.Deadly)
+				&& zombie.ropedBy == null;
+			actor.drafter.Drafted = true;
+			_ = actor.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
+			var startedJob = actor.CurJobDef?.defName;
+			var maxTicks = 180;
+			var tickHit = -1;
+			var samples = new List<object>();
+
+			for (var tick = 1; tick <= maxTicks; tick++)
+			{
+				AdvanceGameTicks(1);
+				var roped = ReferenceEquals(zombie.ropedBy, actor);
+				if (tick == 1 || tick == maxTicks || tick % 30 == 0 || roped)
+				{
+					samples.Add(new
+					{
+						tick,
+						actorJob = actor.CurJobDef?.defName,
+						zombieRopedBy = zombie.ropedBy?.ThingID,
+						zombie.IsRopedOrConfused
+					});
+				}
+
+				if (roped)
+				{
+					tickHit = tick;
+					break;
+				}
+			}
+
+			return new
+			{
+				success = canReserveAndReach && tickHit > 0 && ReferenceEquals(zombie.ropedBy, actor) && zombie.IsRopedOrConfused,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				zombie = DescribeZombie(zombie),
+				actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+				zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+				canReserveAndReach,
+				startedJob,
+				maxTicks,
+				tickHit,
+				ropedBy = zombie.ropedBy?.ThingID,
+				isRopedOrConfused = zombie.IsRopedOrConfused,
+				samples
+			};
+		}
+
+		[Tool("zombieland/flee_ignores_harmless_zombies", Description = "Call RimWorld FleeUtility.ShouldFleeFrom for real zombies and verify roped/confused/electrical/albino zombies are not flee threats.")]
+		public static object FleeIgnoresHarmlessZombies()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+
+			var zombieCells = GenRadial.RadialCellsAround(actorCell, 7f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.DistanceTo(actorCell) <= 7.5f)
+				.Where(cell => cell != actorCell)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Take(5)
+				.ToArray();
+			if (zombieCells.Length < 5)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "Could not find enough nearby cells for flee-threat zombies."
+				};
+			}
+
+			var normal = ZombieRuntimeActions.SpawnZombie(zombieCells[0], map, ZombieType.Normal, true);
+			var roped = ZombieRuntimeActions.SpawnZombie(zombieCells[1], map, ZombieType.Normal, true);
+			var confused = ZombieRuntimeActions.SpawnZombie(zombieCells[2], map, ZombieType.Normal, true);
+			var electrifier = ZombieRuntimeActions.SpawnZombie(zombieCells[3], map, ZombieType.Electrifier, true);
+			var albino = ZombieRuntimeActions.SpawnZombie(zombieCells[4], map, ZombieType.Albino, true);
+
+			if (normal == null || roped == null || confused == null || electrifier == null || albino == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "ZombieGenerator.SpawnZombie returned no zombie for one or more flee-threat cases."
+				};
+			}
+
+			roped.ropedBy = actor;
+			confused.paralyzedUntil = GenTicks.TicksAbs + 2500;
+			electrifier.electricDisabledUntil = GenTicks.TicksGame - 1;
+
+			var normalThreat = FleeUtility.ShouldFleeFrom(normal, actor, true, false);
+			var ropedThreat = FleeUtility.ShouldFleeFrom(roped, actor, true, false);
+			var confusedThreat = FleeUtility.ShouldFleeFrom(confused, actor, true, false);
+			var electrifierThreat = FleeUtility.ShouldFleeFrom(electrifier, actor, true, false);
+			var albinoThreat = FleeUtility.ShouldFleeFrom(albino, actor, true, false);
+
+			return new
+			{
+				success = normalThreat
+					&& ropedThreat == false
+					&& confusedThreat == false
+					&& electrifierThreat == false
+					&& albinoThreat == false,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				normal = DescribeZombie(normal),
+				roped = DescribeZombie(roped),
+				confused = DescribeZombie(confused),
+				electrifier = DescribeZombie(electrifier),
+				albino = DescribeZombie(albino),
+				threats = new
+				{
+					normal = normalThreat,
+					roped = ropedThreat,
+					confused = confusedThreat,
+					electrifier = electrifierThreat,
+					albino = albinoThreat
+				},
+				seesAsThreat = new
+				{
+					normal = actor.SeesZombieAsThreat(normal),
+					roped = actor.SeesZombieAsThreat(roped),
+					confused = actor.SeesZombieAsThreat(confused),
+					electrifier = actor.SeesZombieAsThreat(electrifier),
+					albino = actor.SeesZombieAsThreat(albino)
+				}
+			};
+		}
+
+		[Tool("zombieland/colonist_avoidance_interrupts_job", Description = "Build a real avoid grid around a zombie and verify a non-forced colonist job is interrupted into a Flee job.")]
+		public static object ColonistAvoidanceInterruptsJob()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			ZombieSettings.Values.betterZombieAvoidance = true;
+			try
+			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				map.GetComponent<TickManager>().avoidGrid = new AvoidGrid(map);
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				DisablePawnWork(actor);
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoAvoidZombies = true;
+
+				var zombieCell = GenRadial.RadialCellsAround(actorCell, 3f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.OrderBy(cell => cell.DistanceToSquared(actorCell))
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "No nearby clear zombie cell was found."
+					};
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "ZombieGenerator.SpawnZombie returned no zombie."
+					};
+				}
+
+				zombie.state = ZombieState.Tracking;
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var actorAvoidCost = AvoidCost(avoidGrid, map, actor.Position);
+				var inAvoidDangerBefore = avoidGrid.InAvoidDanger(actor);
+				var safeCells = GenRadial.RadialCellsAround(actor.Position, 8f, true)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => avoidGrid.ShouldAvoid(map, cell) == false)
+					.Take(8)
+					.Select(ZombieRuntimeActions.DescribeCell)
+					.ToArray();
+
+				var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				waitJob.playerForced = false;
+				actor.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+				var startedJob = actor.CurJobDef?.defName;
+				var samples = new List<object>();
+				var tickHit = -1;
+				const int maxTicks = 30;
+
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					var currentJob = actor.CurJob;
+					if (tick == 1 || tick == maxTicks || currentJob?.def == JobDefOf.Flee)
+					{
+						samples.Add(new
+						{
+							tick,
+							job = actor.CurJobDef?.defName,
+							currentJob?.playerForced,
+							target = currentJob?.targetA.Cell.IsValid == true ? ZombieRuntimeActions.DescribeCell(currentJob.targetA.Cell) : null
+						});
+					}
+
+					if (currentJob?.def == JobDefOf.Flee)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var fleeJob = actor.CurJob;
+				var fleeDestination = fleeJob?.targetA.Cell ?? IntVec3.Invalid;
+				var fleeDestinationAvoids = fleeDestination.IsValid && avoidGrid.ShouldAvoid(map, fleeDestination) == false;
+
+				return new
+				{
+					success = inAvoidDangerBefore
+						&& startedJob == JobDefOf.Wait_Combat.defName
+						&& tickHit > 0
+						&& fleeJob?.playerForced == true
+						&& fleeDestinationAvoids,
+					destroyedZombies,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					startedJob,
+					inAvoidDangerBefore,
+					actorAvoidCost,
+					safeCells,
+					tickHit,
+					maxTicks,
+					fleeDestination = fleeDestination.IsValid ? ZombieRuntimeActions.DescribeCell(fleeDestination) : null,
+					fleeDestinationAvoids,
+					finalJob = actor.CurJobDef?.defName,
+					finalJobPlayerForced = actor.CurJob?.playerForced,
+					samples
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+			}
+		}
+
+		[Tool("zombieland/workgiver_respects_avoid_grid", Description = "Verify a non-forced DoubleTap workgiver rejects an infected corpse in avoid danger while a forced command still creates the job.")]
+		public static object WorkgiverRespectsAvoidGrid()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			var oldHours = ZombieSettings.Values.hoursAfterDeathToBecomeZombie;
+			ZombieSettings.Values.betterZombieAvoidance = true;
+			ZombieSettings.Values.hoursAfterDeathToBecomeZombie = Math.Max(1, oldHours);
+			try
+			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				foreach (var zombieCorpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+					zombieCorpse.Destroy();
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				DisablePawnWork(actor);
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoDoubleTap = true;
+
+				var victimCell = GenRadial.RadialCellsAround(actor.Position, 14f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.DistanceTo(actor.Position) >= 10f)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.OrderBy(cell => cell.DistanceToSquared(actor.Position))
+					.FirstOrDefault();
+				if (victimCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "No distant victim cell was found for the avoid-grid workgiver fixture."
+					};
+				}
+
+				var victim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(victim, victimCell, map, WipeMode.Vanish);
+				if (ZombieRuntimeActions.AddZombieBite(victim, "final", out var bite, out var error) == false)
+				{
+					return new
+					{
+						success = false,
+						victim = DescribePawn(victim),
+						error
+					};
+				}
+
+				if (ZombieRuntimeActions.KillPawnToCorpse(victim, out var corpse, out error) == false)
+				{
+					return new
+					{
+						success = false,
+						victim = DescribePawn(victim),
+						biteLabel = bite.LabelCap,
+						error
+					};
+				}
+
+				var zombieCell = GenRadial.RadialCellsAround(corpse.Position, 3f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.OrderBy(cell => cell.DistanceToSquared(corpse.Position))
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						corpse = DescribeCorpse(corpse),
+						error = "No nearby zombie cell was found for the avoid-grid workgiver fixture."
+					};
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						corpse = DescribeCorpse(corpse),
+						error = "ZombieGenerator.SpawnZombie returned no avoid-grid zombie."
+					};
+				}
+
+				zombie.state = ZombieState.Tracking;
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var targetAvoidCost = AvoidCost(avoidGrid, map, corpse.Position);
+				var targetShouldAvoid = avoidGrid.ShouldAvoid(map, corpse.Position);
+				var actorShouldAvoid = avoidGrid.ShouldAvoid(map, actor.Position);
+
+				var workGiver = new WorkGiver_DoubleTap();
+				var hasUnforcedJob = workGiver.HasJobOnThing(actor, corpse, false);
+				var unforcedJob = hasUnforcedJob ? workGiver.JobOnThing(actor, corpse, false) : null;
+				var hasForcedJob = workGiver.HasJobOnThing(actor, corpse, true);
+				var forcedJob = workGiver.JobOnThing(actor, corpse, true);
+
+				return new
+				{
+					success = targetShouldAvoid
+						&& actorShouldAvoid == false
+						&& hasUnforcedJob == false
+						&& unforcedJob == null
+						&& hasForcedJob
+						&& forcedJob?.def == CustomDefs.DoubleTap,
+					destroyedZombies,
+					actor = DescribePawn(actor),
+					corpse = DescribeCorpse(corpse),
+					zombie = DescribeZombie(zombie),
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					victimCell = ZombieRuntimeActions.DescribeCell(victimCell),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					targetAvoidCost,
+					targetShouldAvoid,
+					actorShouldAvoid,
+					hasUnforcedJob,
+					unforcedJobDef = unforcedJob?.def?.defName,
+					hasForcedJob,
+					forcedJobDef = forcedJob?.def?.defName
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+				ZombieSettings.Values.hoursAfterDeathToBecomeZombie = oldHours;
+			}
+		}
+
+		[Tool("zombieland/avoid_grid_blocks_door_and_danger", Description = "Verify avoid-grid danger affects vanilla door and danger checks for normal colonist behavior but not drafted or player-forced commands.")]
+		public static object AvoidGridBlocksDoorAndDanger()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			ZombieSettings.Values.betterZombieAvoidance = true;
+			try
+			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				map.GetComponent<TickManager>().avoidGrid = new AvoidGrid(map);
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				DisablePawnWork(actor);
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoAvoidZombies = true;
+
+				var doorCell = GenRadial.RadialCellsAround(actor.Position, 14f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetEdifice(map) == null)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(actor.Position) >= 10f)
+					.OrderBy(cell => cell.DistanceToSquared(actor.Position))
+					.FirstOrDefault();
+				if (doorCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "No distant clear door cell was found for the avoid-grid fixture."
+					};
+				}
+
+				var zombieCell = GenRadial.RadialCellsAround(doorCell, 3f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell != doorCell)
+					.OrderBy(cell => cell.DistanceToSquared(doorCell))
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						doorCell = ZombieRuntimeActions.DescribeCell(doorCell),
+						error = "No nearby zombie cell was found for the avoid-grid door fixture."
+					};
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						doorCell = ZombieRuntimeActions.DescribeCell(doorCell),
+						error = "ZombieGenerator.SpawnZombie returned no avoid-grid zombie."
+					};
+				}
+				zombie.state = ZombieState.Tracking;
+
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var doorAvoidCost = AvoidCost(avoidGrid, map, doorCell);
+				var doorShouldAvoid = avoidGrid.ShouldAvoid(map, doorCell);
+				var actorShouldAvoid = avoidGrid.ShouldAvoid(map, actor.Position);
+
+				var door = ThingMaker.MakeThing(ThingDefOf.Door, GenStuff.DefaultStuffFor(ThingDefOf.Door)) as Building_Door;
+				if (door == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						zombie = DescribeZombie(zombie),
+						doorCell = ZombieRuntimeActions.DescribeCell(doorCell),
+						error = "Could not create test door."
+					};
+				}
+				GenSpawn.Spawn(door, doorCell, map, WipeMode.Vanish);
+				door.SetFaction(Faction.OfPlayer);
+				map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+
+				actor.drafter.Drafted = false;
+				actor.jobs.EndCurrentJob(JobCondition.InterruptForced);
+				var normalDoorCanOpen = door.PawnCanOpen(actor);
+				var normalDanger = doorCell.GetDangerFor(actor, map);
+
+				actor.drafter.Drafted = true;
+				var draftedDoorCanOpen = door.PawnCanOpen(actor);
+				actor.drafter.Drafted = false;
+
+				var forcedWait = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				forcedWait.playerForced = true;
+				actor.jobs.StartJob(forcedWait, JobCondition.InterruptForced, null, false, true);
+				var forcedDoorCanOpen = door.PawnCanOpen(actor);
+				var forcedDanger = doorCell.GetDangerFor(actor, map);
+
+				return new
+				{
+					success = doorShouldAvoid
+						&& actorShouldAvoid == false
+						&& normalDoorCanOpen == false
+						&& normalDanger == Danger.Deadly
+						&& draftedDoorCanOpen
+						&& forcedDoorCanOpen
+						&& forcedDanger != Danger.Deadly,
+					destroyedZombies,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					door = new
+					{
+						id = ZombieRuntimeActions.StableThingId(door),
+						defName = door.def?.defName,
+						faction = door.Faction?.Name,
+						position = ZombieRuntimeActions.DescribeCell(door.Position),
+						freePassage = door.FreePassage
+					},
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					doorCell = ZombieRuntimeActions.DescribeCell(doorCell),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					doorAvoidCost,
+					doorShouldAvoid,
+					actorShouldAvoid,
+					normalDoorCanOpen,
+					normalDanger = normalDanger.ToString(),
+					draftedDoorCanOpen,
+					forcedDoorCanOpen,
+					forcedDanger = forcedDanger.ToString(),
+					forcedJob = actor.CurJobDef?.defName,
+					forcedJobPlayerForced = actor.CurJob?.playerForced
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+			}
+		}
+
+		[Tool("zombieland/avoid_grid_interrupts_existing_path", Description = "Verify an already-started colonist path asks for a new path when its source-derived lookahead cell becomes zombie avoid danger.")]
+		public static object AvoidGridInterruptsExistingPath()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			ZombieSettings.Values.betterZombieAvoidance = true;
+			try
+			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				map.GetComponent<TickManager>().avoidGrid = new AvoidGrid(map);
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				DisablePawnWork(actor);
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoAvoidZombies = true;
+
+				var destination = GenRadial.RadialCellsAround(actor.Position, 18f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(actor.Position) >= 14f)
+					.Where(cell => actor.CanReach(cell, PathEndMode.OnCell, Danger.Deadly))
+					.OrderByDescending(cell => cell.DistanceToSquared(actor.Position))
+					.FirstOrDefault();
+				if (destination.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "No reachable distant destination was found for the avoid-grid path fixture."
+					};
+				}
+
+				var gotoJob = JobMaker.MakeJob(JobDefOf.Goto, destination);
+				gotoJob.playerForced = false;
+				var startedJob = actor.jobs.TryTakeOrderedJob(gotoJob, JobTag.Misc, false);
+				if (startedJob == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						destination = ZombieRuntimeActions.DescribeCell(destination),
+						error = "Could not start the real Goto job for the avoid-grid path fixture."
+					};
+				}
+
+				const int maxPathTicks = 60;
+				var pathReadyTick = -1;
+				for (var tick = 0; tick <= maxPathTicks; tick++)
+				{
+					if (actor.pather.curPath?.Found == true && actor.pather.curPath.NodesLeftCount >= 6)
+					{
+						pathReadyTick = tick;
+						break;
+					}
+					AdvanceGameTicks(1);
+				}
+
+				var path = actor.pather.curPath;
+				if (path?.Found != true || path.NodesLeftCount < 6)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						destination = ZombieRuntimeActions.DescribeCell(destination),
+						pathReadyTick,
+						nodesLeft = path?.NodesLeftCount ?? 0,
+						error = "Pawn path did not become available with enough nodes for the lookahead fixture."
+					};
+				}
+
+				var lookAhead = path.Peek(4);
+				var lastNode = path.LastNode;
+				if ((lookAhead - lastNode).LengthHorizontalSquared < 25)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						destination = ZombieRuntimeActions.DescribeCell(destination),
+						lookAhead = ZombieRuntimeActions.DescribeCell(lookAhead),
+						lastNode = ZombieRuntimeActions.DescribeCell(lastNode),
+						nodesLeft = path.NodesLeftCount,
+						error = "Source-derived lookahead cell was too close to destination for the NeedNewPath patch."
+					};
+				}
+
+				var needNewPathBefore = actor.pather.NeedNewPath();
+				var pathCells = Enumerable.Range(0, path.NodesLeftCount)
+					.Select(path.Peek)
+					.ToHashSet();
+				var zombieCell = GenRadial.RadialCellsAround(lookAhead, 3f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => pathCells.Contains(cell) == false)
+					.OrderBy(cell => cell.DistanceToSquared(lookAhead))
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						lookAhead = ZombieRuntimeActions.DescribeCell(lookAhead),
+						nodesLeft = path.NodesLeftCount,
+						needNewPathBefore,
+						error = "No off-path zombie cell was found near the lookahead cell."
+					};
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+						lookAhead = ZombieRuntimeActions.DescribeCell(lookAhead),
+						error = "ZombieGenerator.SpawnZombie returned no avoid-grid zombie."
+					};
+				}
+				zombie.state = ZombieState.Tracking;
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var lookAheadAvoidCost = AvoidCost(avoidGrid, map, lookAhead);
+				var lookAheadShouldAvoid = avoidGrid.ShouldAvoid(map, lookAhead);
+				var needNewPathAfter = actor.pather.NeedNewPath();
+
+				return new
+				{
+					success = needNewPathBefore == false
+						&& lookAheadShouldAvoid
+						&& needNewPathAfter,
+					destroyedZombies,
+					startedJob,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					destination = ZombieRuntimeActions.DescribeCell(destination),
+					lookAhead = ZombieRuntimeActions.DescribeCell(lookAhead),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					lastNode = ZombieRuntimeActions.DescribeCell(lastNode),
+					pathReadyTick,
+					nodesLeft = path.NodesLeftCount,
+					lookAheadAvoidCost,
+					lookAheadShouldAvoid,
+					needNewPathBefore,
+					needNewPathAfter
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+			}
+		}
+
+		[Tool("zombieland/avoid_grid_costs_route_new_path", Description = "Verify a new RimWorld 1.6 path request uses Zombieland avoid-grid costs and routes through fewer zombie-danger cells.")]
+		public static object AvoidGridCostsRouteNewPath()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			ZombieSettings.Values.betterZombieAvoidance = false;
+			try
+			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				map.GetComponent<TickManager>().avoidGrid = new AvoidGrid(map);
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				DisablePawnWork(actor);
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoAvoidZombies = false;
+
+				var destination = GenRadial.RadialCellsAround(actor.Position, 22f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(actor.Position) >= 16f)
+					.Where(cell => actor.CanReach(cell, PathEndMode.OnCell, Danger.Deadly))
+					.OrderByDescending(cell => cell.DistanceToSquared(actor.Position))
+					.FirstOrDefault();
+				if (destination.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "No reachable distant destination was found for the avoid-grid route fixture."
+					};
+				}
+
+				var baselinePath = map.pathFinder.FindPathNow(actor.Position, destination, actor, null, PathEndMode.OnCell);
+				var baselineCells = DescribePathCells(baselinePath);
+				if (baselinePath?.Found != true || baselineCells.Length < 10)
+				{
+					baselinePath?.ReleaseToPool();
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						destination = ZombieRuntimeActions.DescribeCell(destination),
+						baselinePathFound = baselinePath?.Found ?? false,
+						baselineCells = baselineCells.Length,
+						error = "Baseline path did not become available with enough cells for the avoid-grid route fixture."
+					};
+				}
+
+				var zombieCell = baselineCells
+					.Skip(Math.Max(2, baselineCells.Length / 3))
+					.Take(Math.Max(1, baselineCells.Length / 3))
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(actor.Position) >= 6f)
+					.Where(cell => cell.DistanceTo(destination) >= 6f)
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					baselinePath.ReleaseToPool();
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						destination = ZombieRuntimeActions.DescribeCell(destination),
+						baselineCells = baselineCells.Length,
+						error = "No usable zombie cell was found on the baseline path."
+					};
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					baselinePath.ReleaseToPool();
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+						error = "ZombieGenerator.SpawnZombie returned no avoid-grid route zombie."
+					};
+				}
+				zombie.state = ZombieState.Tracking;
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var baselineAvoidCells = baselineCells.Count(cell => avoidGrid.ShouldAvoid(map, cell));
+				var baselineAvoidCost = baselineCells.Sum(cell => AvoidCost(avoidGrid, map, cell));
+
+				ZombieSettings.Values.betterZombieAvoidance = true;
+				if (config != null)
+					config.autoAvoidZombies = true;
+
+				var avoidedPath = map.pathFinder.FindPathNow(actor.Position, destination, actor, null, PathEndMode.OnCell);
+				var avoidedCells = DescribePathCells(avoidedPath);
+				var avoidedAvoidCells = avoidedCells.Count(cell => avoidGrid.ShouldAvoid(map, cell));
+				var avoidedAvoidCost = avoidedCells.Sum(cell => AvoidCost(avoidGrid, map, cell));
+				var avoidedPathFound = avoidedPath?.Found == true;
+				baselinePath.ReleaseToPool();
+				avoidedPath?.ReleaseToPool();
+
+				return new
+				{
+					success = avoidedPathFound
+						&& baselineAvoidCells > 0
+						&& avoidedAvoidCells < baselineAvoidCells
+						&& avoidedAvoidCost < baselineAvoidCost,
+					destroyedZombies,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					destination = ZombieRuntimeActions.DescribeCell(destination),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					baseline = new
+					{
+						pathFound = true,
+						cellCount = baselineCells.Length,
+						avoidCells = baselineAvoidCells,
+						avoidCost = baselineAvoidCost
+					},
+					avoided = new
+					{
+						pathFound = avoidedPathFound,
+						cellCount = avoidedCells.Length,
+						avoidCells = avoidedAvoidCells,
+						avoidCost = avoidedAvoidCost
+					}
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+			}
+		}
+
+		[Tool("zombieland/zombie_manual_door_close_ignored", Description = "Verify a zombie cannot manually schedule a door to close while a normal colonist still can.")]
+		public static object ZombieManualDoorCloseIgnored()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var doorCell = GenRadial.RadialCellsAround(actorCell, 8f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetEdifice(map) == null)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.OrderBy(cell => cell.DistanceToSquared(actorCell))
+				.FirstOrDefault();
+			if (doorCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					error = "No clear door cell was found for the zombie manual-close fixture."
+				};
+			}
+
+			var zombieCell = GenRadial.RadialCellsAround(doorCell, 3f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell != doorCell)
+				.OrderBy(cell => cell.DistanceToSquared(doorCell))
+				.FirstOrDefault();
+			if (zombieCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					doorCell = ZombieRuntimeActions.DescribeCell(doorCell),
+					error = "No nearby zombie cell was found for the zombie manual-close fixture."
+				};
+			}
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+			DisablePawnWork(actor);
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					error = "ZombieGenerator.SpawnZombie returned no door-close zombie."
+				};
+			}
+
+			var door = ThingMaker.MakeThing(ThingDefOf.Door, GenStuff.DefaultStuffFor(ThingDefOf.Door)) as Building_Door;
+			if (door == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					error = "Could not create test door."
+				};
+			}
+			GenSpawn.Spawn(door, doorCell, map, WipeMode.Vanish);
+			door.SetFaction(Faction.OfPlayer);
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+			door.StartManualOpenBy(actor);
+
+			var ticksUntilCloseField = typeof(Building_Door).GetField("ticksUntilClose", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+			if (ticksUntilCloseField == null)
+			{
+				return new
+				{
+					success = false,
+					door = ZombieRuntimeActions.StableThingId(door),
+					error = "Could not access Building_Door.ticksUntilClose."
+				};
+			}
+
+			const int sentinelTicksUntilClose = 12345;
+			ticksUntilCloseField.SetValue(door, sentinelTicksUntilClose);
+			door.StartManualCloseBy(zombie);
+			var ticksAfterZombie = (int)ticksUntilCloseField.GetValue(door);
+			door.StartManualCloseBy(actor);
+			var ticksAfterActor = (int)ticksUntilCloseField.GetValue(door);
+
+			return new
+			{
+				success = door.Open
+					&& ticksAfterZombie == sentinelTicksUntilClose
+					&& ticksAfterActor != sentinelTicksUntilClose,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				zombie = DescribeZombie(zombie),
+				door = new
+				{
+					id = ZombieRuntimeActions.StableThingId(door),
+					defName = door.def?.defName,
+					faction = door.Faction?.Name,
+					position = ZombieRuntimeActions.DescribeCell(door.Position),
+					door.Open
+				},
+				actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+				doorCell = ZombieRuntimeActions.DescribeCell(doorCell),
+				zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+				sentinelTicksUntilClose,
+				ticksAfterZombie,
+				ticksAfterActor
+			};
+		}
+
+		[Tool("zombieland/albino_does_not_hold_door_open", Description = "Verify an albino zombie in an open door does not reset the auto-close delay while a normal zombie still does.")]
+		public static object AlbinoDoesNotHoldDoorOpen()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var ticksUntilCloseField = typeof(Building_Door).GetField("ticksUntilClose", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+			if (ticksUntilCloseField == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not access Building_Door.ticksUntilClose."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var normalDoorCell, out var spawnError) == false)
+				return spawnError;
+
+			var albinoDoorCell = GenRadial.RadialCellsAround(normalDoorCell, 8f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetEdifice(map) == null)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.DistanceTo(normalDoorCell) >= 2f)
+				.OrderBy(cell => cell.DistanceToSquared(normalDoorCell))
+				.FirstOrDefault();
+			if (albinoDoorCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					normalDoorCell = ZombieRuntimeActions.DescribeCell(normalDoorCell),
+					error = "No second clear door cell was found for the albino door fixture."
+				};
+			}
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var actorCell = GenRadial.RadialCellsAround(normalDoorCell, 4f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.OrderByDescending(cell => cell.DistanceToSquared(normalDoorCell))
+				.FirstOrDefault();
+			if (actorCell.IsValid == false)
+				actorCell = normalDoorCell;
+			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+			DisablePawnWork(actor);
+
+			var normalDoor = ThingMaker.MakeThing(ThingDefOf.Door, GenStuff.DefaultStuffFor(ThingDefOf.Door)) as Building_Door;
+			var albinoDoor = ThingMaker.MakeThing(ThingDefOf.Door, GenStuff.DefaultStuffFor(ThingDefOf.Door)) as Building_Door;
+			if (normalDoor == null || albinoDoor == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create one or both test doors."
+				};
+			}
+			GenSpawn.Spawn(normalDoor, normalDoorCell, map, WipeMode.Vanish);
+			GenSpawn.Spawn(albinoDoor, albinoDoorCell, map, WipeMode.Vanish);
+			normalDoor.SetFaction(Faction.OfPlayer);
+			albinoDoor.SetFaction(Faction.OfPlayer);
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+			normalDoor.StartManualOpenBy(actor);
+			albinoDoor.StartManualOpenBy(actor);
+
+			var normalZombie = ZombieRuntimeActions.SpawnZombie(normalDoorCell, map, ZombieType.Normal, true);
+			var albinoZombie = ZombieRuntimeActions.SpawnZombie(albinoDoorCell, map, ZombieType.Albino, true);
+			if (normalZombie == null || albinoZombie == null)
+			{
+				return new
+				{
+					success = false,
+					normalDoorCell = ZombieRuntimeActions.DescribeCell(normalDoorCell),
+					albinoDoorCell = ZombieRuntimeActions.DescribeCell(albinoDoorCell),
+					error = "ZombieGenerator.SpawnZombie returned no normal or albino test zombie."
+				};
+			}
+
+			const int initialTicksUntilClose = 10;
+			ticksUntilCloseField.SetValue(normalDoor, initialTicksUntilClose);
+			ticksUntilCloseField.SetValue(albinoDoor, initialTicksUntilClose);
+			AdvanceGameTicks(1);
+			var normalTicksAfter = (int)ticksUntilCloseField.GetValue(normalDoor);
+			var albinoTicksAfter = (int)ticksUntilCloseField.GetValue(albinoDoor);
+
+			return new
+			{
+				success = normalDoor.Open
+					&& albinoDoor.Open
+					&& normalTicksAfter > initialTicksUntilClose
+					&& albinoTicksAfter == initialTicksUntilClose - 1,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				normalZombie = DescribeZombie(normalZombie),
+				albinoZombie = DescribeZombie(albinoZombie),
+				normalDoor = new
+				{
+					id = ZombieRuntimeActions.StableThingId(normalDoor),
+					position = ZombieRuntimeActions.DescribeCell(normalDoor.Position),
+					normalDoor.Open
+				},
+				albinoDoor = new
+				{
+					id = ZombieRuntimeActions.StableThingId(albinoDoor),
+					position = ZombieRuntimeActions.DescribeCell(albinoDoor.Position),
+					albinoDoor.Open
+				},
+				initialTicksUntilClose,
+				normalTicksAfter,
+				albinoTicksAfter
+			};
+		}
+
+	}
+}

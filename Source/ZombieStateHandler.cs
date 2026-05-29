@@ -393,7 +393,7 @@ namespace ZombieLand
 				if (eatTargetPawn != driver.lastEatTarget)
 				{
 					driver.lastEatTarget = eatTargetPawn;
-					driver.lastEatTargetPosition = eatTargetPawn.Position;
+					driver.lastEatTargetPosition = driver.eatTarget.Position;
 					zombie.rotationTracker.FaceCell(driver.lastEatTargetPosition);
 					if (zombie.Drawer.leaner is ZombieLeaner zombieLeaner)
 					{

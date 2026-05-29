@@ -11,6 +11,91 @@ namespace ZombieLand
 {
 	public sealed partial class ZombielandBridgeTools
 	{
+		static void ClearEatingGridNeighborhood(Map map, params IntVec3[] centers)
+		{
+			var grid = map.GetGrid();
+			var cells = new HashSet<IntVec3>();
+			foreach (var center in centers)
+			{
+				if (center.IsValid == false)
+					continue;
+				foreach (var cell in GenRadial.RadialCellsAround(center, 4f, true))
+				{
+					if (cell.InBounds(map) == false || cells.Add(cell) == false)
+						continue;
+					grid.SetTimestamp(cell, 0);
+					var count = grid.GetZombieCount(cell);
+					if (count != 0)
+						grid.ChangeZombieCount(cell, -count);
+				}
+			}
+		}
+
+		static object DescribeEatingGrid(Map map, IntVec3 zombieCell, IntVec3 targetCell)
+		{
+			var grid = map.GetGrid();
+			return new
+			{
+				zombieCountAtZombie = grid.GetZombieCount(zombieCell),
+				zombieCountAtTarget = grid.GetZombieCount(targetCell),
+				pheromoneAtZombie = grid.GetTimestamp(zombieCell),
+				pheromoneAtTarget = grid.GetTimestamp(targetCell)
+			};
+		}
+
+		static bool TryFindEatingFixtureCells(Map map, IntVec3 rootCell, string targetLabel, out IntVec3 zombieCell, out IntVec3 targetCell, out object error)
+		{
+			const float searchRadius = 70f;
+			const float isolationRadius = 32f;
+
+			zombieCell = IntVec3.Invalid;
+			targetCell = IntVec3.Invalid;
+			error = null;
+
+			bool HasPawnOrCorpse(IntVec3 cell)
+				=> cell.GetThingList(map).Any(thing => thing is Pawn || thing is Corpse);
+
+			bool IsIsolated(IntVec3 center)
+			{
+				foreach (var cell in GenRadial.RadialCellsAround(center, isolationRadius, true))
+				{
+					if (cell.InBounds(map) == false)
+						continue;
+					if (HasPawnOrCorpse(cell))
+						return false;
+				}
+				return true;
+			}
+
+			foreach (var candidate in GenRadial.RadialCellsAround(rootCell, searchRadius, true))
+			{
+				if (candidate.InBounds(map) == false || candidate.Standable(map) == false || candidate.Fogged(map))
+					continue;
+				if (IsIsolated(candidate) == false)
+					continue;
+				foreach (var offset in GenAdj.AdjacentCellsAround)
+				{
+					var adjacent = candidate + offset;
+					if (adjacent.InBounds(map) == false || adjacent.Standable(map) == false || adjacent.Fogged(map))
+						continue;
+					if (HasPawnOrCorpse(adjacent))
+						continue;
+					zombieCell = candidate;
+					targetCell = adjacent;
+					return true;
+				}
+			}
+
+			error = new
+			{
+				success = false,
+				error = $"No isolated adjacent zombie/{targetLabel} eating fixture cells were found near ({rootCell.x}, {rootCell.z}).",
+				searchRadius,
+				isolationRadius
+			};
+			return false;
+		}
+
 		[Tool("zombieland/zombie_eats_corpse_contract", Description = "Run a real Stumble job beside a flesh corpse and verify the source-derived eating delay removes a body part only when corpse eating is enabled.")]
 		public static object ZombieEatsCorpseContract()
 		{
@@ -29,61 +114,12 @@ namespace ZombieLand
 			var settingsSnapshot = SnapshotZombieSettings();
 			var allCasesSucceeded = true;
 
-			bool TryFindEatingFixtureCells(IntVec3 rootCell, out IntVec3 zombieCell, out IntVec3 corpseCell, out object error)
-			{
-				zombieCell = IntVec3.Invalid;
-				corpseCell = IntVec3.Invalid;
-				error = null;
-				bool HasPawnOrCorpse(IntVec3 cell)
-					=> cell.GetThingList(map).Any(thing => thing is Pawn || thing is Corpse);
-				bool NeighborhoodIsClear(IntVec3 center, IntVec3 allowedTarget)
-				{
-					foreach (var cell in GenRadial.RadialCellsAround(center, 2.1f, true))
-					{
-						if (cell.InBounds(map) == false)
-							continue;
-						if (cell == allowedTarget)
-							continue;
-						if (HasPawnOrCorpse(cell))
-							return false;
-					}
-					return true;
-				}
-				foreach (var candidate in GenRadial.RadialCellsAround(rootCell, 20f, true))
-				{
-					if (candidate.InBounds(map) == false || candidate.Standable(map) == false || candidate.Fogged(map))
-						continue;
-					if (HasPawnOrCorpse(candidate))
-						continue;
-					foreach (var offset in GenAdj.AdjacentCellsAround)
-					{
-						var adjacent = candidate + offset;
-						if (adjacent.InBounds(map) == false || adjacent.Standable(map) == false || adjacent.Fogged(map))
-							continue;
-						if (HasPawnOrCorpse(adjacent))
-							continue;
-						if (NeighborhoodIsClear(candidate, adjacent) == false)
-							continue;
-						zombieCell = candidate;
-						corpseCell = adjacent;
-						return true;
-					}
-				}
-
-				error = new
-				{
-					success = false,
-					error = $"No adjacent zombie/corpse eating fixture cells were found near ({rootCell.x}, {rootCell.z})."
-				};
-				return false;
-			}
-
 			static int MissingPartCount(Pawn pawn)
 				=> pawn?.health?.hediffSet?.hediffs?.OfType<Hediff_MissingPart>().Count() ?? 0;
 
-			object RunCase(string name, bool eatCorpses, IntVec3 caseRoot)
+			object RunCase(string name, bool eatCorpses, PawnKindDef targetKind, Faction targetFaction, IntVec3 caseRoot)
 			{
-				if (TryFindEatingFixtureCells(caseRoot, out var zombieCell, out var corpseCell, out var error) == false)
+				if (TryFindEatingFixtureCells(map, caseRoot, "corpse", out var zombieCell, out var corpseCell, out var error) == false)
 				{
 					allCasesSucceeded = false;
 					return new { name, success = false, error };
@@ -93,6 +129,7 @@ namespace ZombieLand
 				{
 					settings.zombiesEatDowned = false;
 					settings.zombiesEatCorpses = eatCorpses;
+					settings.attackMode = AttackMode.OnlyColonists;
 				});
 
 				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
@@ -114,7 +151,18 @@ namespace ZombieLand
 				zombie.state = ZombieState.Wandering;
 				zombie.raging = 0;
 
-				var corpsePawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				if (targetKind == null)
+				{
+					allCasesSucceeded = false;
+					return new
+					{
+						name,
+						success = false,
+						error = "No target pawn kind was available for corpse-eating test."
+					};
+				}
+
+				var corpsePawn = PawnGenerator.GeneratePawn(targetKind, targetFaction);
 				GenSpawn.Spawn(corpsePawn, corpseCell, map, WipeMode.Vanish);
 				DisablePawnWork(corpsePawn);
 				if (ZombieRuntimeActions.KillPawnToCorpse(corpsePawn, out var corpse, out var corpseError) == false)
@@ -129,14 +177,17 @@ namespace ZombieLand
 						error = corpseError
 					};
 				}
-				corpse.SetForbidden(false, false);
+				corpse.SetForbidden(true, false);
+				ClearEatingGridNeighborhood(map, zombieCell, corpseCell);
 
 				var missingBefore = MissingPartCount(corpse.InnerPawn);
 				var eatDelayTicks = Constants.EAT_DELAY_TICKS / 4;
 				var maxTicks = eatCorpses ? eatDelayTicks + 8 : 8;
 				var tickHit = -1;
 				var samples = new List<object>();
-				zombie.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
+				var stumbleJob = JobMaker.MakeJob(CustomDefs.Stumble);
+				stumbleJob.playerForced = true;
+				zombie.jobs.StartJob(stumbleJob, JobCondition.InterruptForced, null, true, false, null, null);
 
 				for (var tick = 1; tick <= maxTicks; tick++)
 				{
@@ -152,9 +203,13 @@ namespace ZombieLand
 							eatTarget = driver?.eatTarget == null ? null : ZombieRuntimeActions.StableThingId(driver.eatTarget),
 							eatDelayCounter = driver?.eatDelayCounter ?? -1,
 							eatDelay = driver?.eatDelay ?? -1,
+							destination = ZombieRuntimeActions.DescribeCell(driver?.destination ?? IntVec3.Invalid),
+							zombieState = zombie.state.ToString(),
 							missingParts = missingNow,
+							corpsePosition = ZombieRuntimeActions.DescribeCell(corpse.Position),
 							corpseSpawned = corpse.Spawned,
-							corpseDestroyed = corpse.Destroyed
+							corpseDestroyed = corpse.Destroyed,
+							grid = DescribeEatingGrid(map, zombieCell, corpseCell)
 						});
 					}
 
@@ -194,6 +249,10 @@ namespace ZombieLand
 						destroyed = corpse.Destroyed,
 						innerPawn = DescribePawn(corpse.InnerPawn)
 					},
+					targetKind = targetKind.defName,
+					targetHumanlike = corpse.InnerPawn.RaceProps.Humanlike,
+					targetFlesh = corpse.InnerPawn.RaceProps.IsFlesh,
+					targetAlienFlesh = AlienTools.IsFleshPawn(corpse.InnerPawn),
 					cells = new
 					{
 						zombie = ZombieRuntimeActions.DescribeCell(zombieCell),
@@ -217,13 +276,15 @@ namespace ZombieLand
 
 			try
 			{
-				var disabledCase = RunCase("corpseEatingDisabled", false, root + new IntVec3(-8, 0, 8));
-				var enabledCase = RunCase("corpseEatingEnabled", true, root + new IntVec3(8, 0, 8));
+				var animalKind = DefDatabase<PawnKindDef>.GetNamed("Muffalo", false);
+				var disabledCase = RunCase("corpseEatingDisabled", false, PawnKindDefOf.Colonist, Faction.OfPlayer, root + new IntVec3(-8, 0, 8));
+				var enabledHumanCase = RunCase("corpseEatingEnabledHuman", true, PawnKindDefOf.Colonist, Faction.OfPlayer, root + new IntVec3(8, 0, 8));
+				var enabledAnimalCase = RunCase("corpseEatingEnabledAnimal", true, animalKind, null, root + new IntVec3(8, 0, -8));
 				return new
 				{
 					success = allCasesSucceeded,
 					destroyedZombies,
-					cases = new[] { disabledCase, enabledCase }
+					cases = new[] { disabledCase, enabledHumanCase, enabledAnimalCase }
 				};
 			}
 			finally
@@ -232,7 +293,7 @@ namespace ZombieLand
 			}
 		}
 
-		[Tool("zombieland/zombie_eats_downed_pawn_contract", Description = "Run a real Stumble job beside a downed flesh human and verify the source-derived eating delay removes a body part only when downed-pawn eating is enabled.")]
+		[Tool("zombieland/zombie_eats_downed_pawn_contract", Description = "Run a real Stumble job beside downed flesh creatures and verify the source-derived eating delay removes a body part only when downed-pawn eating is enabled.")]
 		public static object ZombieEatsDownedPawnContract()
 		{
 			var map = CurrentMap;
@@ -245,69 +306,10 @@ namespace ZombieLand
 				};
 			}
 
-			var targetKind = PawnKindDefOf.Colonist;
-			if (targetKind == null)
-			{
-				return new
-				{
-					success = false,
-					error = "PawnKindDef Colonist was not found."
-				};
-			}
-
 			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
 			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
 			var settingsSnapshot = SnapshotZombieSettings();
 			var allCasesSucceeded = true;
-
-			bool TryFindEatingFixtureCells(IntVec3 rootCell, out IntVec3 zombieCell, out IntVec3 targetCell, out object error)
-			{
-				zombieCell = IntVec3.Invalid;
-				targetCell = IntVec3.Invalid;
-				error = null;
-				bool HasPawnOrCorpse(IntVec3 cell)
-					=> cell.GetThingList(map).Any(thing => thing is Pawn || thing is Corpse);
-				bool NeighborhoodIsClear(IntVec3 center, IntVec3 allowedTarget)
-				{
-					foreach (var cell in GenRadial.RadialCellsAround(center, 2.1f, true))
-					{
-						if (cell.InBounds(map) == false)
-							continue;
-						if (cell == allowedTarget)
-							continue;
-						if (HasPawnOrCorpse(cell))
-							return false;
-					}
-					return true;
-				}
-				foreach (var candidate in GenRadial.RadialCellsAround(rootCell, 20f, true))
-				{
-					if (candidate.InBounds(map) == false || candidate.Standable(map) == false || candidate.Fogged(map))
-						continue;
-					if (HasPawnOrCorpse(candidate))
-						continue;
-					foreach (var offset in GenAdj.AdjacentCellsAround)
-					{
-						var adjacent = candidate + offset;
-						if (adjacent.InBounds(map) == false || adjacent.Standable(map) == false || adjacent.Fogged(map))
-							continue;
-						if (HasPawnOrCorpse(adjacent))
-							continue;
-						if (NeighborhoodIsClear(candidate, adjacent) == false)
-							continue;
-						zombieCell = candidate;
-						targetCell = adjacent;
-						return true;
-					}
-				}
-
-				error = new
-				{
-					success = false,
-					error = $"No adjacent zombie/downed-pawn eating fixture cells were found near ({rootCell.x}, {rootCell.z})."
-				};
-				return false;
-			}
 
 			static int MissingPartCount(Pawn pawn)
 				=> pawn?.health?.hediffSet?.hediffs?.OfType<Hediff_MissingPart>().Count() ?? 0;
@@ -337,12 +339,23 @@ namespace ZombieLand
 				return true;
 			}
 
-			object RunCase(string name, bool eatDowned, IntVec3 caseRoot)
+			object RunCase(string name, bool eatDowned, PawnKindDef targetKind, IntVec3 caseRoot)
 			{
-				if (TryFindEatingFixtureCells(caseRoot, out var zombieCell, out var targetCell, out var error) == false)
+				if (TryFindEatingFixtureCells(map, caseRoot, "downed-pawn", out var zombieCell, out var targetCell, out var error) == false)
 				{
 					allCasesSucceeded = false;
 					return new { name, success = false, error };
+				}
+
+				if (targetKind == null)
+				{
+					allCasesSucceeded = false;
+					return new
+					{
+						name,
+						success = false,
+						error = "No target pawn kind was available for downed-pawn eating test."
+					};
 				}
 
 				ApplyZombieSettingsOverride(settings =>
@@ -371,8 +384,9 @@ namespace ZombieLand
 				zombie.state = ZombieState.Wandering;
 				zombie.raging = 0;
 
-				var target = PawnGenerator.GeneratePawn(targetKind, Faction.OfPlayer);
+				var target = PawnGenerator.GeneratePawn(targetKind, null);
 				GenSpawn.Spawn(target, targetCell, map, WipeMode.Vanish);
+				DisablePawnWork(target);
 				if (TryMakeDowned(target, out var downedError) == false)
 				{
 					allCasesSucceeded = false;
@@ -385,13 +399,16 @@ namespace ZombieLand
 						error = downedError
 					};
 				}
+				ClearEatingGridNeighborhood(map, zombieCell, targetCell);
 
 				var missingBefore = MissingPartCount(target);
 				var eatDelayTicks = Constants.EAT_DELAY_TICKS / 4;
 				var maxTicks = eatDowned ? eatDelayTicks + 8 : 8;
 				var tickHit = -1;
 				var samples = new List<object>();
-				zombie.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
+				var stumbleJob = JobMaker.MakeJob(CustomDefs.Stumble);
+				stumbleJob.playerForced = true;
+				zombie.jobs.StartJob(stumbleJob, JobCondition.InterruptForced, null, true, false, null, null);
 
 				for (var tick = 1; tick <= maxTicks; tick++)
 				{
@@ -407,10 +424,15 @@ namespace ZombieLand
 							eatTarget = driver?.eatTarget == null ? null : ZombieRuntimeActions.StableThingId(driver.eatTarget),
 							eatDelayCounter = driver?.eatDelayCounter ?? -1,
 							eatDelay = driver?.eatDelay ?? -1,
+							lastEatTargetPosition = ZombieRuntimeActions.DescribeCell(driver?.lastEatTargetPosition ?? IntVec3.Invalid),
+							destination = ZombieRuntimeActions.DescribeCell(driver?.destination ?? IntVec3.Invalid),
+							zombieState = zombie.state.ToString(),
 							targetDowned = target.health?.Downed ?? false,
 							targetDead = target.Dead,
 							targetSpawned = target.Spawned,
-							missingParts = missingNow
+							targetCell = ZombieRuntimeActions.DescribeCell(target.Position),
+							missingParts = missingNow,
+							grid = DescribeEatingGrid(map, zombieCell, targetCell)
 						});
 					}
 
@@ -450,6 +472,10 @@ namespace ZombieLand
 						target = ZombieRuntimeActions.DescribeCell(targetCell)
 					},
 					targetKind = targetKind.defName,
+					targetIsColonist = target.IsColonist,
+					targetHumanlike = target.RaceProps.Humanlike,
+					targetFlesh = target.RaceProps.IsFlesh,
+					targetAlienFlesh = AlienTools.IsFleshPawn(target),
 					targetDowned = target.health?.Downed ?? false,
 					targetDead = target.Dead,
 					missingBefore,
@@ -472,13 +498,15 @@ namespace ZombieLand
 
 			try
 			{
-				var disabledCase = RunCase("downedEatingDisabled", false, root + new IntVec3(-8, 0, -8));
-				var enabledCase = RunCase("downedEatingEnabled", true, root + new IntVec3(8, 0, -8));
+				var animalKind = DefDatabase<PawnKindDef>.GetNamed("Muffalo", false);
+				var disabledCase = RunCase("downedEatingDisabled", false, PawnKindDefOf.Colonist, root + new IntVec3(-8, 0, -8));
+				var enabledHumanCase = RunCase("downedEatingEnabledHuman", true, PawnKindDefOf.Colonist, root + new IntVec3(8, 0, -8));
+				var enabledAnimalCase = RunCase("downedEatingEnabledAnimal", true, animalKind, root + new IntVec3(8, 0, -16));
 				return new
 				{
 					success = allCasesSucceeded,
 					destroyedZombies,
-					cases = new[] { disabledCase, enabledCase }
+					cases = new[] { disabledCase, enabledHumanCase, enabledAnimalCase }
 				};
 			}
 			finally
