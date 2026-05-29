@@ -2578,6 +2578,136 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/chainsaw_equip_toggle", Description = "Equip a real fueled chainsaw, start it through its gizmo, tick it while equipped, then verify undrafting stops it.")]
+		public static object ChainsawEquipToggle()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+			actor.workSettings?.DisableAll();
+			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			var chainsawCell = actorCell + IntVec3.East;
+			if (chainsawCell.InBounds(map) == false || chainsawCell.Standable(map) == false)
+				chainsawCell = actorCell;
+
+			var chainsaw = ThingMaker.MakeThing(CustomDefs.Chainsaw) as Chainsaw;
+			if (chainsaw == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create Chainsaw."
+				};
+			}
+
+			GenSpawn.Spawn(chainsaw, chainsawCell, map, WipeMode.Vanish);
+			var refuelable = chainsaw.TryGetComp<CompRefuelable>();
+			var breakable = chainsaw.TryGetComp<CompBreakable>();
+			if (refuelable == null || breakable == null)
+			{
+				return new
+				{
+					success = false,
+					chainsaw = ZombieRuntimeActions.StableThingId(chainsaw),
+					error = "The spawned chainsaw did not have refuelable and breakable comps."
+				};
+			}
+
+			var fuel = ThingMaker.MakeThing(ThingDefOf.Chemfuel);
+			fuel.stackCount = Math.Min(ThingDefOf.Chemfuel.stackLimit, refuelable.GetFuelCountToFullyRefuel());
+			GenSpawn.Spawn(fuel, chainsawCell + IntVec3.South, map, WipeMode.Vanish);
+			refuelable.Refuel(new List<Thing> { fuel });
+			var fuelBeforeEquip = refuelable.Fuel;
+			chainsaw.DeSpawn();
+			actor.equipment.AddEquipment(chainsaw);
+			actor.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+			actor.drafter.Drafted = true;
+			var equipped = ReferenceEquals(actor.equipment.Primary, chainsaw);
+			var pawnSet = ReferenceEquals(chainsaw.pawn, actor);
+			var gizmos = chainsaw.GetGizmos().ToArray();
+			var toggle = gizmos.OfType<Command_Action>().FirstOrDefault(command => command.disabled == false);
+			var toggleAvailable = toggle != null;
+			toggle?.action();
+			var runningAfterToggle = chainsaw.running;
+			var fuelAfterToggle = refuelable.Fuel;
+			var samples = new List<object>();
+
+			for (var tick = 1; tick <= 20; tick++)
+			{
+				AdvanceGameTicks(1);
+				if (tick == 1 || tick == 20 || refuelable.Fuel < fuelAfterToggle)
+				{
+					samples.Add(new
+					{
+						tick,
+						chainsaw.running,
+						chainsaw.swinging,
+						chainsaw.inactiveCounter,
+						chainsaw.stalledCounter,
+						fuel = refuelable.Fuel
+					});
+				}
+			}
+
+			var fuelAfterTicks = refuelable.Fuel;
+			actor.drafter.Drafted = false;
+			var runningAfterUndraft = chainsaw.running;
+
+			return new
+			{
+				success = equipped
+					&& pawnSet
+					&& toggleAvailable
+					&& runningAfterToggle
+					&& fuelAfterTicks < fuelAfterToggle
+					&& runningAfterUndraft == false
+					&& breakable.broken == false,
+				actor = DescribePawn(actor),
+				chainsaw = new
+				{
+					id = ZombieRuntimeActions.StableThingId(chainsaw),
+					thingId = chainsaw.ThingID,
+					spawned = chainsaw.Spawned,
+					equipped,
+					pawnSet,
+					hitPoints = chainsaw.HitPoints,
+					breakable.broken,
+					chainsaw.running,
+					chainsaw.swinging,
+					chainsaw.inactiveCounter,
+					chainsaw.stalledCounter,
+					description = chainsaw.DescriptionDetailed
+				},
+				actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+				chainsawCell = ZombieRuntimeActions.DescribeCell(chainsawCell),
+				gizmoCount = gizmos.Length,
+				toggleAvailable,
+				runningAfterToggle,
+				runningAfterUndraft,
+				fuelBeforeEquip,
+				fuelAfterToggle,
+				fuelAfterTicks,
+				fuelDeltaWhileRunning = fuelAfterToggle - fuelAfterTicks,
+				hasFuelAfter = refuelable.HasFuel,
+				destroyedZombies,
+				samples
+			};
+		}
+
 		[Tool("zombieland/damage_dark_slimer", Description = "Apply real bullet damage to a dark slimer and verify the damage-worker patch creates custom TarSmoke.")]
 		public static object DamageDarkSlimer(
 			[ToolParameter(Description = "Optional dark slimer zombie id, ThingID, label, or short name. When omitted, a fresh dark slimer is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
