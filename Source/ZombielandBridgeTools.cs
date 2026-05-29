@@ -10472,6 +10472,68 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/zombie_faction_world_contract", Description = "Verify the loaded world has exactly one zombie faction and mutual hostility relations.")]
+		public static object ZombieFactionWorldContract()
+		{
+			if (Find.FactionManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No RimWorld faction manager is available."
+				};
+			}
+
+			var factions = Find.FactionManager.AllFactions.ToArray();
+			var zombieFactions = factions
+				.Where(faction => faction?.def == ZombieDefOf.Zombies)
+				.ToArray();
+			var zombieFaction = Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies);
+			var playerFaction = Faction.OfPlayer;
+			var nonZombieFactions = factions
+				.Where(faction => faction != null && faction.def != ZombieDefOf.Zombies)
+				.ToArray();
+			var relations = zombieFaction == null
+				? Array.Empty<object>()
+				: nonZombieFactions.Select(faction => new
+				{
+					faction = faction.def?.defName,
+					factionName = faction.Name,
+					factionHostileToZombies = faction.HostileTo(zombieFaction),
+					zombiesHostileToFaction = zombieFaction.HostileTo(faction),
+					factionRelationKind = faction.RelationKindWith(zombieFaction).ToString(),
+					zombieRelationKind = zombieFaction.RelationKindWith(faction).ToString()
+				}).Cast<object>().ToArray();
+			var mutualHostility = zombieFaction != null
+				&& nonZombieFactions.All(faction => faction.HostileTo(zombieFaction) && zombieFaction.HostileTo(faction));
+			var playerHostility = zombieFaction != null
+				&& playerFaction != null
+				&& playerFaction.HostileTo(zombieFaction)
+				&& zombieFaction.HostileTo(playerFaction);
+
+			return new
+			{
+				success = zombieFactions.Length == 1
+					&& zombieFaction != null
+					&& playerHostility
+					&& mutualHostility,
+				zombieFactionCount = zombieFactions.Length,
+				zombieFaction = zombieFaction == null ? null : new
+				{
+					defName = zombieFaction.def?.defName,
+					zombieFaction.Name,
+					hidden = zombieFaction.Hidden,
+					temporary = zombieFaction.temporary
+				},
+				playerFaction = playerFaction?.def?.defName,
+				playerHostility,
+				mutualHostility,
+				factionCount = factions.Length,
+				nonZombieFactionCount = nonZombieFactions.Length,
+				relations
+			};
+		}
+
 		[Tool("zombieland/zombie_active_threat_count_contract", Description = "Verify GenHostility.IsActiveThreatTo excludes all Zombieland pawn types from player hostile counts.")]
 		public static object ZombieActiveThreatCountContract()
 		{
