@@ -10996,6 +10996,7 @@ namespace ZombieLand
 
 				var ignore = Snapshot("ignore", AreaRiskMode.Ignore, colonist.Position, normal.Position, spitter.Position, blob.Position);
 				var colonistInside = Snapshot("colonistInside", AreaRiskMode.ColonistInside, colonist.Position, normal.Position, spitter.Position, blob.Position);
+				var colonistOutside = Snapshot("colonistOutside", AreaRiskMode.ColonistOutside, normal.Position, spitter.Position, blob.Position);
 				var zombieInside = Snapshot("zombieInside", AreaRiskMode.ZombieInside, colonist.Position, normal.Position, spitter.Position, blob.Position);
 				var zombieOutside = Snapshot("zombieOutside", AreaRiskMode.ZombieOutside, colonist.Position);
 
@@ -11012,6 +11013,10 @@ namespace ZombieLand
 					&& Has(colonistInside, "normal") == false
 					&& Has(colonistInside, "spitter") == false
 					&& Has(colonistInside, "blob") == false
+					&& Has(colonistOutside, "colonist")
+					&& Has(colonistOutside, "normal") == false
+					&& Has(colonistOutside, "spitter") == false
+					&& Has(colonistOutside, "blob") == false
 					&& Has(zombieInside, "colonist") == false
 					&& Has(zombieInside, "normal")
 					&& Has(zombieInside, "spitter")
@@ -11033,6 +11038,7 @@ namespace ZombieLand
 					{
 						ignore,
 						colonistInside,
+						colonistOutside,
 						zombieInside,
 						zombieOutside
 					}
