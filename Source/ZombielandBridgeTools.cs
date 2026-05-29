@@ -603,6 +603,21 @@ namespace ZombieLand
 			pawn.workSettings.DisableAll();
 		}
 
+		static object DescribeVerb(Verb verb)
+		{
+			var damageDef = verb?.GetDamageDef();
+			return new
+			{
+				isNull = verb == null,
+				label = verb?.verbProps?.label,
+				verbClass = verb?.GetType().Name,
+				isMelee = verb?.IsMeleeAttack ?? false,
+				damageDef = damageDef?.defName,
+				damageIsRanged = damageDef?.isRanged,
+				canHarmElectric = verb.CanHarmElectricZombies()
+			};
+		}
+
 		static object DescribeTankyArmor(Zombie zombie)
 		{
 			return zombie == null ? null : new
@@ -6427,6 +6442,100 @@ namespace ZombieLand
 				fireBefore,
 				fireAfter,
 				fireDelta = fireAfter - fireBefore
+			};
+		}
+
+		[Tool("zombieland/active_electrifier_attack_verb_contract", Description = "Verify ordinary ranged pawns use ranged verbs on normal zombies but not on active electrifiers.")]
+		public static object ActiveElectrifierAttackVerbContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var targetCells = GenRadial.RadialCellsAround(actorCell, 14f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.DistanceTo(actorCell) >= 7f)
+				.Where(cell => GenSight.LineOfSight(actorCell, cell, map, true))
+				.OrderBy(cell => cell.DistanceToSquared(actorCell))
+				.Take(2)
+				.ToArray();
+			if (targetCells.Length < 2)
+			{
+				return new
+				{
+					success = false,
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					error = "Fewer than two clear line-of-sight target cells were found for the active electrifier attack-verb fixture."
+				};
+			}
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+			DisablePawnWork(actor);
+			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
+				?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false);
+			var weapon = weaponDef == null ? null : ThingMaker.MakeThing(weaponDef) as ThingWithComps;
+			if (weapon == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "No test ranged weapon def was available."
+				};
+			}
+			actor.equipment.AddEquipment(weapon);
+			actor.drafter.Drafted = true;
+
+			var normal = ZombieRuntimeActions.SpawnZombie(targetCells[0], map, ZombieType.Normal, true);
+			var electrifier = ZombieRuntimeActions.SpawnZombie(targetCells[1], map, ZombieType.Electrifier, true);
+			if (normal == null || electrifier == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					normal = DescribeZombie(normal),
+					electrifier = DescribeZombie(electrifier),
+					error = "ZombieGenerator.SpawnZombie returned no normal zombie or electrifier test zombie."
+				};
+			}
+
+			electrifier.electricDisabledUntil = GenTicks.TicksGame - 1;
+			var electrifierActive = electrifier.IsActiveElectric;
+			var normalVerb = actor.TryGetAttackVerb(normal);
+			var electrifierVerb = actor.TryGetAttackVerb(electrifier);
+			var normalRanged = normalVerb != null && normalVerb.IsMeleeAttack == false;
+			var electrifierSafe = electrifierVerb == null || electrifierVerb.CanHarmElectricZombies();
+
+			return new
+			{
+				success = normalRanged && electrifierSafe && electrifierActive,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				weaponDef = weapon.def?.defName,
+				normal = DescribeZombie(normal),
+				electrifier = DescribeZombie(electrifier),
+				electrifierActive,
+				normalVerb = DescribeVerb(normalVerb),
+				electrifierVerb = DescribeVerb(electrifierVerb),
+				normalRanged,
+				electrifierSafe
 			};
 		}
 
