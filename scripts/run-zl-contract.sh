@@ -122,7 +122,7 @@ fail_if_tool_error() {
 }
 
 attention_response() {
-	call_gabs games_get_attention "$(jq -cn --arg gameId "$game_id" '{gameId:$gameId, timeout:2}')"
+	call_gabs games_get_attention "$(jq -cn --arg gameId "$game_id" '{gameId:$gameId, timeout:10}')"
 }
 
 fail_if_attention_open() {
@@ -352,7 +352,11 @@ event_cursor="$(printf '%s\n' "$before_status" | jq -r '.result.structuredConten
 log_cursor="$(printf '%s\n' "$before_status" | jq -r '.result.structuredContent.latestLogSequence // 0')"
 
 printf 'RUN %s as %s on %s/%s\n' "$tool_name" "$contract_tool" "$game_id" "$save_name"
-contract_response="$(call_game_tool "$contract_tool" '{}' "$timeout_seconds")"
+inner_timeout_ms=$((timeout_seconds * 1000 - 5000))
+if [[ "$inner_timeout_ms" -lt 1000 ]]; then
+	inner_timeout_ms=1000
+fi
+contract_response="$(call_game_tool "$contract_tool" "$(jq -cn --argjson timeoutMs "$inner_timeout_ms" '{_rimBridgeTimeoutMs:$timeoutMs}')" "$timeout_seconds")"
 print_contract_response "$contract_response"
 
 success="$(printf '%s\n' "$contract_response" | jq -r '.result.structuredContent.success // (if (.result.isError // false) then false else empty end)')"
