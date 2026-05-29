@@ -70,11 +70,13 @@
 		<description>A dark smoke making it hard to see things</description>
 		<thingClass>ZombieLand.TarSmoke</thingClass>
 		<category>Gas</category>
+		<drawerType>RealtimeOnly</drawerType>
 		<graphicData>
 			<texPath>TarSmoke</texPath>
 			<drawSize>2.5</drawSize>
 			<color>(0,0,0,0.85)</color>
 			<graphicClass>Graphic_Single</graphicClass>
+			<shaderType>Mote</shaderType>
 		</graphicData>
 		<altitudeLayer>Gas</altitudeLayer>
 		<useHitPoints>false</useHitPoints>

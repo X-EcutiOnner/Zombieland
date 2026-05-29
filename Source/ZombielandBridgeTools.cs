@@ -4138,6 +4138,142 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/zombie_ball_in_flight", Description = "Launch a real ZombieBall, advance to the source-derived halfway point, verify it is still in flight, then let it impact.")]
+		public static object ZombieBallInFlight(
+			[ToolParameter(Description = "Deterministic Rand seed for projectile launch setup.", Required = false, DefaultValue = 717171)] int seed = 717171)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var spitterCell, out var spawnError) == false)
+				return spawnError;
+
+			var existingSpitters = CurrentZombies(map).OfType<ZombieSpitter>()
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			ZombieSpitter.Spawn(map, spitterCell);
+			var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+				.FirstOrDefault(candidate => existingSpitters.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
+			if (spitter == null)
+			{
+				return new
+				{
+					success = false,
+					spitterCell = ZombieRuntimeActions.DescribeCell(spitterCell),
+					error = "Could not spawn a spitter for ZombieBall travel."
+				};
+			}
+
+			var targetCell = GenRadial.RadialCellsAround(spitter.Position, 14f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.DistanceTo(spitter.Position) >= 8f)
+				.Where(cell => map.roofGrid.RoofAt(cell)?.isThickRoof != true)
+				.OrderByDescending(cell => cell.DistanceToSquared(spitter.Position))
+				.FirstOrDefault();
+			if (targetCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					spitter = DescribeZombie(spitter),
+					error = "No clear distant ZombieBall target was found."
+				};
+			}
+
+			var zombieCountBefore = CurrentZombies(map).Length;
+			var ballsBefore = map.listerThings.AllThings.Count(thing => thing.def == CustomDefs.ZombieBall);
+			ZombieBall projectile;
+			Rand.PushState(seed);
+			try
+			{
+				projectile = GenSpawn.Spawn(CustomDefs.ZombieBall, spitter.Position, map, WipeMode.Vanish) as ZombieBall;
+				projectile?.Launch(spitter, spitter.DrawPos + new Vector3(0, 0, 0.5f), targetCell, targetCell, ProjectileHitFlags.IntendedTarget);
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			if (projectile == null)
+			{
+				return new
+				{
+					success = false,
+					spitter = DescribeZombie(spitter),
+					error = "Spawning ZombieBall did not produce a projectile."
+				};
+			}
+
+			var startCell = projectile.Position;
+			var startExact = projectile.ExactPosition;
+			var startRotation = projectile.ExactRotation.eulerAngles.y;
+			var origin = spitter.DrawPos + new Vector3(0, 0, 0.5f);
+			var destination = targetCell.ToVector3Shifted();
+			var startingTicks = Math.Max(1, Mathf.CeilToInt((origin - destination).magnitude / projectile.def.projectile.SpeedTilesPerTick));
+			var halfwayTicks = Math.Max(1, startingTicks / 2);
+			AdvanceGameTicks(halfwayTicks);
+
+			var inFlightSpawned = projectile.Spawned && projectile.Destroyed == false;
+			var halfwayCell = inFlightSpawned ? projectile.Position : IntVec3.Invalid;
+			var halfwayExact = inFlightSpawned ? projectile.ExactPosition : Vector3.zero;
+			var halfwayRotation = inFlightSpawned ? projectile.ExactRotation.eulerAngles.y : 0f;
+			var movedFromStart = inFlightSpawned && (halfwayExact - startExact).MagnitudeHorizontalSquared() > 0.01f;
+			var notYetAtTarget = inFlightSpawned && projectile.Position != targetCell;
+			var remainingTicks = startingTicks - halfwayTicks + 5;
+			AdvanceGameTicks(remainingTicks);
+
+			var ballsAfter = map.listerThings.AllThings.Count(thing => thing.def == CustomDefs.ZombieBall);
+			var zombieCountAfter = CurrentZombies(map).Length;
+			var nearestSpawnedZombies = CurrentZombies(map)
+				.Where(pawn => pawn is Zombie)
+				.OrderBy(pawn => pawn.Position.DistanceToSquared(targetCell))
+				.Take(5)
+				.Select(DescribeZombie)
+				.ToArray();
+
+			return new
+			{
+				success = inFlightSpawned
+					&& movedFromStart
+					&& notYetAtTarget
+					&& Math.Abs(Mathf.DeltaAngle(startRotation, halfwayRotation)) > 0.1f
+					&& ballsAfter <= ballsBefore
+					&& zombieCountAfter > zombieCountBefore,
+				seed,
+				spitter = DescribeZombie(spitter),
+				startCell = ZombieRuntimeActions.DescribeCell(startCell),
+				targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+				halfwayCell = halfwayCell.IsValid ? ZombieRuntimeActions.DescribeCell(halfwayCell) : null,
+				startExact = DescribeVector(startExact),
+				halfwayExact = DescribeVector(halfwayExact),
+				startRotation,
+				halfwayRotation,
+				startingTicks,
+				halfwayTicks,
+				remainingTicks,
+				speedTilesPerTick = projectile.def.projectile.SpeedTilesPerTick,
+				inFlightSpawned,
+				movedFromStart,
+				notYetAtTarget,
+				ballsBefore,
+				ballsAfter,
+				zombieCountBefore,
+				zombieCountAfter,
+				nearestSpawnedZombies
+			};
+		}
+
 		[Tool("zombieland/spawn_blob", Description = "Spawn a ZombieBlob through its runtime spawn path and verify it enters the map with the blob job.")]
 		public static object SpawnBlob(
 			[ToolParameter(Description = "Target x coordinate. Use -1 with z -1 to spawn near map center.", Required = false, DefaultValue = -1)] int x = -1,
@@ -4176,6 +4312,16 @@ namespace ZombieLand
 					Assets.initialized,
 					hasMetaballShader = Assets.MetaballShader != null
 				}
+			};
+		}
+
+		static object DescribeVector(Vector3 vector)
+		{
+			return new
+			{
+				x = vector.x,
+				y = vector.y,
+				z = vector.z
 			};
 		}
 
