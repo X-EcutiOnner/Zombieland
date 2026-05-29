@@ -3246,8 +3246,12 @@ namespace ZombieLand
 				return humanError;
 			if (TryFindClearSpawnCell(map, mapFireCell + new IntVec3(-3, 0, 0), 10f, out var zombieCell, out var zombieError) == false)
 				return zombieError;
+			if (TryFindClearSpawnCell(map, mapFireCell + new IntVec3(0, 0, 3), 10f, out var spitterCell, out var spitterError) == false)
+				return spitterError;
+			if (TryFindClearSpawnCell(map, mapFireCell + new IntVec3(0, 0, -3), 10f, out var blobCell, out var blobError) == false)
+				return blobError;
 
-			foreach (var cell in new[] { mapFireCell, humanCell, zombieCell })
+			foreach (var cell in new[] { mapFireCell, humanCell, zombieCell, spitterCell, blobCell })
 			{
 				ClearGasAt(map, cell);
 				foreach (var fire in cell.GetThingList(map).OfType<Fire>().ToArray())
@@ -3267,17 +3271,23 @@ namespace ZombieLand
 			}
 			mapFire.fireSize = 1.25f;
 
-			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
-			DisablePawnWork(human);
+			var human = SpawnFireFixturePawn(map, humanCell, "human");
 			FireUtility.TryAttachFire(human, 2f, null);
 			var humanFire = human.GetAttachment(ThingDefOf.Fire) as Fire;
 
-			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			var zombie = SpawnFireFixturePawn(map, zombieCell, "normal");
 			FireUtility.TryAttachFire(zombie, 3f, null);
 			var zombieFire = zombie?.GetAttachment(ThingDefOf.Fire) as Fire;
 
-			if (humanFire == null || zombieFire == null)
+			var spitter = SpawnFireFixturePawn(map, spitterCell, "spitter");
+			FireUtility.TryAttachFire(spitter, 1.5f, null);
+			var spitterFire = spitter?.GetAttachment(ThingDefOf.Fire) as Fire;
+
+			var blob = SpawnFireFixturePawn(map, blobCell, "blob");
+			FireUtility.TryAttachFire(blob, 1.75f, null);
+			var blobFire = blob?.GetAttachment(ThingDefOf.Fire) as Fire;
+
+			if (humanFire == null || zombieFire == null || spitterFire == null || blobFire == null)
 			{
 				return new
 				{
@@ -3285,16 +3295,23 @@ namespace ZombieLand
 					mapFire = ZombieRuntimeActions.StableThingId(mapFire),
 					human = DescribePawn(human),
 					zombie = DescribeZombie(zombie),
+					spitter = DescribeZombie(spitter),
+					blob = DescribeZombie(blob),
 					humanFire = ZombieRuntimeActions.StableThingId(humanFire),
 					zombieFire = ZombieRuntimeActions.StableThingId(zombieFire),
-					error = "Could not attach both human and zombie fires."
+					spitterFire = ZombieRuntimeActions.StableThingId(spitterFire),
+					blobFire = ZombieRuntimeActions.StableThingId(blobFire),
+					error = "Could not attach human, normal zombie, spitter, and blob fires."
 				};
 			}
 
 			fireWatcherUpdateObservationsMethod.Invoke(map.fireWatcher, null);
 			var fireDangerAfter = map.fireWatcher.FireDanger;
 			var expectedExcludingZombie = 0.5f + mapFire.fireSize + 0.5f + humanFire.fireSize;
-			var expectedIncludingZombie = expectedExcludingZombie + 0.5f + zombieFire.fireSize;
+			var expectedIncludingZombie = expectedExcludingZombie
+				+ 0.5f + zombieFire.fireSize
+				+ 0.5f + spitterFire.fireSize
+				+ 0.5f + blobFire.fireSize;
 			var tolerance = 0.001f;
 
 			return new
@@ -3304,16 +3321,26 @@ namespace ZombieLand
 				mapFireCell = ZombieRuntimeActions.DescribeCell(mapFireCell),
 				humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
 				zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+				spitterCell = ZombieRuntimeActions.DescribeCell(spitterCell),
+				blobCell = ZombieRuntimeActions.DescribeCell(blobCell),
 				mapFire = ZombieRuntimeActions.StableThingId(mapFire),
 				human = DescribePawn(human),
 				zombie = DescribeZombie(zombie),
+				spitter = DescribeZombie(spitter),
+				blob = DescribeZombie(blob),
 				humanFire = ZombieRuntimeActions.StableThingId(humanFire),
 				zombieFire = ZombieRuntimeActions.StableThingId(zombieFire),
+				spitterFire = ZombieRuntimeActions.StableThingId(spitterFire),
+				blobFire = ZombieRuntimeActions.StableThingId(blobFire),
 				humanFireParent = ZombieRuntimeActions.StableThingId(humanFire.parent),
 				zombieFireParent = ZombieRuntimeActions.StableThingId(zombieFire.parent),
+				spitterFireParent = ZombieRuntimeActions.StableThingId(spitterFire.parent),
+				blobFireParent = ZombieRuntimeActions.StableThingId(blobFire.parent),
 				mapFireSize = mapFire.fireSize,
 				humanFireSize = humanFire.fireSize,
 				zombieFireSize = zombieFire.fireSize,
+				spitterFireSize = spitterFire.fireSize,
+				blobFireSize = blobFire.fireSize,
 				fireDangerAfter,
 				expectedExcludingZombie,
 				expectedIncludingZombie,
