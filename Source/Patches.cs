@@ -74,6 +74,26 @@ namespace ZombieLand
 			Log.Error(error);
 		}
 
+		static void SpawnTarSmoke(IntVec3 center, Map map, float radius, float difficulty)
+		{
+			if (map == null)
+				return;
+
+			var alpha = GenMath.LerpDoubleClamped(0, 5, 0.85f, 1f, difficulty);
+			var min = GenMath.LerpDoubleClamped(0, 5, 2, 60, difficulty);
+			var max = GenMath.LerpDoubleClamped(0, 5, min, 90, difficulty);
+			CustomDefs.TarSmoke.graphicData.color = new Color(0, 0, 0, alpha);
+			CustomDefs.TarSmoke.gas.expireSeconds = new FloatRange(min, max);
+			foreach (var cell in GenRadial.RadialCellsAround(center, radius, true))
+			{
+				if (cell.InBounds(map) == false || cell.GetGas(map) != null)
+					continue;
+
+				GenSpawn.Spawn(ThingMaker.MakeThing(CustomDefs.TarSmoke), cell, map);
+			}
+			CustomDefs.TarSmokePop.PlayOneShot(SoundInfo.InMap(new TargetInfo(center, map)));
+		}
+
 		// settings backwards compatibility
 		//
 		[HarmonyPatch(typeof(ParseHelper))]
@@ -4176,24 +4196,7 @@ namespace ZombieLand
 					if (map != null && pos.GetGas(map) == null)
 					{
 						var difficulty = Tools.Difficulty();
-						var alpha = GenMath.LerpDoubleClamped(0, 5, 0.85f, 1f, difficulty);
-						var min = GenMath.LerpDoubleClamped(0, 5, 2, 60, difficulty);
-						var max = GenMath.LerpDoubleClamped(0, 5, min, 90, difficulty);
-						CustomDefs.TarSmoke.graphicData.color = new Color(0, 0, 0, alpha);
-						CustomDefs.TarSmoke.gas.expireSeconds = new FloatRange(min, max);
-						GenExplosion.DoExplosion(
-							center: pos,
-							map: map,
-							radius: 1 + difficulty,
-							damType: DamageDefOf.Smoke,
-							instigator: null,
-							damAmount: (int)(50 * difficulty),
-							armorPenetration: -1f,
-							explosionSound: CustomDefs.TarSmokePop,
-							postExplosionSpawnThingDef: CustomDefs.TarSmoke,
-							postExplosionSpawnChance: 1f,
-							postExplosionSpawnThingCount: 1,
-							doVisualEffects: false);
+						SpawnTarSmoke(pos, map, 1 + difficulty, difficulty);
 					}
 				}
 

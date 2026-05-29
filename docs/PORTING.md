@@ -34,6 +34,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 - GABS process matching can be confused by a simultaneously running older RimWorld process because the executable name is still `RimWorld by Ludeon Studios`. Confirm the active 1.6 GABS connection before runtime tests.
 - `Source/ZombielandBridgeTools.cs` exposes repeatable Zombieland bridge actions. Prefer `zombieland/spawn_reference_lineup` over repeated manual debug-action/UI spawning for the eight-type visual fixture. Debug actions and bridge endpoints share `Source/ZombieRuntimeActions.cs` for zombie spawn/remove, bite/infection, and direct pawn conversion operations; keep future test-only runtime mutations there instead of duplicating menu and bridge logic.
 - The in-game bottom-right Menu tab uses `ListableOption_Zombieland` for the Zombieland settings option. It draws `ZombieButtonBackground` directly at the option level; avoid reviving the old global `Widgets.ButtonTextWorker` texture transpiler.
+- Dark slimer damage must spawn Zombieland `TarSmoke` directly instead of routing through `GenExplosion` with `DamageDefOf.Smoke`; the explosion path can layer vanilla white smoke puffs over the black tar gas in RimWorld 1.6.
 
 ## Known Risks
 
