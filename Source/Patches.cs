@@ -4867,9 +4867,9 @@ namespace ZombieLand
 					__result = true;
 					return false;
 				}
-				if (t is ZombieCorpse corpse && corpse.InnerPawn is Zombie zombie2 && zombie2.wasMapPawnBefore)
+				if (t is ZombieCorpse corpse)
 				{
-					__result = true;
+					__result = corpse.InnerPawn is Zombie zombie2 && zombie2.wasMapPawnBefore;
 					return false;
 				}
 				return true;

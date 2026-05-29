@@ -49,6 +49,35 @@ namespace ZombieLand
 
 		static Map CurrentMap => Find.CurrentMap;
 
+		static object DescribeColor(Color color)
+		{
+			return new
+			{
+				r = color.r,
+				g = color.g,
+				b = color.b,
+				a = color.a
+			};
+		}
+
+		static bool ColorsApproximatelyEqual(Color a, Color b, float tolerance = 0.01f)
+		{
+			return Mathf.Abs(a.r - b.r) <= tolerance
+				&& Mathf.Abs(a.g - b.g) <= tolerance
+				&& Mathf.Abs(a.b - b.b) <= tolerance
+				&& Mathf.Abs(a.a - b.a) <= tolerance;
+		}
+
+		static bool SelectsThroughSelector(object obj)
+		{
+			var selector = Find.Selector;
+			selector.ClearSelection();
+			selector.Select(obj, false, false);
+			var selected = selector.IsSelected(obj);
+			selector.ClearSelection();
+			return selected;
+		}
+
 		static object DescribeZombie(Pawn pawn)
 		{
 			var zombie = pawn as Zombie;
@@ -70,6 +99,7 @@ namespace ZombieLand
 				state = zombie?.state.ToString() ?? spitter?.state.ToString(),
 				raging = zombie?.raging ?? 0,
 				kind = DescribeZombieKind(zombie, blob, spitter),
+				wasMapPawnBefore = zombie?.wasMapPawnBefore ?? false,
 				isSuicideBomber = zombie?.IsSuicideBomber ?? false,
 				isToxicSplasher = zombie?.isToxicSplasher ?? false,
 				isTanky = zombie?.IsTanky ?? false,
@@ -1234,6 +1264,134 @@ namespace ZombieLand
 				afterCount = after.Length,
 				newZombieCount = newZombies.Length,
 				newZombies
+			};
+		}
+
+		[Tool("zombieland/zombie_selection_respects_former_colonist", Description = "Verify map-click and selector behavior distinguishes ordinary zombies from former-colonist zombies and corpses.")]
+		public static object ZombieSelectionRespectsFormerColonist()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			Find.Selector.ClearSelection();
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var destroyedZombieCorpses = 0;
+			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+			{
+				corpse.Destroy();
+				destroyedZombieCorpses++;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var normalCell, out var normalSpawnError) == false)
+				return normalSpawnError;
+			if (TryFindClearSpawnCell(map, normalCell + new IntVec3(4, 0, 0), 10f, out var formerPawnCell, out var formerSpawnError) == false)
+				return formerSpawnError;
+
+			var normalZombie = ZombieRuntimeActions.SpawnZombie(normalCell, map, ZombieType.Normal, true);
+			if (normalZombie == null)
+			{
+				return new
+				{
+					success = false,
+					normalCell = ZombieRuntimeActions.DescribeCell(normalCell),
+					error = "ZombieGenerator.SpawnZombie returned no ordinary zombie."
+				};
+			}
+
+			var beforeConversionIds = new HashSet<string>(CurrentZombies(map).Select(ZombieRuntimeActions.StableThingId));
+			var formerPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(formerPawn, formerPawnCell, map, Rot4.South);
+			DisablePawnWork(formerPawn);
+			var formerPawnBeforeConversion = DescribePawn(formerPawn);
+			ZombieRuntimeActions.ConvertPawnToZombie(formerPawn, map, true);
+			var formerZombie = CurrentZombies(map)
+				.OfType<Zombie>()
+				.Where(zombie => beforeConversionIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+				.OrderBy(zombie => zombie.Position.DistanceToSquared(formerPawnCell))
+				.FirstOrDefault();
+			if (formerZombie == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					formerPawn = formerPawnBeforeConversion,
+					formerPawnCell = ZombieRuntimeActions.DescribeCell(formerPawnCell),
+					error = "Converting the pawn did not produce a new zombie."
+				};
+			}
+
+			var expectedFormerColor = new Color(0.7f, 1f, 0.7f);
+			var normalLiveSelectableByMapClick = ThingSelectionUtility.SelectableByMapClick(normalZombie);
+			var formerLiveSelectableByMapClick = ThingSelectionUtility.SelectableByMapClick(formerZombie);
+			var normalLiveLabelColor = PawnNameColorUtility.PawnNameColorOf(normalZombie);
+			var formerLiveLabelColor = PawnNameColorUtility.PawnNameColorOf(formerZombie);
+			var normalLiveHasFormerColor = ColorsApproximatelyEqual(normalLiveLabelColor, expectedFormerColor);
+			var formerLiveHasFormerColor = ColorsApproximatelyEqual(formerLiveLabelColor, expectedFormerColor);
+
+			normalZombie.Kill(null);
+			formerZombie.Kill(null);
+			var normalCorpse = normalZombie.Corpse as ZombieCorpse
+				?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(normalCell)).FirstOrDefault();
+			var formerCorpse = formerZombie.Corpse as ZombieCorpse
+				?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(formerPawnCell)).FirstOrDefault();
+			if (normalCorpse == null || formerCorpse == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					normalZombie = DescribeZombie(normalZombie),
+					formerZombie = DescribeZombie(formerZombie),
+					normalCorpse = DescribeCorpse(normalCorpse),
+					formerCorpse = DescribeCorpse(formerCorpse),
+					error = "Killing the test zombies did not leave both zombie corpses."
+				};
+			}
+
+			var normalCorpseSelectableByMapClick = ThingSelectionUtility.SelectableByMapClick(normalCorpse);
+			var formerCorpseSelectableByMapClick = ThingSelectionUtility.SelectableByMapClick(formerCorpse);
+			var normalCorpseSelectedBySelector = SelectsThroughSelector(normalCorpse);
+			var formerCorpseSelectedBySelector = SelectsThroughSelector(formerCorpse);
+			Find.Selector.ClearSelection();
+
+			return new
+			{
+				success = normalLiveSelectableByMapClick == false
+					&& formerLiveSelectableByMapClick
+					&& normalCorpseSelectableByMapClick == false
+					&& formerCorpseSelectableByMapClick
+					&& normalCorpseSelectedBySelector == false
+					&& formerCorpseSelectedBySelector
+					&& normalLiveHasFormerColor == false
+					&& formerLiveHasFormerColor,
+				destroyedZombies,
+				destroyedZombieCorpses,
+				normalZombie = DescribeZombie(normalZombie),
+				formerZombie = DescribeZombie(formerZombie),
+				formerPawnBeforeConversion,
+				normalCorpse = DescribeCorpse(normalCorpse),
+				formerCorpse = DescribeCorpse(formerCorpse),
+				normalLiveSelectableByMapClick,
+				formerLiveSelectableByMapClick,
+				normalCorpseSelectableByMapClick,
+				formerCorpseSelectableByMapClick,
+				normalCorpseSelectedBySelector,
+				formerCorpseSelectedBySelector,
+				normalLiveLabelColor = DescribeColor(normalLiveLabelColor),
+				formerLiveLabelColor = DescribeColor(formerLiveLabelColor),
+				normalLiveHasFormerColor,
+				formerLiveHasFormerColor
 			};
 		}
 
