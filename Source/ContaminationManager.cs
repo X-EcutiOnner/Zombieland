@@ -89,7 +89,24 @@ namespace ZombieLand
 
 		public void Set(Thing thing, float contamination)
 		{
+			if (thing is Mineable mineable)
+			{
+				var map = mineable.Map;
+				if (map != null)
+					grounds[map.Index][mineable.Position] = Mathf.Clamp01(contamination);
+				return;
+			}
+
+			if (contamination <= 0)
+			{
+				Remove(thing);
+				return;
+			}
+
+			contamination = Mathf.Clamp01(contamination);
 			contaminations[thing.thingIDNumber] = contamination;
+			UpdatePawnHediff(thing, contamination);
+			currentMapDirty = true;
 			if (LOGGING)
 			{
 #pragma warning disable CS0162 // Unreachable code detected
@@ -258,12 +275,20 @@ namespace ZombieLand
 				}
 			}
 
-			contaminations.Remove(thing.thingIDNumber);
+			if (contaminations.Remove(thing.thingIDNumber))
+			{
+				UpdatePawnHediff(thing, 0);
+				currentMapDirty = true;
+			}
 			if (thing is IThingHolder holder)
 			{
 				var innerThings = ThingOwnerUtility.GetAllThingsRecursively(holder, false);
 				foreach (var innerThing in innerThings)
-					contaminations.Remove(innerThing.thingIDNumber);
+					if (contaminations.Remove(innerThing.thingIDNumber))
+					{
+						UpdatePawnHediff(innerThing, 0);
+						currentMapDirty = true;
+					}
 			}
 		}
 

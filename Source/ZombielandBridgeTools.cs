@@ -80,6 +80,17 @@ namespace ZombieLand
 			public int combatTextDelta;
 		}
 
+		sealed class ContaminationSnapshot
+		{
+			public float stored;
+			public bool hasNeed;
+			public float? needLevel;
+			public bool hasHediff;
+			public float? hediffSeverity;
+			public float effectiveness;
+			public int hediffCount;
+		}
+
 		sealed class FireDamageSample
 		{
 			public string kind;
@@ -758,6 +769,25 @@ namespace ZombieLand
 				innerPawnId = ZombieRuntimeActions.StableThingId(innerPawn),
 				innerPawnThingId = innerPawn?.ThingID,
 				innerPawnLabel = innerPawn?.LabelCap
+			};
+		}
+
+		static ContaminationSnapshot DescribeContamination(Pawn pawn)
+		{
+			var need = pawn?.needs?.TryGetNeed<ContaminationNeed>();
+			var hediffs = pawn?.health?.hediffSet?.hediffs?
+				.OfType<Hediff_Contamination>()
+				.ToArray() ?? Array.Empty<Hediff_Contamination>();
+			var hediff = hediffs.FirstOrDefault();
+			return new ContaminationSnapshot
+			{
+				stored = pawn?.GetContamination() ?? 0f,
+				hasNeed = need != null,
+				needLevel = need?.CurLevel,
+				hasHediff = hediff != null,
+				hediffSeverity = hediff?.Severity,
+				effectiveness = pawn?.GetEffectiveness() ?? 0f,
+				hediffCount = hediffs.Length
 			};
 		}
 
@@ -2641,6 +2671,154 @@ namespace ZombieLand
 				zombieImmunityRecordCountAfter,
 				humanImmunityAdvanced,
 				zombieImmunitySuppressed
+			};
+		}
+
+		[Tool("zombieland/contamination_core_contract", Description = "Verify core contamination storage, pawn need/hediff sync, clearing, clamping, and stack split propagation.")]
+		public static object ContaminationCoreContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanSpawnError) == false)
+				return humanSpawnError;
+			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 0), 8f, out var itemCell, out var itemSpawnError) == false)
+				return itemSpawnError;
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+			human.needs?.AddOrRemoveNeedsAsAppropriate();
+			human.ClearContamination();
+			var initial = DescribeContamination(human);
+
+			const float addValue = 0.4f;
+			human.AddContamination(addValue);
+			var afterAdd = DescribeContamination(human);
+
+			const float setValue = 0.25f;
+			human.SetContamination(setValue);
+			var afterSet = DescribeContamination(human);
+
+			human.ClearContamination();
+			var afterClear = DescribeContamination(human);
+
+			const float highNonLethalValue = 0.75f;
+			human.AddContamination(highNonLethalValue);
+			var afterHighNonLethalAdd = DescribeContamination(human);
+			human.ClearContamination();
+			var afterSecondClear = DescribeContamination(human);
+
+			var clampedComponent = ThingMaker.MakeThing(ThingDefOf.ComponentIndustrial);
+			const float clampInput = 1.5f;
+			clampedComponent.AddContamination(clampInput, (sbyte)map.Index);
+			var clampedComponentContamination = clampedComponent.GetContamination();
+
+			var component = ThingMaker.MakeThing(ThingDefOf.ComponentIndustrial);
+			component.stackCount = 10;
+			GenSpawn.Spawn(component, itemCell, map, WipeMode.Vanish);
+			const float stackContamination = 0.6f;
+			component.AddContamination(stackContamination);
+			var componentBeforeSplitCount = component.stackCount;
+			var componentBeforeSplitContamination = component.GetContamination();
+			var split = component.SplitOff(4);
+			var componentAfterSplitCount = component.stackCount;
+			var splitCount = split?.stackCount ?? 0;
+			var componentAfterSplitContamination = component.GetContamination();
+			var splitContamination = split?.GetContamination() ?? 0f;
+
+			static bool Close(float? value, float expected) => value.HasValue && Mathf.Abs(value.Value - expected) < 0.0001f;
+			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+			var expectedEffectivenessAfterAdd = Mathf.Max(0.05f, 1f - addValue * ZombieSettings.Values.contamination.contaminationEffectivenessPercentage);
+			var expectedEffectivenessAfterSet = Mathf.Max(0.05f, 1f - setValue * ZombieSettings.Values.contamination.contaminationEffectivenessPercentage);
+
+			var initialClean = CloseFloat(initial.stored, 0f) && initial.hasHediff == false;
+			var addSynced = CloseFloat(afterAdd.stored, addValue)
+				&& afterAdd.hasNeed
+				&& Close(afterAdd.needLevel, addValue)
+				&& afterAdd.hasHediff
+				&& Close(afterAdd.hediffSeverity, addValue)
+				&& CloseFloat(afterAdd.effectiveness, expectedEffectivenessAfterAdd);
+			var setSynced = CloseFloat(afterSet.stored, setValue)
+				&& Close(afterSet.needLevel, setValue)
+				&& afterSet.hasHediff
+				&& Close(afterSet.hediffSeverity, setValue)
+				&& CloseFloat(afterSet.effectiveness, expectedEffectivenessAfterSet);
+			var clearSynced = CloseFloat(afterClear.stored, 0f)
+				&& Close(afterClear.needLevel, 0f)
+				&& afterClear.hasHediff == false;
+			var highNonLethalAddSynced = CloseFloat(afterHighNonLethalAdd.stored, highNonLethalValue)
+				&& Close(afterHighNonLethalAdd.needLevel, highNonLethalValue)
+				&& afterHighNonLethalAdd.hasHediff
+				&& Close(afterHighNonLethalAdd.hediffSeverity, highNonLethalValue);
+			var clampSynced = CloseFloat(clampedComponentContamination, 1f);
+			var secondClearSynced = CloseFloat(afterSecondClear.stored, 0f)
+				&& Close(afterSecondClear.needLevel, 0f)
+				&& afterSecondClear.hasHediff == false
+				&& human.Dead == false;
+			var splitPropagated = componentBeforeSplitCount == 10
+				&& componentAfterSplitCount == 6
+				&& splitCount == 4
+				&& CloseFloat(componentBeforeSplitContamination, stackContamination)
+				&& CloseFloat(componentAfterSplitContamination, stackContamination)
+				&& CloseFloat(splitContamination, stackContamination);
+
+			return new
+			{
+				success = initialClean
+					&& addSynced
+					&& setSynced
+					&& clearSynced
+					&& highNonLethalAddSynced
+					&& clampSynced
+					&& secondClearSynced
+					&& splitPropagated,
+				human = DescribePawn(human),
+				humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
+				itemCell = ZombieRuntimeActions.DescribeCell(itemCell),
+				initial,
+				afterAdd,
+				afterSet,
+				afterClear,
+				afterHighNonLethalAdd,
+				afterSecondClear,
+				expectedEffectivenessAfterAdd,
+				expectedEffectivenessAfterSet,
+				clampedComponent = ZombieRuntimeActions.StableThingId(clampedComponent),
+				clampedComponentContamination,
+				component = ZombieRuntimeActions.StableThingId(component),
+				split = ZombieRuntimeActions.StableThingId(split),
+				componentBeforeSplitCount,
+				componentAfterSplitCount,
+				splitCount,
+				componentBeforeSplitContamination,
+				componentAfterSplitContamination,
+				splitContamination,
+				initialClean,
+				addSynced,
+				setSynced,
+				clearSynced,
+				highNonLethalAddSynced,
+				clampSynced,
+				secondClearSynced,
+				splitPropagated
 			};
 		}
 
