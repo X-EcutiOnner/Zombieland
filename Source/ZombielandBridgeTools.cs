@@ -312,6 +312,7 @@ namespace ZombieLand
 
 		static readonly MethodInfo pathFollowerCostToMoveIntoCellMethod = typeof(Pawn_PathFollower).GetMethod("CostToMoveIntoCell", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Pawn), typeof(IntVec3) }, null);
 		static readonly MethodInfo fireDoFireDamageMethod = typeof(Fire).GetMethod("DoFireDamage", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Thing) }, null);
+		static readonly MethodInfo fireDoComplexCalcsMethod = typeof(Fire).GetMethod("DoComplexCalcs", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		static readonly MethodInfo fireVulnerableToRainMethod = typeof(Fire).GetMethod("VulnerableToRain", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		static readonly MethodInfo fireWatcherUpdateObservationsMethod = typeof(FireWatcher).GetMethod("UpdateObservations", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		static readonly MethodInfo meleeDamageInfosToApplyMethod = typeof(Verb_MeleeAttackDamage).GetMethod("DamageInfosToApply", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -350,6 +351,24 @@ namespace ZombieLand
 			}
 
 			fireDoFireDamageMethod.Invoke(fire, new object[] { target });
+			return true;
+		}
+
+		static bool TryDoFireComplexCalcs(Fire fire, out string error)
+		{
+			error = null;
+			if (fireDoComplexCalcsMethod == null)
+			{
+				error = "Could not find Fire.DoComplexCalcs().";
+				return false;
+			}
+			if (fire == null)
+			{
+				error = "Fire is required.";
+				return false;
+			}
+
+			fireDoComplexCalcsMethod.Invoke(fire, null);
 			return true;
 		}
 
@@ -2819,6 +2838,130 @@ namespace ZombieLand
 				clampSynced,
 				secondClearSynced,
 				splitPropagated
+			};
+		}
+
+		[Tool("zombieland/contamination_cell_fire_contract", Description = "Verify contaminated ground affects pawns on cell entry and real Fire.DoComplexCalcs burns contamination down.")]
+		public static object ContaminationCellFireContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var entryCell, out var entrySpawnError) == false)
+				return entrySpawnError;
+			if (TryFindClearSpawnCell(map, entryCell + new IntVec3(4, 0, 0), 10f, out var fireCell, out var fireSpawnError) == false)
+				return fireSpawnError;
+
+			foreach (var existingFire in fireCell.GetThingList(map).OfType<Fire>().ToArray())
+				existingFire.Destroy();
+			map.SetContamination(entryCell, 0f);
+			map.SetContamination(fireCell, 0f);
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, entryCell, map, Rot4.South);
+			DisablePawnWork(human);
+			human.needs?.AddOrRemoveNeedsAsAppropriate();
+			human.ClearContamination();
+
+			const float entryCellContamination = 0.8f;
+			map.SetContamination(entryCell, entryCellContamination);
+			var humanBeforeEntry = DescribeContamination(human);
+			var entryGroundBefore = map.GetContamination(entryCell);
+			human.filth.Notify_EnteredNewCell();
+			var humanAfterEntry = DescribeContamination(human);
+			var entryGroundAfter = map.GetContamination(entryCell);
+			var expectedEntryGain = Mathf.Max(0f, entryGroundBefore * ZombieSettings.Values.contamination.cellFactor - humanBeforeEntry.stored)
+				* ZombieSettings.Values.contamination.enterCellAdd;
+
+			const float fireContaminationBefore = 0.4f;
+			map.SetContamination(fireCell, fireContaminationBefore);
+			var component = ThingMaker.MakeThing(ThingDefOf.ComponentIndustrial);
+			GenSpawn.Spawn(component, fireCell, map, WipeMode.Vanish);
+			component.SetContamination(fireContaminationBefore);
+			var componentBeforeFire = component.GetContamination();
+			var groundBeforeFire = map.GetContamination(fireCell);
+
+			FireUtility.TryStartFireIn(fireCell, map, 0.5f, null);
+			var fire = fireCell.GetThingList(map).OfType<Fire>().FirstOrDefault();
+			if (fire == null)
+			{
+				return new
+				{
+					success = false,
+					entryCell = ZombieRuntimeActions.DescribeCell(entryCell),
+					fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
+					error = "Could not start a real fire for the contamination cleanup fixture."
+				};
+			}
+			if (TryDoFireComplexCalcs(fire, out var fireError) == false)
+			{
+				return new
+				{
+					success = false,
+					entryCell = ZombieRuntimeActions.DescribeCell(entryCell),
+					fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
+					fire = ZombieRuntimeActions.StableThingId(fire),
+					error = fireError
+				};
+			}
+
+			var componentAfterFire = component.GetContamination();
+			var groundAfterFire = map.GetContamination(fireCell);
+			var expectedFireReduction = ZombieSettings.Values.contamination.fireReduction;
+			var expectedComponentAfterFire = Mathf.Max(0f, componentBeforeFire - expectedFireReduction);
+			var expectedGroundAfterFire = Mathf.Max(0f, groundBeforeFire - expectedFireReduction);
+
+			static bool Close(float? value, float expected) => value.HasValue && Mathf.Abs(value.Value - expected) < 0.0001f;
+			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+			var entryApplied = CloseFloat(humanBeforeEntry.stored, 0f)
+				&& CloseFloat(entryGroundBefore, entryCellContamination)
+				&& CloseFloat(entryGroundAfter, entryGroundBefore)
+				&& CloseFloat(humanAfterEntry.stored, expectedEntryGain)
+				&& Close(humanAfterEntry.needLevel, expectedEntryGain)
+				&& humanAfterEntry.hasHediff
+				&& Close(humanAfterEntry.hediffSeverity, expectedEntryGain);
+			var fireReduced = CloseFloat(componentAfterFire, expectedComponentAfterFire)
+				&& CloseFloat(groundAfterFire, expectedGroundAfterFire);
+
+			return new
+			{
+				success = entryApplied && fireReduced,
+				human = DescribePawn(human),
+				entryCell = ZombieRuntimeActions.DescribeCell(entryCell),
+				fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
+				fire = ZombieRuntimeActions.StableThingId(fire),
+				component = ZombieRuntimeActions.StableThingId(component),
+				humanBeforeEntry,
+				humanAfterEntry,
+				entryGroundBefore,
+				entryGroundAfter,
+				expectedEntryGain,
+				fireReduction = expectedFireReduction,
+				componentBeforeFire,
+				componentAfterFire,
+				expectedComponentAfterFire,
+				groundBeforeFire,
+				groundAfterFire,
+				expectedGroundAfterFire,
+				entryApplied,
+				fireReduced
 			};
 		}
 
