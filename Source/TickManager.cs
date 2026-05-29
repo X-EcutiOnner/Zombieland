@@ -360,20 +360,31 @@ namespace ZombieLand
 		{
 			PrepareThreadedTicking(this);
 			var threatLevel = ZombieWeather.GetThreatLevel(map);
-			for (var i = 0; i < currentZombiesTicking.Length; i++)
+			var ticking = currentZombiesTicking;
+			for (var i = 0; i < ticking.Length; i++)
 			{
-				currentZombiesTicking[i].CustomTick(threatLevel);
+				ticking[i].CustomTick(threatLevel);
 				ZombieTicker.zombiesTicked++;
 			}
+		}
+
+		public int LiveZombieCount()
+		{
+			var count = 0;
+			foreach (var zombie in allZombiesCached)
+				if (zombie != null && zombie.Spawned && zombie.Dead == false)
+					count++;
+			return count;
 		}
 
 		public static void PrepareThreadedTicking(object input)
 		{
 			var tickManager = (TickManager)input;
 			var f = ZombieTicker.PercentTicking;
-			var zombies = tickManager.allZombiesCached
-				.Where(zombie => zombie.Spawned && zombie.Dead == false)
-				.ToList();
+			var zombies = new List<Zombie>(tickManager.allZombiesCached.Count);
+			foreach (var zombie in tickManager.allZombiesCached)
+				if (zombie != null && zombie.Spawned && zombie.Dead == false)
+					zombies.Add(zombie);
 			if (f >= 1f)
 				tickManager.currentZombiesTicking = zombies.ToArray();
 			else

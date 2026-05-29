@@ -439,7 +439,8 @@ namespace ZombieLand
 					return;
 
 				ZombieTicker.zombiesTicked = 0;
-				ZombieTicker.managers = Find.Maps.Select(map => map.GetComponent<TickManager>()).OfType<TickManager>();
+				var managers = Find.Maps.Select(map => map.GetComponent<TickManager>()).OfType<TickManager>().ToArray();
+				ZombieTicker.managers = managers;
 
 				var curTimePerTick = __instance.CurTimePerTick;
 				var realTimeToTickThrough = __instance.realTimeToTickThrough;
@@ -452,7 +453,11 @@ namespace ZombieLand
 				var n2 = __instance.TickRateMultiplier * 2f;
 				var loopEstimate = Mathf.FloorToInt(Mathf.Min(n1, n2));
 
-				ZombieTicker.maxTicking = Mathf.FloorToInt(loopEstimate * ZombieTicker.managers.Sum(tm => tm.allZombiesCached.Count(zombie => zombie.Spawned && zombie.Dead == false)));
+				var liveZombieCount = 0;
+				for (var i = 0; i < managers.Length; i++)
+					liveZombieCount += managers[i].LiveZombieCount();
+
+				ZombieTicker.maxTicking = Mathf.FloorToInt(loopEstimate * liveZombieCount);
 				ZombieTicker.currentTicking = Mathf.FloorToInt(ZombieTicker.maxTicking * ZombieTicker.PercentTicking);
 			}
 
