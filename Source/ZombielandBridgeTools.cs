@@ -5102,10 +5102,13 @@ namespace ZombieLand
 				var contaminationTransferred = smoothed
 					&& CloseFloat(naturalBefore, wallContaminationBefore)
 					&& CloseFloat(smoothedContamination, wallContaminationBefore);
+				var reversionResult = ContaminationSmoothWallReversionContract();
+				var reversionSuccessProperty = reversionResult?.GetType().GetProperty("success");
+				var reversionSucceeded = reversionSuccessProperty?.GetValue(reversionResult) is bool reversionSuccess && reversionSuccess;
 
 				return new
 				{
-					success = smoothed && contaminationTransferred,
+					success = smoothed && contaminationTransferred && reversionSucceeded,
 					worker = DescribePawn(worker),
 					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
 					wallCell = ZombieRuntimeActions.DescribeCell(wallCell),
@@ -5122,7 +5125,9 @@ namespace ZombieLand
 					groundAfter,
 					expectedSmoothedContamination = wallContaminationBefore,
 					smoothed,
-					contaminationTransferred
+					contaminationTransferred,
+					reversionSucceeded,
+					reversion = reversionResult
 				};
 			}
 			finally
@@ -5136,6 +5141,150 @@ namespace ZombieLand
 					map.SetContamination(wallCell, 0f);
 				if (worker is { Destroyed: false, Spawned: true })
 					worker.Destroy();
+			}
+		}
+
+		[Tool("zombieland/contamination_smooth_wall_reversion_contract", Description = "Verify real SmoothableWallUtility.Notify_BuildingDestroying preserves contamination from the smoothed wall that reverts.")]
+		public static object ContaminationSmoothWallReversionContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var smoothableDef = DefDatabase<ThingDef>.AllDefs
+				.Where(def => def.category == ThingCategory.Building && def.building?.smoothedThing != null)
+				.OrderBy(def => def.defName)
+				.FirstOrDefault();
+			var smoothedDef = smoothableDef?.building?.smoothedThing;
+			if (smoothableDef == null || smoothedDef?.building?.unsmoothedThing == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No loaded smoothable/smoothed building def pair was found."
+				};
+			}
+
+			bool TryFindFixtureCells(IntVec3 root, float radius, out IntVec3 center, out object error)
+			{
+				center = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+				{
+					if (candidate.InBounds(map) == false)
+						continue;
+					var cells = GenAdj.CardinalDirections.Select(direction => candidate + direction).Append(candidate).ToArray();
+					if (cells.All(cell =>
+						cell.InBounds(map)
+						&& cell.Fogged(map) == false
+						&& cell.GetEdifice(map) == null
+						&& cell.GetThingList(map).Any(thing => thing is Pawn || thing is Blueprint || thing is Frame || thing.def.category == ThingCategory.Building) == false))
+					{
+						center = candidate;
+						return true;
+					}
+				}
+				error = new
+				{
+					success = false,
+					error = $"No clear five-cell smooth-wall reversion fixture was found near ({root.x}, {root.z})."
+				};
+				return false;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindFixtureCells(root, 20f, out var centerCell, out var fixtureError) == false)
+				return fixtureError;
+
+			var destroyingCell = centerCell + IntVec3.West;
+			var blockerCells = new[] { centerCell + IntVec3.North, centerCell + IntVec3.East, centerCell + IntVec3.South };
+			var spawned = new List<Thing>();
+			Thing destroyingWall = null;
+			Thing revertedWall = null;
+			try
+			{
+				destroyingWall = GenSpawn.Spawn(ThingMaker.MakeThing(smoothedDef), destroyingCell, map, WipeMode.Vanish);
+				spawned.Add(destroyingWall);
+				var targetWall = GenSpawn.Spawn(ThingMaker.MakeThing(smoothedDef), centerCell, map, WipeMode.Vanish);
+				spawned.Add(targetWall);
+				foreach (var blockerCell in blockerCells)
+				{
+					var blocker = GenSpawn.Spawn(ThingMaker.MakeThing(smoothableDef), blockerCell, map, WipeMode.Vanish);
+					spawned.Add(blocker);
+				}
+
+				const float destroyingContaminationBefore = 0.18f;
+				const float targetContaminationBefore = 0.63f;
+				destroyingWall.SetContamination(destroyingContaminationBefore);
+				targetWall.SetContamination(targetContaminationBefore);
+				var destroyingBefore = destroyingWall.GetContamination();
+				var targetBefore = targetWall.GetContamination();
+
+				SmoothableWallUtility.Notify_BuildingDestroying(destroyingWall, DestroyMode.Deconstruct);
+				revertedWall = centerCell.GetEdifice(map);
+				var revertedContamination = revertedWall?.GetContamination() ?? -1f;
+				var destroyingAfter = destroyingWall.GetContamination();
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var reverted = targetWall.Destroyed
+					&& revertedWall != null
+					&& revertedWall.Spawned
+					&& revertedWall.Position == centerCell
+					&& revertedWall.def == smoothableDef;
+				var contaminationTransferred = reverted
+					&& CloseFloat(destroyingBefore, destroyingContaminationBefore)
+					&& CloseFloat(targetBefore, targetContaminationBefore)
+					&& CloseFloat(revertedContamination, targetContaminationBefore)
+					&& CloseFloat(destroyingAfter, destroyingContaminationBefore);
+
+				return new
+				{
+					success = reverted && contaminationTransferred,
+					centerCell = ZombieRuntimeActions.DescribeCell(centerCell),
+					destroyingCell = ZombieRuntimeActions.DescribeCell(destroyingCell),
+					blockerCells = blockerCells.Select(ZombieRuntimeActions.DescribeCell).ToArray(),
+					smoothableDef = smoothableDef.defName,
+					smoothedDef = smoothedDef.defName,
+					destroyingWall = ZombieRuntimeActions.StableThingId(destroyingWall),
+					targetWall = ZombieRuntimeActions.StableThingId(targetWall),
+					targetDestroyed = targetWall.Destroyed,
+					revertedWall = ZombieRuntimeActions.StableThingId(revertedWall),
+					revertedWallDef = revertedWall?.def?.defName,
+					revertedWallSpawned = revertedWall?.Spawned,
+					destroyingBefore,
+					destroyingAfter,
+					targetBefore,
+					revertedContamination,
+					expectedRevertedContamination = targetContaminationBefore,
+					reverted,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				foreach (var thing in spawned.Append(revertedWall).Where(thing => thing != null).Distinct().ToArray())
+				{
+					thing.ClearContamination();
+					if (thing is { Destroyed: false, Spawned: true })
+						thing.Destroy(DestroyMode.Vanish);
+				}
+				foreach (var cell in blockerCells.Append(centerCell).Append(destroyingCell))
+					if (cell.InBounds(map))
+						map.SetContamination(cell, 0f);
 			}
 		}
 

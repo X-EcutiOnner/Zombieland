@@ -210,7 +210,7 @@ namespace ZombieLand
 		{
 			if (__result == null)
 				return;
-			__result.AddContamination(__state);
+			__result.SetContamination(__state);
 		}
 	}
 
@@ -219,15 +219,52 @@ namespace ZombieLand
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static Thing Spawn(Thing newThing, IntVec3 loc, Map map, Rot4 rot, WipeMode wipeMode, bool respawningAfterLoad, bool forbidLeavings, Thing t)
+		sealed class RevertedWall
 		{
-			var thing = GenSpawn.Spawn(newThing, loc, map, rot, wipeMode, respawningAfterLoad, forbidLeavings);
-			t.TransferContamination(thing);
-			return thing;
+			public Map map;
+			public IntVec3 cell;
+			public ThingDef expectedDef;
+			public float contamination;
 		}
 
-		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-			=> instructions.ExtraArgumentsTranspiler(typeof(GenSpawn), () => Spawn(default, default, default, default, default, default, default, default), new[] { Ldarg_0 }, 1);
+		static void Prefix(Thing t, DestroyMode mode, out List<RevertedWall> __state)
+		{
+			__state = null;
+			var map = t?.Map;
+			if (map == null || (mode != DestroyMode.KillFinalize && mode != DestroyMode.Deconstruct) || t.def.IsSmoothed == false)
+				return;
+
+			foreach (var direction in GenAdj.CardinalDirections)
+			{
+				var cell = t.Position + direction;
+				if (cell.InBounds(map) == false)
+					continue;
+
+				var edifice = cell.GetEdifice(map);
+				var unsmoothedDef = edifice?.def?.building?.unsmoothedThing;
+				if (edifice == null || edifice.def.IsSmoothed == false || unsmoothedDef == null)
+					continue;
+
+				__state ??= new List<RevertedWall>();
+				__state.Add(new RevertedWall
+				{
+					map = map,
+					cell = edifice.Position,
+					expectedDef = unsmoothedDef,
+					contamination = edifice.GetContamination()
+				});
+			}
+		}
+
+		static void Postfix(List<RevertedWall> __state)
+		{
+			foreach (var wall in __state ?? Enumerable.Empty<RevertedWall>())
+			{
+				var edifice = wall.cell.GetEdifice(wall.map);
+				if (edifice?.def == wall.expectedDef)
+					edifice.SetContamination(wall.contamination);
+			}
+		}
 	}
 
 	[HarmonyPatch(typeof(Building_SubcoreScanner), nameof(Building_SubcoreScanner.Tick))]
