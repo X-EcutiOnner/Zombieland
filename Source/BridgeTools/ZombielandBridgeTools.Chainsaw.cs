@@ -376,6 +376,461 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/thumper_visual_wave_damage_contract", Description = "Run a thumper through lift, release, impact, visible dust-wave expansion, and distance-based seismic damage.")]
+		public static object ThumperVisualWaveDamageContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindThumperWaveFixture(map, root, 30f, out var thumperCell, out var nearCell, out var midCell, out var farCell, out var fixtureError) == false)
+				return fixtureError;
+
+			Find.TickManager.CurTimeSpeed = TimeSpeed.Normal;
+
+			var thumper = ThingMaker.MakeThing(CustomDefs.Thumper) as ZombieThumper;
+			if (thumper == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create ZombieThumper."
+				};
+			}
+
+			thumper.SetFactionDirect(Faction.OfPlayer);
+			GenSpawn.Spawn(thumper, thumperCell, map, Rot4.North, WipeMode.Vanish, false);
+			var refuelable = thumper.TryGetComp<CompRefuelable>();
+			var switchable = thumper.TryGetComp<CompSwitchable>();
+			if (refuelable == null)
+			{
+				return new
+				{
+					success = false,
+					thumperCell = ZombieRuntimeActions.DescribeCell(thumperCell),
+					error = "The spawned thumper did not have a refuelable comp."
+				};
+			}
+
+			var fuel = ThingMaker.MakeThing(ThingDefOf.Chemfuel);
+			fuel.stackCount = Math.Min(ThingDefOf.Chemfuel.stackLimit, refuelable.GetFuelCountToFullyRefuel());
+			GenSpawn.Spawn(fuel, thumperCell + IntVec3.South, map, WipeMode.Vanish);
+			refuelable.Refuel(new List<Thing> { fuel });
+			if (switchable != null)
+				switchable.isActive = true;
+
+			thumper.intensity = 0.5f;
+			thumper.intervalTicks = 130;
+			var radius = thumper.Radius;
+			var upTicks = Mathf.FloorToInt(ZombieThumper.upwardsTicks * thumper.intensity);
+			var fallTicks = Mathf.FloorToInt(Mathf.Sqrt(upTicks / ZombieThumper.accelerationFactor));
+			var impactByTicks = Math.Max(thumper.intervalTicks, 30 + upTicks) + fallTicks + 3;
+			var stateField = typeof(ZombieThumper).GetField("state", BindingFlags.Instance | BindingFlags.NonPublic);
+			var stateValueField = typeof(ZombieThumper).GetField("stateValue", BindingFlags.Instance | BindingFlags.NonPublic);
+			var lastImpactTicksField = typeof(ZombieThumper).GetField("lastImpactTicks", BindingFlags.Instance | BindingFlags.NonPublic);
+			var dustsField = typeof(ZombieThumper).GetField("dusts", BindingFlags.Instance | BindingFlags.NonPublic);
+			var dustObjField = dustsField?.FieldType.GetGenericArguments().FirstOrDefault()?.GetField("obj", BindingFlags.Instance | BindingFlags.Public);
+			var dustRadiusField = dustsField?.FieldType.GetGenericArguments().FirstOrDefault()?.GetField("currentRadius", BindingFlags.Instance | BindingFlags.Public);
+
+			var nearWall = SpawnWoodWall(map, nearCell);
+			var midWall = SpawnWoodWall(map, midCell);
+			var farWall = SpawnWoodWall(map, farCell);
+			if (nearWall == null || midWall == null || farWall == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create thumper wave target walls."
+				};
+			}
+
+			var fuelBefore = refuelable.Fuel;
+			var lastImpactBefore = (int)(lastImpactTicksField?.GetValue(thumper) ?? 0);
+			var nearBefore = nearWall.HitPoints;
+			var midBefore = midWall.HitPoints;
+			var farBefore = farWall.HitPoints;
+			var samples = new List<object>();
+			var dustSamples = new List<object>();
+			var maxUpPole = 0f;
+			var maxPausedPole = 0f;
+			var minFallingPole = 1f;
+			var impactTick = -1;
+
+			for (var tick = 1; tick <= impactByTicks; tick++)
+			{
+				AdvanceGameTicks(1);
+				var stateName = stateField?.GetValue(thumper)?.ToString() ?? "";
+				var stateValue = (int)(stateValueField?.GetValue(thumper) ?? 0);
+				var pole = ZombieThumper.DebugPolePosition(stateName, stateValue, thumper.intensity);
+				if (stateName == "Upwards")
+					maxUpPole = Mathf.Max(maxUpPole, pole);
+				if (stateName == "Paused")
+					maxPausedPole = Mathf.Max(maxPausedPole, pole);
+				if (stateName == "Falling")
+					minFallingPole = Mathf.Min(minFallingPole, pole);
+				if (tick == 1 || tick == 30 || tick == 60 || tick == 90 || tick == 120 || tick == impactByTicks || stateName == "Impacting")
+				{
+					samples.Add(new
+					{
+						tick,
+						state = stateName,
+						stateValue,
+						pole,
+						fuel = refuelable.Fuel,
+						lastImpactTicks = (int)(lastImpactTicksField?.GetValue(thumper) ?? 0)
+					});
+				}
+				if (stateName == "Impacting")
+				{
+					impactTick = tick;
+					break;
+				}
+			}
+
+			var dustAtImpact = DescribeThumperDusts(dustsField, dustObjField, dustRadiusField, thumper);
+			var sampleTicks = new[] { 1, 60, 120, 180, 240, 300, 330 };
+			foreach (var tick in sampleTicks)
+			{
+				AdvanceGameTicks(tick == 1 ? 1 : tick - (dustSamples.Count == 0 ? 0 : sampleTicks[dustSamples.Count - 1]));
+				dustSamples.Add(new
+				{
+					tick,
+					dusts = DescribeThumperDusts(dustsField, dustObjField, dustRadiusField, thumper),
+					nearHitPoints = nearWall.Destroyed ? 0 : nearWall.HitPoints,
+					midHitPoints = midWall.Destroyed ? 0 : midWall.HitPoints,
+					farHitPoints = farWall.Destroyed ? 0 : farWall.HitPoints
+				});
+			}
+
+			var nearAfter = nearWall.Destroyed ? 0 : nearWall.HitPoints;
+			var midAfter = midWall.Destroyed ? 0 : midWall.HitPoints;
+			var farAfter = farWall.Destroyed ? 0 : farWall.HitPoints;
+			var nearDelta = nearBefore - nearAfter;
+			var midDelta = midBefore - midAfter;
+			var farDelta = farBefore - farAfter;
+			var finalDusts = DescribeThumperDusts(dustsField, dustObjField, dustRadiusField, thumper);
+			var dustVisualsMatched = dustAtImpact.Any(DustVisualMatchesThumperContract);
+			var radii = dustSamples
+				.Select(sample => sample.GetType().GetProperty("dusts")?.GetValue(sample))
+				.OfType<object[]>()
+				.SelectMany(items => items)
+				.Select(item => item.GetType().GetProperty("currentRadius")?.GetValue(item))
+				.OfType<int>()
+				.ToArray();
+			var radiusExpanded = radii.Length >= 2 && radii.Max() > radii.Min() && radii.Max() >= 20;
+			var fuelAfter = refuelable.Fuel;
+			var lastImpactAfter = (int)(lastImpactTicksField?.GetValue(thumper) ?? 0);
+
+			return new
+			{
+				success = thumper.Spawned
+					&& impactTick > 0
+					&& fuelAfter < fuelBefore
+					&& lastImpactAfter > lastImpactBefore
+					&& maxUpPole >= 0.95f
+					&& maxPausedPole >= 0.99f
+					&& minFallingPole <= 0.15f
+					&& dustAtImpact.Length > 0
+					&& dustVisualsMatched
+					&& radiusExpanded
+					&& nearDelta > 0
+					&& midDelta > 0
+					&& nearDelta > farDelta
+					&& nearDelta >= midDelta
+					&& ZombieThumper.DebugSeismicWaveDamage(3, radius) > ZombieThumper.DebugSeismicWaveDamage(12, radius)
+					&& ZombieThumper.DebugSeismicWaveDamage(12, radius) > ZombieThumper.DebugSeismicWaveDamage(22, radius),
+				thumper = new
+				{
+					id = ZombieRuntimeActions.StableThingId(thumper),
+					cell = ZombieRuntimeActions.DescribeCell(thumperCell),
+					thumper.intensity,
+					thumper.intervalTicks,
+					radius,
+					upTicks,
+					fallTicks,
+					impactByTicks,
+					impactTick
+				},
+				animation = new
+				{
+					maxUpPole,
+					maxPausedPole,
+					minFallingPole,
+					samples
+				},
+				wave = new
+				{
+					dustAtImpact,
+					dustSamples,
+					finalDusts,
+					dustVisualsMatched,
+					radiusExpanded,
+					radii
+				},
+				damage = new
+				{
+					near = DescribeWaveTarget(nearWall, nearCell, 3, radius, nearBefore, nearAfter),
+					mid = DescribeWaveTarget(midWall, midCell, 12, radius, midBefore, midAfter),
+					far = DescribeWaveTarget(farWall, farCell, 22, radius, farBefore, farAfter)
+				},
+				fuelBefore,
+				fuelAfter,
+				fuelDelta = fuelBefore - fuelAfter,
+				lastImpactBefore,
+				lastImpactAfter,
+				lastImpactDelta = lastImpactAfter - lastImpactBefore
+			};
+		}
+
+		static bool TryFindThumperWaveFixture(Map map, IntVec3 root, float radius, out IntVec3 thumperCell, out IntVec3 nearCell, out IntVec3 midCell, out IntVec3 farCell, out object error)
+		{
+			thumperCell = IntVec3.Invalid;
+			nearCell = IntVec3.Invalid;
+			midCell = IntVec3.Invalid;
+			farCell = IntVec3.Invalid;
+			error = null;
+			if (map == null)
+			{
+				error = new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+				return false;
+			}
+
+			foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+			{
+				if (candidate.InBounds(map) == false || candidate.Fogged(map))
+					continue;
+
+				var clearFootprint = true;
+				foreach (var footprintCell in GenAdj.OccupiedRect(candidate, Rot4.North, CustomDefs.Thumper.size))
+				{
+					if (IsClearFixtureCell(map, footprintCell, false) == false)
+					{
+						clearFootprint = false;
+						break;
+					}
+				}
+				if (clearFootprint == false)
+					continue;
+
+				var near = candidate + new IntVec3(3, 0, 0);
+				var mid = candidate + new IntVec3(12, 0, 0);
+				var far = candidate + new IntVec3(22, 0, 0);
+				if (IsClearFixtureCell(map, near, true) == false
+					|| IsClearFixtureCell(map, mid, true) == false
+					|| IsClearFixtureCell(map, far, true) == false)
+					continue;
+
+				thumperCell = candidate;
+				nearCell = near;
+				midCell = mid;
+				farCell = far;
+				return true;
+			}
+
+			error = new
+			{
+				success = false,
+				error = $"No clear thumper shockwave fixture was found near ({root.x}, {root.z})."
+			};
+			return false;
+		}
+
+		static bool IsClearFixtureCell(Map map, IntVec3 cell, bool requireStandable)
+		{
+			if (cell.InBounds(map) == false || cell.Fogged(map))
+				return false;
+			if (requireStandable && cell.Standable(map) == false)
+				return false;
+			if (cell.GetEdifice(map) != null || cell.GetFirstThing<Mineable>(map) != null)
+				return false;
+			if (cell.GetThingList(map).Any(thing => thing is Pawn))
+				return false;
+			return true;
+		}
+
+		static object[] DescribeThumperDusts(FieldInfo dustsField, FieldInfo dustObjField, FieldInfo dustRadiusField, ZombieThumper thumper)
+		{
+			if (!(dustsField?.GetValue(thumper) is System.Collections.IEnumerable dusts))
+				return Array.Empty<object>();
+
+			var result = new List<object>();
+			foreach (var dust in dusts)
+			{
+				var obj = dustObjField?.GetValue(dust) as GameObject;
+				var particleSystem = obj?.GetComponent<ParticleSystem>();
+				var renderer = obj?.GetComponent<ParticleSystemRenderer>();
+				var shapeRotation = Vector3.zero;
+				var transformEuler = Vector3.zero;
+				var simulationSpeed = 0f;
+				var startSpeed = 0f;
+				var startLifetime = 0f;
+				var colorOverLifetimeEnabled = false;
+				if (particleSystem != null)
+				{
+					var main = particleSystem.main;
+					var shape = particleSystem.shape;
+					var colorOverLifetime = particleSystem.colorOverLifetime;
+					shapeRotation = shape.rotation;
+					simulationSpeed = main.simulationSpeed;
+					startSpeed = main.startSpeed.constant;
+					startLifetime = main.startLifetime.constant;
+					colorOverLifetimeEnabled = colorOverLifetime.enabled;
+				}
+				if (obj != null)
+					transformEuler = obj.transform.localEulerAngles;
+				var expectedStartSpeed = ZombieThumper.DebugShockwaveStartSpeed(thumper.Radius);
+				result.Add(new
+				{
+					currentRadius = (int)(dustRadiusField?.GetValue(dust) ?? -1),
+					active = obj?.activeSelf ?? false,
+					alive = particleSystem?.IsAlive(true) ?? false,
+					playing = particleSystem?.isPlaying ?? false,
+					time = particleSystem?.time ?? 0f,
+					simulationSpeed,
+					startSpeed,
+					expectedStartSpeed,
+					startSpeedSynced = Mathf.Abs(startSpeed - expectedStartSpeed) <= 0.1f,
+					startLifetime,
+					colorOverLifetimeEnabled,
+					transformEuler = new
+					{
+						transformEuler.x,
+						transformEuler.y,
+						transformEuler.z
+					},
+					shapeRotation = new
+					{
+						shapeRotation.x,
+						shapeRotation.y,
+						shapeRotation.z
+					},
+					rendererEnabled = renderer?.enabled ?? false,
+					renderMode = renderer?.renderMode.ToString(),
+					material = renderer?.sharedMaterial?.name,
+					shader = renderer?.sharedMaterial?.shader?.name,
+					renderQueue = renderer?.sharedMaterial?.renderQueue ?? 0
+				});
+			}
+			return result.ToArray();
+		}
+
+		static bool DustVisualMatchesThumperContract(object dust)
+		{
+			var type = dust.GetType();
+			var startSpeedSynced = (bool)(type.GetProperty("startSpeedSynced")?.GetValue(dust) ?? false);
+			var colorOverLifetimeEnabled = (bool)(type.GetProperty("colorOverLifetimeEnabled")?.GetValue(dust) ?? false);
+			var transformEuler = type.GetProperty("transformEuler")?.GetValue(dust);
+			var x = (float)(transformEuler?.GetType().GetProperty("x")?.GetValue(transformEuler) ?? 0f);
+			return startSpeedSynced && colorOverLifetimeEnabled && Mathf.Abs(Mathf.DeltaAngle(x, 90f)) <= 0.5f;
+		}
+
+		static object DescribeWaveTarget(Building wall, IntVec3 cell, int distance, int maxRadius, int hitPointsBefore, int hitPointsAfter)
+		{
+			return new
+			{
+				id = ZombieRuntimeActions.StableThingId(wall),
+				cell = ZombieRuntimeActions.DescribeCell(cell),
+				distance,
+				expectedDamage = ZombieThumper.DebugSeismicWaveDamage(distance, maxRadius),
+				wall.Destroyed,
+				hitPointsBefore,
+				hitPointsAfter,
+				hitPointDelta = hitPointsBefore - hitPointsAfter
+			};
+		}
+
+		[Tool("zombieland/setup_thumper_visual_wave_observation", Description = "Spawn and start a fueled thumper fixture for real-time screenshot observation of lift, release, and shockwave visuals.")]
+		public static object SetupThumperVisualWaveObservation()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindThumperWaveFixture(map, root, 30f, out var thumperCell, out var nearCell, out var midCell, out var farCell, out var fixtureError) == false)
+				return fixtureError;
+
+			var thumper = ThingMaker.MakeThing(CustomDefs.Thumper) as ZombieThumper;
+			if (thumper == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create ZombieThumper."
+				};
+			}
+
+			thumper.SetFactionDirect(Faction.OfPlayer);
+			GenSpawn.Spawn(thumper, thumperCell, map, Rot4.North, WipeMode.Vanish, false);
+			var refuelable = thumper.TryGetComp<CompRefuelable>();
+			if (refuelable == null)
+			{
+				return new
+				{
+					success = false,
+					thumperCell = ZombieRuntimeActions.DescribeCell(thumperCell),
+					error = "The spawned thumper did not have a refuelable comp."
+				};
+			}
+
+			var fuel = ThingMaker.MakeThing(ThingDefOf.Chemfuel);
+			fuel.stackCount = Math.Min(ThingDefOf.Chemfuel.stackLimit, refuelable.GetFuelCountToFullyRefuel());
+			GenSpawn.Spawn(fuel, thumperCell + IntVec3.South, map, WipeMode.Vanish);
+			refuelable.Refuel(new List<Thing> { fuel });
+			var switchable = thumper.TryGetComp<CompSwitchable>();
+			if (switchable != null)
+				switchable.isActive = true;
+
+			thumper.intensity = 0.5f;
+			thumper.intervalTicks = 130;
+			Find.TickManager.CurTimeSpeed = TimeSpeed.Normal;
+			var upTicks = Mathf.FloorToInt(ZombieThumper.upwardsTicks * thumper.intensity);
+			var fallTicks = Mathf.FloorToInt(Mathf.Sqrt(upTicks / ZombieThumper.accelerationFactor));
+			var impactTicks = Math.Max(thumper.intervalTicks, 30 + upTicks) + fallTicks;
+
+			return new
+			{
+				success = thumper.Spawned && refuelable.HasFuel && thumper.IsActive,
+				thumper = new
+				{
+					id = ZombieRuntimeActions.StableThingId(thumper),
+					cell = ZombieRuntimeActions.DescribeCell(thumperCell),
+					thumper.intensity,
+					thumper.intervalTicks,
+					radius = thumper.Radius,
+					upTicks,
+					fallTicks,
+					impactTicks,
+					impactSeconds = impactTicks / 60f,
+					waveSeconds = ZombieThumper.impactDurationTicks / 60f
+				},
+				targets = new
+				{
+					near = ZombieRuntimeActions.DescribeCell(nearCell),
+					mid = ZombieRuntimeActions.DescribeCell(midCell),
+					far = ZombieRuntimeActions.DescribeCell(farCell)
+				},
+				timeSpeed = Find.TickManager.CurTimeSpeed.ToString()
+			};
+		}
+
 		[Tool("zombieland/chainsaw_equip_toggle", Description = "Equip a real fueled chainsaw, start it through its gizmo, tick it while equipped, then verify undrafting stops it.")]
 		public static object ChainsawEquipToggle()
 		{

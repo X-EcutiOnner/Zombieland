@@ -25,12 +25,14 @@ namespace ZombieLand
 		private class Dust
 		{
 			public long impactStart;
+			public int impactTick;
 			public GameObject obj;
 			public int currentRadius;
 		}
 
 		public const int upwardsTicks = 180;
 		public const int impactDurationTicks = 360;
+		public const int impactFadeOutTicks = 300;
 		public const float accelerationFactor = 0.35f;
 
 		public int intervalTicks = GenDate.TicksPerHour;
@@ -88,12 +90,7 @@ namespace ZombieLand
 
 			operatingSustainer ??= CustomDefs.ThumperOperating.TrySpawnSustainer(SoundInfo.InMap(this, MaintenanceType.None));
 
-			TimeControlService.Subscribe(this, speed => dusts.Do(dust =>
-			{
-				var particleSystem = dust.obj.GetComponent<ParticleSystem>();
-				var main = particleSystem.main;
-				main.simulationSpeed = Find.TickManager.TickRateMultiplier / 10f;
-			}));
+			TimeControlService.Subscribe(this, speed => dusts.Do(dust => ConfigureDustParticleSystem(dust.obj?.GetComponent<ParticleSystem>(), Radius)));
 
 			var compRefuelable = this.TryGetComp<CompRefuelable>();
 			if (compRefuelable != null)
@@ -160,17 +157,27 @@ namespace ZombieLand
 			{
 				var dust = dusts[i];
 
-				var particleSystem = dust.obj.GetComponent<ParticleSystem>();
-				var time = particleSystem.time;
 				var maxRadius = Radius;
-				var radius = Tools.Boxed(2 + Mathf.FloorToInt(time * particleSystem.main.startSpeed.constant), 2, maxRadius);
+				if (dust.currentRadius >= maxRadius)
+				{
+					var particleSystem = dust.obj?.GetComponent<ParticleSystem>();
+					if (GenTicks.TicksGame - dust.impactTick >= impactDurationTicks + impactFadeOutTicks || particleSystem == null || particleSystem.IsAlive(true) == false)
+					{
+						_ = dusts.Remove(dust);
+						UnityEngine.Object.Destroy(dust.obj);
+						i--;
+					}
+					continue;
+				}
+
+				var radius = CurrentImpactRadius(dust.impactTick, maxRadius);
 				if (radius != dust.currentRadius)
 				{
 					var seenThings = new HashSet<Thing>() { this };
 					for (var r = dust.currentRadius + 1; r <= radius; r++)
 					{
 						var timestamp = dust.impactStart - Mathf.FloorToInt(r * r / 2.5f);
-						var damage = (MaxRadius - r) * 2f / MaxRadius;
+						var damage = SeismicWaveDamage(r, maxRadius);
 						var dinfo = new DamageInfo(CustomDefs.SeismicWave, damage, 0f, -1f, this);
 						radialCells[r].Do(cell =>
 						{
@@ -186,13 +193,6 @@ namespace ZombieLand
 						});
 					}
 					dust.currentRadius = radius;
-
-					if (radius >= maxRadius)
-					{
-						_ = dusts.Remove(dust);
-						UnityEngine.Object.Destroy(dust.obj);
-						i--;
-					}
 				}
 			}
 		}
@@ -214,6 +214,64 @@ namespace ZombieLand
 		}
 
 		public int Radius => Mathf.FloorToInt(MaxRadius * intensity);
+
+		public static float DebugPolePosition(string stateName, int stateValue, float intensity)
+		{
+			var max = Mathf.FloorToInt(upwardsTicks * intensity);
+			return stateName switch
+			{
+				nameof(State.Upwards) when max > 0 => GenMath.LerpDoubleClamped(max, 0, 0f, 1f, stateValue),
+				nameof(State.Paused) => 1f,
+				nameof(State.Falling) when max > 0 => GenMath.LerpDoubleClamped(0, max, 1f, 0f, FallingDistance(max, stateValue)),
+				_ => 0f
+			};
+		}
+
+		public static int DebugImpactRadius(int impactTick, int maxRadius) => CurrentImpactRadius(impactTick, maxRadius);
+
+		public static float DebugSeismicWaveDamage(int radius, int maxRadius) => SeismicWaveDamage(radius, maxRadius);
+
+		public static float DebugShockwaveStartSpeed(int maxRadius) => ShockwaveStartSpeed(maxRadius);
+
+		public static float DebugImpactDurationSeconds => impactDurationTicks / 60f;
+
+		private static float FallingDistance(int max, int stateValue)
+		{
+			var start = Mathf.FloorToInt(Mathf.Sqrt(max / accelerationFactor));
+			return (start - stateValue) * (start - stateValue) * accelerationFactor;
+		}
+
+		private static int CurrentImpactRadius(int impactTick, int maxRadius)
+		{
+			maxRadius = Tools.Boxed(maxRadius, 2, MaxRadius);
+			var elapsedTicks = GenTicks.TicksGame - impactTick;
+			var progress = Mathf.Clamp01(elapsedTicks / (float)impactDurationTicks);
+			return Tools.Boxed(2 + Mathf.FloorToInt((maxRadius - 2) * progress), 2, maxRadius);
+		}
+
+		private static float SeismicWaveDamage(int radius, int maxRadius)
+		{
+			maxRadius = Tools.Boxed(maxRadius, 2, MaxRadius);
+			return Mathf.Max(0f, (maxRadius - radius + 1) * 2f / maxRadius);
+		}
+
+		private static float ShockwaveStartSpeed(int maxRadius)
+		{
+			maxRadius = Tools.Boxed(maxRadius, 2, MaxRadius);
+			return maxRadius * 10f / DebugImpactDurationSeconds;
+		}
+
+		private static void ConfigureDustParticleSystem(ParticleSystem particleSystem, int maxRadius)
+		{
+			if (particleSystem == null)
+				return;
+
+			var main = particleSystem.main;
+			main.simulationSpeed = Find.TickManager.TickRateMultiplier / 10f;
+			main.startSpeed = ShockwaveStartSpeed(maxRadius);
+			if (particleSystem.isPlaying == false)
+				particleSystem.Play(true);
+		}
 
 		public override IEnumerable<Gizmo> GetGizmos()
 		{
@@ -272,11 +330,9 @@ namespace ZombieLand
 		public void PrepareImpact()
 		{
 			lastImpactTicks = GenTicks.TicksGame;
-			var dust = new Dust() { impactStart = Tools.Ticks(), obj = Assets.NewDust(), currentRadius = -1 };
+			var dust = new Dust() { impactStart = Tools.Ticks(), impactTick = GenTicks.TicksGame, obj = Assets.NewDust(), currentRadius = -1 };
 			dust.obj.transform.position = Position.ToVector3ShiftedWithAltitude(0.5f) + dustOffset;
-			var particleSystem = dust.obj.GetComponent<ParticleSystem>();
-			var main = particleSystem.main;
-			main.simulationSpeed = Find.TickManager.TickRateMultiplier / 10f;
+			ConfigureDustParticleSystem(dust.obj.GetComponent<ParticleSystem>(), Radius);
 			dusts.Add(dust);
 
 			state = State.Impacting;
@@ -316,16 +372,14 @@ namespace ZombieLand
 				case State.Resting:
 					break;
 				case State.Upwards:
-					polePosition = GenMath.LerpDoubleClamped(0, max, intensity, 0f, stateValue);
+					polePosition = DebugPolePosition(nameof(State.Upwards), stateValue, intensity);
 					break;
 				case State.Paused:
-					polePosition = intensity;
+					polePosition = DebugPolePosition(nameof(State.Paused), stateValue, intensity);
 					break;
 				case State.Falling:
 					// https://www.desmos.com/calculator/wzqh80n9mx
-					var start = Mathf.FloorToInt(Mathf.Sqrt(max / accelerationFactor));
-					var val = (start - stateValue) * (start - stateValue) * accelerationFactor;
-					polePosition = GenMath.LerpDoubleClamped(0, max, intensity, 0f, val);
+					polePosition = DebugPolePosition(nameof(State.Falling), stateValue, intensity);
 					break;
 				case State.Impacting:
 					// https://www.desmos.com/calculator/6mbuuucmcd
