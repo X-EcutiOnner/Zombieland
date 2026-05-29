@@ -371,13 +371,29 @@ namespace ZombieLand
 		{
 			var tickManager = (TickManager)input;
 			var f = ZombieTicker.PercentTicking;
-			var zombies = tickManager.allZombiesCached.Where(zombie => zombie.Spawned && zombie.Dead == false);
-			if (f < 1f)
+			var zombies = tickManager.allZombiesCached
+				.Where(zombie => zombie.Spawned && zombie.Dead == false)
+				.ToList();
+			if (f >= 1f)
+				tickManager.currentZombiesTicking = zombies.ToArray();
+			else
 			{
 				var partition = Mathf.FloorToInt(zombies.Count() * f);
-				zombies = zombies.InRandomOrder().Take(partition);
+				if (partition <= 0)
+					tickManager.currentZombiesTicking = Array.Empty<Zombie>();
+				else
+				{
+					var selected = new Zombie[partition];
+					for (var i = 0; i < partition; i++)
+					{
+						var idx = Rand.RangeInclusive(i, zombies.Count - 1);
+						selected[i] = zombies[idx];
+						zombies[idx] = zombies[i];
+						zombies[i] = selected[i];
+					}
+					tickManager.currentZombiesTicking = selected;
+				}
 			}
-			tickManager.currentZombiesTicking = zombies.ToArray();
 			tickManager.currentZombiesTickingIndex = tickManager.currentZombiesTicking.Length;
 		}
 

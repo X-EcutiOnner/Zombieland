@@ -10806,6 +10806,108 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/zombie_faction_pawn_generation_contract", Description = "Verify Zombie faction PawnGenerator requests route normal zombies through Zombieland while preserving blob/spitter generation.")]
+		public static object ZombieFactionPawnGenerationContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland TickManager is attached to the current map."
+				};
+			}
+
+			var zombieFaction = Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies);
+			if (zombieFaction == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombies faction was found."
+				};
+			}
+
+			Pawn generatedNormal = null;
+			Pawn generatedSpitter = null;
+			Pawn generatedBlob = null;
+			try
+			{
+				var beforeIds = CurrentZombies(map)
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+				Rand.PushState(6400);
+				try
+				{
+					generatedNormal = PawnGenerator.GeneratePawn(ZombieDefOf.Zombie, zombieFaction);
+					generatedSpitter = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieSpitter, zombieFaction);
+					generatedBlob = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieBlob, zombieFaction);
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				var normal = generatedNormal as Zombie;
+				if (normal != null)
+					_ = tickManager.allZombiesCached.Add(normal);
+				var newZombieIds = CurrentZombies(map)
+					.Select(ZombieRuntimeActions.StableThingId)
+					.Where(id => beforeIds.Contains(id) == false)
+					.ToArray();
+
+				return new
+				{
+					success = normal != null
+						&& normal.Spawned
+						&& normal.Faction == zombieFaction
+						&& normal.kindDef == ZombieDefOf.Zombie
+						&& newZombieIds.Length == 1
+						&& generatedSpitter is ZombieSpitter
+						&& generatedSpitter.Spawned == false
+						&& generatedBlob is ZombieBlob
+						&& generatedBlob.Spawned == false,
+					zombieFaction = zombieFaction.def?.defName,
+					sourcePath = "PawnGenerator.GenerateNewPawnInternal prefix",
+					normal = DescribeZombie(generatedNormal),
+					normalSpawnedThroughPatch = normal?.Spawned ?? false,
+					newZombieIds,
+					spitter = DescribeZombie(generatedSpitter),
+					spitterType = generatedSpitter?.GetType().FullName,
+					spitterSpawned = generatedSpitter?.Spawned ?? false,
+					blob = DescribeZombie(generatedBlob),
+					blobType = generatedBlob?.GetType().FullName,
+					blobSpawned = generatedBlob?.Spawned ?? false
+				};
+			}
+			finally
+			{
+				if (generatedNormal is Zombie zombie)
+				{
+					_ = tickManager.allZombiesCached?.Remove(zombie);
+					_ = tickManager.hummingZombies?.Remove(zombie);
+					_ = tickManager.tankZombies?.Remove(zombie);
+				}
+				foreach (var pawn in new[] { generatedNormal, generatedSpitter, generatedBlob }.Where(pawn => pawn != null).Distinct())
+				{
+					if (pawn.Spawned && pawn.Destroyed == false)
+						pawn.Destroy(DestroyMode.Vanish);
+				}
+			}
+		}
+
 		[Tool("zombieland/zombie_active_threat_count_contract", Description = "Verify GenHostility.IsActiveThreatTo excludes all Zombieland pawn types from player hostile counts.")]
 		public static object ZombieActiveThreatCountContract()
 		{
