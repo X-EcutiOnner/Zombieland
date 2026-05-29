@@ -5852,6 +5852,140 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_deep_drill_contract", Description = "Verify deep-drill output receives the configured contamination through real CompDeepDrill.TryProducePortion.")]
+		public static object ContaminationDeepDrillContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var drillDef = ThingDefOf.DeepDrill;
+			var resourceDef = ThingDefOf.Steel;
+			var method = typeof(CompDeepDrill).GetMethod("TryProducePortion", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+			if (drillDef == null || resourceDef == null || method == null)
+			{
+				return new
+				{
+					success = false,
+					error = "DeepDrill, Steel, or CompDeepDrill.TryProducePortion is unavailable."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearBuildingFootprint(map, drillDef, root, 24f, out var drillCell, out var drillCellError) == false)
+				return drillCellError;
+
+			var drill = (ThingWithComps)null;
+			var yieldedThings = new List<Thing>();
+			var resourceCell = drillCell;
+			var oldResourceDef = map.deepResourceGrid.ThingDefAt(resourceCell);
+			var oldResourceCount = map.deepResourceGrid.CountAt(resourceCell);
+			try
+			{
+				drill = ThingMaker.MakeThing(drillDef) as ThingWithComps;
+				if (drill == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not create DeepDrill fixture."
+					};
+				}
+				drill.SetFactionDirect(Faction.OfPlayer);
+				GenSpawn.Spawn(drill, drillCell, map, Rot4.North, WipeMode.Vanish, false);
+
+				var comp = drill.GetComp<CompDeepDrill>();
+				if (comp == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Spawned DeepDrill has no CompDeepDrill."
+					};
+				}
+
+				resourceCell = drill.Position;
+				oldResourceDef = map.deepResourceGrid.ThingDefAt(resourceCell);
+				oldResourceCount = map.deepResourceGrid.CountAt(resourceCell);
+				var resourceCountBefore = resourceDef.deepCountPerPortion;
+				map.deepResourceGrid.SetAt(resourceCell, resourceDef, resourceCountBefore);
+				var existingYields = map.listerThings.ThingsOfDef(resourceDef).ToHashSet();
+				var deepDrillAdd = ZombieSettings.Values.contamination.deepDrillAdd;
+
+				method.Invoke(comp, new object[] { 1f, null });
+
+				var resourceDefAfter = map.deepResourceGrid.ThingDefAt(resourceCell);
+				var resourceCountAfter = map.deepResourceGrid.CountAt(resourceCell);
+				yieldedThings = map.listerThings.ThingsOfDef(resourceDef)
+					.Where(thing => existingYields.Contains(thing) == false)
+					.ToList();
+				var yieldContamination = yieldedThings.Count == 1 ? yieldedThings[0].GetContamination() : -1f;
+
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var yielded = yieldedThings.Count == 1
+					&& yieldedThings[0].def == resourceDef
+					&& yieldedThings[0].stackCount == resourceCountBefore
+					&& resourceDefAfter == null
+					&& resourceCountAfter == 0;
+				var contaminationAdded = yielded
+					&& CloseFloat(yieldContamination, deepDrillAdd);
+
+				return new
+				{
+					success = yielded && contaminationAdded,
+					drill = ZombieRuntimeActions.StableThingId(drill),
+					drillCell = ZombieRuntimeActions.DescribeCell(drillCell),
+					interactionCell = ZombieRuntimeActions.DescribeCell(drill.InteractionCell),
+					resourceCell = ZombieRuntimeActions.DescribeCell(resourceCell),
+					resourceDef = resourceDef.defName,
+					resourceCountBefore,
+					resourceDefAfter = resourceDefAfter?.defName,
+					resourceCountAfter,
+					yieldedCount = yieldedThings.Count,
+					yieldedThings = yieldedThings
+						.Select(thing => new
+						{
+							thing = ZombieRuntimeActions.StableThingId(thing),
+							def = thing.def.defName,
+							stackCount = thing.stackCount,
+							contamination = thing.GetContamination()
+						})
+						.ToArray(),
+					yieldContamination,
+					expectedYieldContamination = deepDrillAdd,
+					yielded,
+					contaminationAdded
+				};
+			}
+			finally
+			{
+				foreach (var thing in yieldedThings)
+				{
+					thing?.ClearContamination();
+					if (thing is { Destroyed: false, Spawned: true })
+						thing.Destroy();
+				}
+				if (drill is { Destroyed: false, Spawned: true })
+					drill.Destroy();
+				if (resourceCell.IsValid && resourceCell.InBounds(map))
+					map.deepResourceGrid.SetAt(resourceCell, oldResourceDef, oldResourceCount);
+			}
+		}
+
 		[Tool("zombieland/contamination_plant_stump_contract", Description = "Verify a contaminated tree transfers contamination through real Plant.TrySpawnStump into its stump.")]
 		public static object ContaminationPlantStumpContract()
 		{
@@ -6088,6 +6222,7 @@ namespace ZombieLand
 
 				collapsedRock = map.listerThings.ThingsOfDef(leavingDef)
 					.FirstOrDefault(thing => existingRocks.Contains(thing) == false && thing.Position == roofCell);
+				var groundAfterCollapse = map.GetContamination(roofCell);
 				var rockContamination = collapsedRock?.GetContamination() ?? -1f;
 
 				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
@@ -6110,7 +6245,9 @@ namespace ZombieLand
 					rock = ZombieRuntimeActions.StableThingId(collapsedRock),
 					rockSpawned = collapsedRock?.Spawned,
 					rockDef = collapsedRock?.def?.defName,
+					rockIsMineable = collapsedRock is Mineable,
 					groundBefore,
+					groundAfterCollapse,
 					rockContamination,
 					expectedRockContamination = groundContamination,
 					spawnedRock,

@@ -528,10 +528,9 @@ namespace ZombieLand
 
 		static Thing Spawn(ThingDef def, IntVec3 loc, Map map, WipeMode wipeMode, IntVec3 c)
 		{
-			var result = GenSpawn.Spawn(def, loc, map, wipeMode);
 			var contamination = map.GetContamination(c);
-			if (result is not Mineable)
-				result.AddContamination(contamination);
+			var result = GenSpawn.Spawn(def, loc, map, wipeMode);
+			result.SetContamination(contamination);
 			return result;
 		}
 
