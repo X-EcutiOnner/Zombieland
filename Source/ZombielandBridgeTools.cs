@@ -93,6 +93,19 @@ namespace ZombieLand
 			return true;
 		}
 
+		static Dictionary<string, int> MemoryDefCounts(Pawn pawn)
+		{
+			return pawn?.needs?.mood?.thoughts?.memories?.Memories?
+				.GroupBy(memory => memory.def?.defName ?? "<null>")
+				.ToDictionary(group => group.Key, group => group.Count())
+				?? new Dictionary<string, int>();
+		}
+
+		static int TotalMemoryCount(Pawn pawn)
+		{
+			return pawn?.needs?.mood?.thoughts?.memories?.Memories?.Count ?? 0;
+		}
+
 		static object DescribeZombie(Pawn pawn)
 		{
 			var zombie = pawn as Zombie;
@@ -1697,6 +1710,121 @@ namespace ZombieLand
 				formerZombieCorpseHasExtractJob,
 				normalZombieCorpseHasDoubleTapJob,
 				formerZombieCorpseHasDoubleTapJob
+			};
+		}
+
+		[Tool("zombieland/zombie_death_thought_suppression", Description = "Verify RimWorld death-thought delivery gives colonist death memories but suppresses adult zombie death memories.")]
+		public static object ZombieDeathThoughtSuppression()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var destroyedZombieCorpses = 0;
+			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+			{
+				corpse.Destroy();
+				destroyedZombieCorpses++;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var observerCell, out var observerSpawnError) == false)
+				return observerSpawnError;
+			if (TryFindClearSpawnCell(map, observerCell + new IntVec3(3, 0, 0), 10f, out var humanVictimCell, out var humanSpawnError) == false)
+				return humanSpawnError;
+			if (TryFindClearSpawnCell(map, observerCell + new IntVec3(6, 0, 0), 12f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+
+			var observer = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(observer, observerCell, map, Rot4.South);
+			DisablePawnWork(observer);
+			var humanVictim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(humanVictim, humanVictimCell, map, Rot4.South);
+			DisablePawnWork(humanVictim);
+			var zombieVictim = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombieVictim == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					observer = DescribePawn(observer),
+					error = "ZombieGenerator.SpawnZombie returned no death-thought test zombie."
+				};
+			}
+
+			var memoriesBefore = TotalMemoryCount(observer);
+			var memoryDefsBefore = MemoryDefCounts(observer);
+			if (ZombieRuntimeActions.KillPawnToCorpse(humanVictim, out var humanCorpse, out var killHumanError) == false)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					observer = DescribePawn(observer),
+					humanVictim = DescribePawn(humanVictim),
+					error = killHumanError
+				};
+			}
+			var memoriesAfterHumanKill = TotalMemoryCount(observer);
+			PawnDiedOrDownedThoughtsUtility.TryGiveThoughts(humanVictim, null, PawnDiedOrDownedThoughtsKind.Died);
+			var memoriesAfterHumanTryGive = TotalMemoryCount(observer);
+			var humanThoughtDelta = memoriesAfterHumanTryGive - memoriesAfterHumanKill;
+			var humanTotalDelta = memoriesAfterHumanTryGive - memoriesBefore;
+			var memoryDefsAfterHuman = MemoryDefCounts(observer);
+
+			zombieVictim.Kill(null);
+			var zombieCorpse = zombieVictim.Corpse as ZombieCorpse
+				?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(zombieCell)).FirstOrDefault();
+			if (zombieCorpse == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					observer = DescribePawn(observer),
+					zombieVictim = DescribeZombie(zombieVictim),
+					error = "Killing the death-thought test zombie did not leave a ZombieCorpse."
+				};
+			}
+
+			PawnDiedOrDownedThoughtsUtility.TryGiveThoughts(zombieVictim, null, PawnDiedOrDownedThoughtsKind.Died);
+			var memoriesAfterZombieTryGive = TotalMemoryCount(observer);
+			var zombieThoughtDelta = memoriesAfterZombieTryGive - memoriesAfterHumanTryGive;
+			var memoryDefsAfterZombie = MemoryDefCounts(observer);
+
+			return new
+			{
+				success = humanThoughtDelta > 0
+					&& humanTotalDelta > 0
+					&& zombieThoughtDelta == 0,
+				destroyedZombies,
+				destroyedZombieCorpses,
+				observer = DescribePawn(observer),
+				humanVictim = DescribePawn(humanVictim),
+				humanCorpse = DescribeCorpse(humanCorpse),
+				zombieVictim = DescribeZombie(zombieVictim),
+				zombieCorpse = DescribeCorpse(zombieCorpse),
+				memoriesBefore,
+				memoriesAfterHumanKill,
+				memoriesAfterHumanTryGive,
+				memoriesAfterZombieTryGive,
+				humanThoughtDelta,
+				humanTotalDelta,
+				zombieThoughtDelta,
+				memoryDefsBefore,
+				memoryDefsAfterHuman,
+				memoryDefsAfterZombie
 			};
 		}
 
