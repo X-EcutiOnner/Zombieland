@@ -1715,6 +1715,7 @@ namespace ZombieLand
 			try
 			{
 				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				map.GetComponent<TickManager>().avoidGrid = new AvoidGrid(map);
 				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
 				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
 					return actorSpawnError;
@@ -1998,6 +1999,7 @@ namespace ZombieLand
 			try
 			{
 				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				map.GetComponent<TickManager>().avoidGrid = new AvoidGrid(map);
 				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
 				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
 					return actorSpawnError;
@@ -2128,6 +2130,181 @@ namespace ZombieLand
 					forcedDanger = forcedDanger.ToString(),
 					forcedJob = actor.CurJobDef?.defName,
 					forcedJobPlayerForced = actor.CurJob?.playerForced
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+			}
+		}
+
+		[Tool("zombieland/avoid_grid_interrupts_existing_path", Description = "Verify an already-started colonist path asks for a new path when its source-derived lookahead cell becomes zombie avoid danger.")]
+		public static object AvoidGridInterruptsExistingPath()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			ZombieSettings.Values.betterZombieAvoidance = true;
+			try
+			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				map.GetComponent<TickManager>().avoidGrid = new AvoidGrid(map);
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+					return actorSpawnError;
+
+				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				actor.workSettings?.DisableAll();
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoAvoidZombies = true;
+
+				var destination = GenRadial.RadialCellsAround(actor.Position, 18f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(actor.Position) >= 14f)
+					.Where(cell => actor.CanReach(cell, PathEndMode.OnCell, Danger.Deadly))
+					.OrderByDescending(cell => cell.DistanceToSquared(actor.Position))
+					.FirstOrDefault();
+				if (destination.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						error = "No reachable distant destination was found for the avoid-grid path fixture."
+					};
+				}
+
+				var gotoJob = JobMaker.MakeJob(JobDefOf.Goto, destination);
+				gotoJob.playerForced = false;
+				var startedJob = actor.jobs.TryTakeOrderedJob(gotoJob, JobTag.Misc, false);
+				if (startedJob == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						destination = ZombieRuntimeActions.DescribeCell(destination),
+						error = "Could not start the real Goto job for the avoid-grid path fixture."
+					};
+				}
+
+				const int maxPathTicks = 60;
+				var pathReadyTick = -1;
+				for (var tick = 0; tick <= maxPathTicks; tick++)
+				{
+					if (actor.pather.curPath?.Found == true && actor.pather.curPath.NodesLeftCount >= 6)
+					{
+						pathReadyTick = tick;
+						break;
+					}
+					AdvanceGameTicks(1);
+				}
+
+				var path = actor.pather.curPath;
+				if (path?.Found != true || path.NodesLeftCount < 6)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						destination = ZombieRuntimeActions.DescribeCell(destination),
+						pathReadyTick,
+						nodesLeft = path?.NodesLeftCount ?? 0,
+						error = "Pawn path did not become available with enough nodes for the lookahead fixture."
+					};
+				}
+
+				var lookAhead = path.Peek(4);
+				var lastNode = path.LastNode;
+				if ((lookAhead - lastNode).LengthHorizontalSquared < 25)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						destination = ZombieRuntimeActions.DescribeCell(destination),
+						lookAhead = ZombieRuntimeActions.DescribeCell(lookAhead),
+						lastNode = ZombieRuntimeActions.DescribeCell(lastNode),
+						nodesLeft = path.NodesLeftCount,
+						error = "Source-derived lookahead cell was too close to destination for the NeedNewPath patch."
+					};
+				}
+
+				var needNewPathBefore = actor.pather.NeedNewPath();
+				var pathCells = Enumerable.Range(0, path.NodesLeftCount)
+					.Select(path.Peek)
+					.ToHashSet();
+				var zombieCell = GenRadial.RadialCellsAround(lookAhead, 3f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => pathCells.Contains(cell) == false)
+					.OrderBy(cell => cell.DistanceToSquared(lookAhead))
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						lookAhead = ZombieRuntimeActions.DescribeCell(lookAhead),
+						nodesLeft = path.NodesLeftCount,
+						needNewPathBefore,
+						error = "No off-path zombie cell was found near the lookahead cell."
+					};
+				}
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+						lookAhead = ZombieRuntimeActions.DescribeCell(lookAhead),
+						error = "ZombieGenerator.SpawnZombie returned no avoid-grid zombie."
+					};
+				}
+				zombie.state = ZombieState.Tracking;
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var lookAheadAvoidCost = AvoidCost(avoidGrid, map, lookAhead);
+				var lookAheadShouldAvoid = avoidGrid.ShouldAvoid(map, lookAhead);
+				var needNewPathAfter = actor.pather.NeedNewPath();
+
+				return new
+				{
+					success = needNewPathBefore == false
+						&& lookAheadShouldAvoid
+						&& needNewPathAfter,
+					destroyedZombies,
+					startedJob,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					destination = ZombieRuntimeActions.DescribeCell(destination),
+					lookAhead = ZombieRuntimeActions.DescribeCell(lookAhead),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					lastNode = ZombieRuntimeActions.DescribeCell(lastNode),
+					pathReadyTick,
+					nodesLeft = path.NodesLeftCount,
+					lookAheadAvoidCost,
+					lookAheadShouldAvoid,
+					needNewPathBefore,
+					needNewPathAfter
 				};
 			}
 			finally
