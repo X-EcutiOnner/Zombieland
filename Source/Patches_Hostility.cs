@@ -518,11 +518,22 @@ namespace ZombieLand
 	[HarmonyPatch(new Type[] { typeof(IAttackTarget), typeof(Faction), typeof(bool), typeof(bool) })]
 	static class GenHostility_IsActiveThreat_Patch
 	{
+		static bool IsZombielandPawnTarget(IAttackTarget target)
+		{
+			return target is Zombie || target is ZombieBlob || target is ZombieSpitter;
+		}
+
 		[HarmonyPriority(Priority.First)]
 		static bool Prefix(ref bool __result, IAttackTarget target, Faction faction)
 		{
-			if (target is not Zombie) // must skip non zombies bc next patch requires it
+			if (IsZombielandPawnTarget(target) == false) // must skip non zombies bc next patch requires it
 				return true;
+
+			if (faction == null)
+			{
+				__result = false;
+				return false;
+			}
 
 			if (faction == Faction.OfPlayer)
 			{

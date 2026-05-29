@@ -7022,6 +7022,56 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/zombie_active_threat_count_contract", Description = "Verify GenHostility.IsActiveThreatTo excludes all Zombieland pawn types from player hostile counts.")]
+		public static object ZombieActiveThreatCountContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var normalCell, out var normalSpawnError) == false)
+				return normalSpawnError;
+			if (TryFindClearSpawnCell(map, normalCell + new IntVec3(3, 0, 0), 8f, out var spitterCell, out var spitterSpawnError) == false)
+				return spitterSpawnError;
+			if (TryFindClearSpawnCell(map, normalCell + new IntVec3(6, 0, 0), 10f, out var blobCell, out var blobSpawnError) == false)
+				return blobSpawnError;
+
+			var normal = SpawnFireFixturePawn(map, normalCell, "normal");
+			var spitter = SpawnFireFixturePawn(map, spitterCell, "spitter");
+			var blob = SpawnFireFixturePawn(map, blobCell, "blob");
+			var normalThreat = GenHostility.IsActiveThreatTo(normal, Faction.OfPlayer, false, false);
+			var spitterThreat = GenHostility.IsActiveThreatTo(spitter, Faction.OfPlayer, false, false);
+			var blobThreat = GenHostility.IsActiveThreatTo(blob, Faction.OfPlayer, false, false);
+
+			return new
+			{
+				success = normal is Zombie
+					&& spitter is ZombieSpitter
+					&& blob is ZombieBlob
+					&& normalThreat == false
+					&& spitterThreat == false
+					&& blobThreat == false,
+				destroyedZombies,
+				normal = DescribePawn(normal),
+				spitter = DescribePawn(spitter),
+				blob = DescribePawn(blob),
+				threatsToPlayer = new
+				{
+					normal = normalThreat,
+					spitter = spitterThreat,
+					blob = blobThreat
+				}
+			};
+		}
+
 		[Tool("zombieland/zap_zombies_with_shocker", Description = "Build a powered zombie shocker room, run the real ZapZombies job, and verify a zombie in the room is paralyzed.")]
 		public static object ZapZombiesWithShocker()
 		{
