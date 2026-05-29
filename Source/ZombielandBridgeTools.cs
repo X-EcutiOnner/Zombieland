@@ -14733,6 +14733,173 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/chainsaw_crowd_pressure_drop_contract", Description = "Surround a drafted colonist from too many hostile angles and verify the equipped running chainsaw drops through its pressure branch.")]
+		public static object ChainsawCrowdPressureDropContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var adjacent = GenAdj.AdjacentCellsAround;
+			var pressureIndices = new[] { 0, 2, 4, 6 };
+			var actorCell = IntVec3.Invalid;
+			object actorSpawnError = null;
+			if (TryFindClearSpawnCell(map, root, 16f, out var firstCandidate, out actorSpawnError) == false)
+				return actorSpawnError;
+			foreach (var candidate in GenRadial.RadialCellsAround(firstCandidate, 16f, true))
+			{
+				if (candidate.InBounds(map) == false || candidate.Standable(map) == false || candidate.Fogged(map))
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+					continue;
+				if (pressureIndices.All(index =>
+				{
+					var cell = candidate + adjacent[index];
+					return cell.InBounds(map)
+						&& cell.Standable(map)
+						&& cell.Fogged(map) == false
+						&& cell.GetFirstThing<Mineable>(map) == null
+						&& cell.GetThingList(map).Any(thing => thing is Pawn) == false;
+				}))
+				{
+					actorCell = candidate;
+					break;
+				}
+			}
+			if (actorCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find a clear chainsaw pressure fixture with four alternate adjacent zombie cells."
+				};
+			}
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+			DisablePawnWork(actor);
+			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+
+			var chainsaw = ThingMaker.MakeThing(CustomDefs.Chainsaw) as Chainsaw;
+			if (chainsaw == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create Chainsaw."
+				};
+			}
+
+			GenSpawn.Spawn(chainsaw, actorCell, map, WipeMode.Vanish);
+			var refuelable = chainsaw.TryGetComp<CompRefuelable>();
+			var breakable = chainsaw.TryGetComp<CompBreakable>();
+			if (refuelable == null || breakable == null)
+			{
+				return new
+				{
+					success = false,
+					chainsaw = ZombieRuntimeActions.StableThingId(chainsaw),
+					error = "The spawned chainsaw did not have refuelable and breakable comps."
+				};
+			}
+
+			var fuel = ThingMaker.MakeThing(ThingDefOf.Chemfuel);
+			fuel.stackCount = Math.Min(ThingDefOf.Chemfuel.stackLimit, refuelable.GetFuelCountToFullyRefuel());
+			GenSpawn.Spawn(fuel, actorCell + IntVec3.South, map, WipeMode.Vanish);
+			refuelable.Refuel(new List<Thing> { fuel });
+			chainsaw.DeSpawn();
+			actor.equipment.AddEquipment(chainsaw);
+			actor.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+			actor.drafter.Drafted = true;
+
+			var zombies = new List<Zombie>();
+			foreach (var index in pressureIndices)
+			{
+				var zombie = ZombieRuntimeActions.SpawnZombie(actorCell + adjacent[index], map, ZombieType.Normal, true);
+				if (zombie != null)
+					zombies.Add(zombie);
+			}
+
+			var fuelBefore = refuelable.Fuel;
+			var hitPointsBefore = chainsaw.HitPoints;
+			var toggle = chainsaw.GetGizmos().OfType<Command_Action>().FirstOrDefault(command => command.disabled == false);
+			toggle?.action();
+			var runningAfterToggle = chainsaw.running;
+			var equippedBeforeTick = ReferenceEquals(actor.equipment?.Primary, chainsaw);
+			AdvanceGameTicks(1);
+
+			var fuelAfter = refuelable.Fuel;
+			var hitPointsAfter = chainsaw.Destroyed ? 0 : chainsaw.HitPoints;
+			var equippedAfterTick = ReferenceEquals(actor.equipment?.Primary, chainsaw);
+			var chainsawSpawned = chainsaw.Spawned;
+			var pawnCleared = chainsaw.pawn == null;
+			var zombieStates = zombies.Select(zombie => new
+			{
+				zombie = DescribeZombie(zombie),
+				alive = zombie.Dead == false && zombie.Destroyed == false,
+				hostileToActor = zombie.HostileTo(actor)
+			}).ToArray();
+
+			return new
+			{
+				success = zombies.Count == pressureIndices.Length
+					&& runningAfterToggle
+					&& equippedBeforeTick
+					&& equippedAfterTick == false
+					&& chainsawSpawned
+					&& pawnCleared
+					&& chainsaw.running == false
+					&& chainsaw.swinging == false
+					&& breakable.broken == false
+					&& hitPointsAfter == hitPointsBefore
+					&& fuelAfter < fuelBefore
+					&& zombieStates.All(state => state.alive && state.hostileToActor),
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				cells = new
+				{
+					actor = ZombieRuntimeActions.DescribeCell(actorCell),
+					zombies = pressureIndices
+						.Select(index => new
+						{
+							index,
+							offset = ZombieRuntimeActions.DescribeCell(adjacent[index]),
+							cell = ZombieRuntimeActions.DescribeCell(actorCell + adjacent[index])
+						})
+						.ToArray()
+				},
+				pressureIndices,
+				runningAfterToggle,
+				equippedBeforeTick,
+				equippedAfterTick,
+				chainsaw = new
+				{
+					id = ZombieRuntimeActions.StableThingId(chainsaw),
+					spawned = chainsawSpawned,
+					cell = chainsawSpawned ? ZombieRuntimeActions.DescribeCell(chainsaw.Position) : null,
+					pawnCleared,
+					breakable.broken,
+					chainsaw.running,
+					chainsaw.swinging,
+					hitPointsBefore,
+					hitPointsAfter,
+					hitPointDelta = hitPointsBefore - hitPointsAfter
+				},
+				fuelBefore,
+				fuelAfter,
+				fuelDelta = fuelBefore - fuelAfter,
+				zombieStates
+			};
+		}
+
 		[Tool("zombieland/fix_broken_chainsaw_job", Description = "Break a spawned chainsaw, run the real FixBrokenChainsaw workgiver/job with a component, and verify repair.")]
 		public static object FixBrokenChainsawJob()
 		{
