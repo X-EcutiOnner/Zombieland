@@ -275,6 +275,7 @@ namespace ZombieLand
 
 		static readonly MethodInfo pathFollowerCostToMoveIntoCellMethod = typeof(Pawn_PathFollower).GetMethod("CostToMoveIntoCell", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Pawn), typeof(IntVec3) }, null);
 		static readonly MethodInfo fireDoFireDamageMethod = typeof(Fire).GetMethod("DoFireDamage", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Thing) }, null);
+		static readonly MethodInfo fireVulnerableToRainMethod = typeof(Fire).GetMethod("VulnerableToRain", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		static readonly MethodInfo fireWatcherUpdateObservationsMethod = typeof(FireWatcher).GetMethod("UpdateObservations", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
 		static bool TryCostToMoveIntoCell(Pawn pawn, IntVec3 cell, out float cost, out string error)
@@ -311,6 +312,52 @@ namespace ZombieLand
 			}
 
 			fireDoFireDamageMethod.Invoke(fire, new object[] { target });
+			return true;
+		}
+
+		static bool TryVulnerableToRain(Fire fire, out bool vulnerable, out string error)
+		{
+			vulnerable = false;
+			error = null;
+			if (fireVulnerableToRainMethod == null)
+			{
+				error = "Could not find Fire.VulnerableToRain().";
+				return false;
+			}
+			if (fire == null)
+			{
+				error = "Fire is required.";
+				return false;
+			}
+
+			vulnerable = (bool)fireVulnerableToRainMethod.Invoke(fire, null);
+			return true;
+		}
+
+		static bool TrySampleRainVulnerability(Fire fire, int samples, int seed, out int trueCount, out int falseCount, out string error)
+		{
+			trueCount = 0;
+			falseCount = 0;
+			error = null;
+
+			Rand.PushState(seed);
+			try
+			{
+				for (var i = 0; i < samples; i++)
+				{
+					if (TryVulnerableToRain(fire, out var vulnerable, out error) == false)
+						return false;
+					if (vulnerable)
+						trueCount++;
+					else
+						falseCount++;
+				}
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
 			return true;
 		}
 
@@ -3099,6 +3146,141 @@ namespace ZombieLand
 				expectedIncludingZombie,
 				tolerance
 			};
+		}
+
+		[Tool("zombieland/zombie_fire_rain_vulnerability_contract", Description = "Verify zombiesBurnLonger lets attached zombie fires sometimes ignore rain while human fires remain vanilla.")]
+		public static object ZombieFireRainVulnerabilityContract(
+			[ToolParameter(Description = "Deterministic Rand seed used for the enabled zombie-fire sample.", Required = false, DefaultValue = 737373)] int seed = 737373,
+			[ToolParameter(Description = "Number of Fire.VulnerableToRain samples to take while zombiesBurnLonger is enabled.", Required = false, DefaultValue = 100)] int samples = 100)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var cappedSamples = Math.Max(20, Math.Min(samples, 500));
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var fixtureCells = GenRadial.RadialCellsAround(root, 24f, true)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => map.roofGrid.RoofAt(cell) == null)
+				.Where(cell => cell.GetThingList(map).Any(thing => thing is Pawn) == false)
+				.Take(2)
+				.ToArray();
+			if (fixtureCells.Length < 2)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find two clear unroofed fixture cells for rain-vulnerability sampling."
+				};
+			}
+
+			var humanCell = fixtureCells[0];
+			var zombieCell = fixtureCells[1];
+			foreach (var cell in fixtureCells)
+			{
+				ClearGasAt(map, cell);
+				foreach (var fire in cell.GetThingList(map).OfType<Fire>().ToArray())
+					fire.Destroy();
+			}
+
+			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+			DisablePawnWork(human);
+			FireUtility.TryAttachFire(human, 1f, null);
+			var humanFire = human.GetAttachment(ThingDefOf.Fire) as Fire;
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			FireUtility.TryAttachFire(zombie, 1f, null);
+			var zombieFire = zombie?.GetAttachment(ThingDefOf.Fire) as Fire;
+			if (humanFire == null || zombieFire == null)
+			{
+				return new
+				{
+					success = false,
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					humanFire = ZombieRuntimeActions.StableThingId(humanFire),
+					zombieFire = ZombieRuntimeActions.StableThingId(zombieFire),
+					error = "Could not attach both human and zombie fires."
+				};
+			}
+
+			var originalBurnLonger = ZombieSettings.Values.zombiesBurnLonger;
+			try
+			{
+				ZombieSettings.Values.zombiesBurnLonger = true;
+				if (TrySampleRainVulnerability(humanFire, cappedSamples, seed + 1, out var humanTrueEnabled, out var humanFalseEnabled, out var humanError) == false)
+				{
+					return new
+					{
+						success = false,
+						human = DescribePawn(human),
+						humanFire = ZombieRuntimeActions.StableThingId(humanFire),
+						error = humanError
+					};
+				}
+				if (TrySampleRainVulnerability(zombieFire, cappedSamples, seed, out var zombieTrueEnabled, out var zombieFalseEnabled, out var zombieError) == false)
+				{
+					return new
+					{
+						success = false,
+						zombie = DescribeZombie(zombie),
+						zombieFire = ZombieRuntimeActions.StableThingId(zombieFire),
+						error = zombieError
+					};
+				}
+
+				ZombieSettings.Values.zombiesBurnLonger = false;
+				if (TrySampleRainVulnerability(zombieFire, cappedSamples, seed + 2, out var zombieTrueDisabled, out var zombieFalseDisabled, out var disabledError) == false)
+				{
+					return new
+					{
+						success = false,
+						zombie = DescribeZombie(zombie),
+						zombieFire = ZombieRuntimeActions.StableThingId(zombieFire),
+						error = disabledError
+					};
+				}
+
+				var humanVanilla = humanTrueEnabled == cappedSamples && humanFalseEnabled == 0;
+				var zombieSometimesProtected = zombieTrueEnabled > 0 && zombieFalseEnabled > 0;
+				var zombieVanillaWhenDisabled = zombieTrueDisabled == cappedSamples && zombieFalseDisabled == 0;
+				return new
+				{
+					success = humanVanilla && zombieSometimesProtected && zombieVanillaWhenDisabled,
+					seed,
+					samples = cappedSamples,
+					humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					human = DescribePawn(human),
+					zombie = DescribeZombie(zombie),
+					humanFire = ZombieRuntimeActions.StableThingId(humanFire),
+					zombieFire = ZombieRuntimeActions.StableThingId(zombieFire),
+					humanVanilla,
+					zombieSometimesProtected,
+					zombieVanillaWhenDisabled,
+					humanTrueEnabled,
+					humanFalseEnabled,
+					zombieTrueEnabled,
+					zombieFalseEnabled,
+					zombieTrueDisabled,
+					zombieFalseDisabled,
+					originalBurnLonger,
+					restoredBurnLonger = originalBurnLonger
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.zombiesBurnLonger = originalBurnLonger;
+			}
 		}
 
 		[Tool("zombieland/zombie_damage_log_association_suppression", Description = "Verify RimWorld DamageResult combat-log association fills human hediff logs but skips all Zombieland pawn types.")]
