@@ -353,11 +353,30 @@ namespace ZombieLand
 				pawn = CurrentZombies(map).OfType<Zombie>().FirstOrDefault(zombie => zombie.IsSuicideBomber);
 				if (pawn == null)
 				{
-					return new
+					var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+					if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var spawnError) == false)
+						return spawnError;
+
+					pawn = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.SuicideBomber, true);
+					if (pawn == null)
 					{
-						success = false,
-						error = "No spawned suicide bomber was found."
-					};
+						return new
+						{
+							success = false,
+							cell = ZombieRuntimeActions.DescribeCell(cell),
+							error = "ZombieGenerator.SpawnZombie returned no suicide bomber."
+						};
+					}
+
+					if (pawn is not Zombie spawnedZombie || spawnedZombie.IsSuicideBomber == false)
+					{
+						return new
+						{
+							success = false,
+							target = DescribeZombie(pawn),
+							error = "Freshly spawned suicide bomber target was not a suicide bomber."
+						};
+					}
 				}
 			}
 			else if (TryFindZombie(map, target, out pawn, out error) == false)
