@@ -6539,6 +6539,90 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/active_electrifier_bullet_absorption_contract", Description = "Verify active electrifiers absorb ordinary bullets while disabled electrifiers still take normal zombie injury.")]
+		public static object ActiveElectrifierBulletAbsorptionContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var activeCell, out var activeSpawnError) == false)
+				return activeSpawnError;
+			if (TryFindClearSpawnCell(map, activeCell + new IntVec3(4, 0, 0), 10f, out var disabledCell, out var disabledSpawnError) == false)
+				return disabledSpawnError;
+
+			var active = ZombieRuntimeActions.SpawnZombie(activeCell, map, ZombieType.Electrifier, true);
+			var disabled = ZombieRuntimeActions.SpawnZombie(disabledCell, map, ZombieType.Electrifier, true);
+			if (active == null || disabled == null)
+			{
+				return new
+				{
+					success = false,
+					active = DescribeZombie(active),
+					disabled = DescribeZombie(disabled),
+					error = "ZombieGenerator.SpawnZombie returned no active or disabled electrifier test zombie."
+				};
+			}
+
+			NormalizeFireDamagePawn(active);
+			NormalizeFireDamagePawn(disabled);
+			active.electricDisabledUntil = GenTicks.TicksGame - 1;
+			disabled.electricDisabledUntil = GenTicks.TicksGame + GenDate.TicksPerHour;
+			active.absorbAttack.Clear();
+			disabled.absorbAttack.Clear();
+
+			var activeInjuryBefore = TotalInjurySeverity(active);
+			var disabledInjuryBefore = TotalInjurySeverity(disabled);
+			var activeAbsorbBefore = active.absorbAttack.Count;
+			var disabledAbsorbBefore = disabled.absorbAttack.Count;
+			var activeWasElectric = active.IsActiveElectric;
+			var disabledWasElectric = disabled.IsActiveElectric;
+
+			var activeDamage = active.TakeDamage(new DamageInfo(DamageDefOf.Bullet, 20f, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true));
+			var disabledDamage = disabled.TakeDamage(new DamageInfo(DamageDefOf.Bullet, 20f, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true));
+
+			var activeInjuryAfter = TotalInjurySeverity(active);
+			var disabledInjuryAfter = TotalInjurySeverity(disabled);
+			var activeAbsorbAfter = active.absorbAttack.Count;
+			var disabledAbsorbAfter = disabled.absorbAttack.Count;
+			var activeInjuryDelta = activeInjuryAfter - activeInjuryBefore;
+			var disabledInjuryDelta = disabledInjuryAfter - disabledInjuryBefore;
+			var activeAbsorbed = activeInjuryDelta <= 0f && activeDamage.totalDamageDealt <= 0f && activeAbsorbAfter > activeAbsorbBefore;
+			var disabledDamaged = disabledInjuryDelta > 0f && disabledDamage.totalDamageDealt > 0f && disabledAbsorbAfter == disabledAbsorbBefore;
+
+			return new
+			{
+				success = activeWasElectric && disabledWasElectric == false && activeAbsorbed && disabledDamaged,
+				destroyedZombies,
+				active = DescribeZombie(active),
+				disabled = DescribeZombie(disabled),
+				activeWasElectric,
+				disabledWasElectric,
+				activeDamageTotal = activeDamage.totalDamageDealt,
+				disabledDamageTotal = disabledDamage.totalDamageDealt,
+				activeInjuryBefore,
+				activeInjuryAfter,
+				activeInjuryDelta,
+				disabledInjuryBefore,
+				disabledInjuryAfter,
+				disabledInjuryDelta,
+				activeAbsorbBefore,
+				activeAbsorbAfter,
+				disabledAbsorbBefore,
+				disabledAbsorbAfter,
+				activeAbsorbed,
+				disabledDamaged
+			};
+		}
+
 		[Tool("zombieland/zap_zombies_with_shocker", Description = "Build a powered zombie shocker room, run the real ZapZombies job, and verify a zombie in the room is paralyzed.")]
 		public static object ZapZombiesWithShocker()
 		{
