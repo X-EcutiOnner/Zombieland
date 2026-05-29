@@ -1798,6 +1798,73 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/brainz_thought_bubble_contract", Description = "Verify the BRRAINZ zombie thought bubble spawns the custom ZombieThought mote with the expected icon material.")]
+		public static object BrainzThoughtBubbleContract()
+		{
+			if (TryFindSpawnCell(-1, -1, out var map, out var cell, out var spawnError) == false)
+				return spawnError;
+
+			var realtimeMotes = RealTime.moteList?.allMotes ?? new List<Mote>();
+			var existingThoughts = realtimeMotes
+				.Where(thing => thing.def == CustomDefs.ZombieThought)
+				.Select(thing => thing.ThingID)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+			Zombie zombie = null;
+			MoteBubble[] spawnedThoughts = Array.Empty<MoteBubble>();
+			try
+			{
+				zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						error = "ZombieGenerator.SpawnZombie returned no thought-bubble test zombie."
+					};
+				}
+
+				ZombieStateHandler.CastBrainzThought(zombie);
+				spawnedThoughts = realtimeMotes
+					.OfType<MoteBubble>()
+					.Where(mote => mote.def == CustomDefs.ZombieThought && existingThoughts.Contains(mote.ThingID) == false)
+					.ToArray();
+				var thought = spawnedThoughts
+					.OrderBy(mote => mote.Position.DistanceToSquared(zombie.Position))
+					.FirstOrDefault();
+
+				var thoughtPosition = thought?.Position ?? IntVec3.Invalid;
+				var success = thought != null
+					&& thought.Spawned
+					&& thought.Map == map
+					&& thoughtPosition == zombie.Position
+					&& thought.iconMat == Constants.BRRAINZ;
+
+				return new
+				{
+					success,
+					zombie = DescribeZombie(zombie),
+					thoughtCountBefore = existingThoughts.Count,
+					spawnedThoughtCount = spawnedThoughts.Length,
+					thoughtThingId = thought?.ThingID,
+					thoughtSpawned = thought?.Spawned ?? false,
+					thoughtPosition = thoughtPosition.IsValid ? ZombieRuntimeActions.DescribeCell(thoughtPosition) : null,
+					expectedPosition = ZombieRuntimeActions.DescribeCell(zombie.Position),
+					iconMaterial = thought?.iconMat?.name,
+					expectedMaterial = Constants.BRRAINZ.name
+				};
+			}
+			finally
+			{
+				foreach (var thought in spawnedThoughts)
+					if (thought.Destroyed == false)
+						thought.Destroy(DestroyMode.Vanish);
+				if (zombie != null && zombie.Destroyed == false)
+					zombie.Destroy(DestroyMode.Vanish);
+			}
+		}
+
 		[Tool("zombieland/spawn_zombie", Description = "Spawn one Zombieland zombie near a map cell for runtime smoke tests.")]
 		public static object SpawnZombie(
 			[ToolParameter(Description = "Target x coordinate. Use -1 with z -1 to spawn near map center.", Required = false, DefaultValue = -1)] int x = -1,
