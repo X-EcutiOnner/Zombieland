@@ -18,7 +18,12 @@ fi
 mkdir -p "$LOG_DIR"
 rm -rf "$PROJECT_TMP"
 rm -rf "$EXPORT_RESOURCES_TMP"
-ditto "$PROJECT_SRC" "$PROJECT_TMP"
+mkdir -p "$PROJECT_TMP"
+for dir in Assets ProjectSettings Packages; do
+  if [[ -d "$PROJECT_SRC/$dir" ]]; then
+    ditto "$PROJECT_SRC/$dir" "$PROJECT_TMP/$dir"
+  fi
+done
 mkdir -p "$EXPORT_RESOURCES_TMP"
 
 ZOMBIELAND_RESOURCES_DIR="$EXPORT_RESOURCES_TMP" "$UNITY" \
