@@ -55,6 +55,33 @@ public class CreateAssetBundles
 		}
 	}
 
+	public static void InspectDeployedAssetBundles()
+	{
+		foreach (var arch in Architectures)
+		{
+			var path = Path.Combine(DeploymentDir(), arch, "zombieland");
+			var bundle = AssetBundle.LoadFromFile(path);
+			if (bundle == null)
+			{
+				Debug.LogError($"Could not load asset bundle {path}");
+				continue;
+			}
+
+			Debug.Log($"Zombieland bundle inspect {arch}: path={path}");
+			foreach (var name in bundle.GetAllAssetNames())
+			{
+				var asset = bundle.LoadAsset<UnityEngine.Object>(name);
+				Debug.Log($"Zombieland bundle inspect {arch}: asset={name}, type={asset?.GetType().FullName ?? "null"}, name={asset?.name ?? "null"}");
+				if (asset is Material material)
+					Debug.Log($"Zombieland bundle inspect {arch}: material={name}, shader={material.shader?.name ?? "null"}");
+				if (asset is GameObject gameObject)
+					LogGameObject(arch, name, gameObject);
+			}
+
+			bundle.Unload(false);
+		}
+	}
+
 	public static void ValidateDeployedAssetBundles()
 	{
 		foreach (var arch in Architectures)
@@ -93,6 +120,22 @@ public class CreateAssetBundles
 		if (asset == null)
 			throw new Exception($"Zombieland bundle {arch} could not load {assetName} as {typeof(T).Name}");
 		return asset;
+	}
+
+	static void LogGameObject(string arch, string assetName, GameObject gameObject)
+	{
+		foreach (var component in gameObject.GetComponentsInChildren<Component>(true))
+		{
+			if (component == null)
+				continue;
+
+			Debug.Log($"Zombieland bundle inspect {arch}: gameObject={assetName}, component={component.GetType().FullName}, object={component.gameObject.name}");
+			if (component is ParticleSystemRenderer renderer)
+			{
+				var material = renderer.sharedMaterial;
+				Debug.Log($"Zombieland bundle inspect {arch}: particleRenderer={component.gameObject.name}, renderMode={renderer.renderMode}, material={material?.name ?? "null"}, shader={material?.shader?.name ?? "null"}");
+			}
+		}
 	}
 
 	static void Build(string arch, BuildTarget target)
