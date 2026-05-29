@@ -3671,6 +3671,120 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/tar_smoke_blocks_ranged_targeting", Description = "Verify real TarSmoke from damaging a dark slimer blocks a real ranged verb from targeting that zombie.")]
+		public static object TarSmokeBlocksRangedTargeting()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var targetCell = GenRadial.RadialCellsAround(actorCell, 12f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.DistanceTo(actorCell) >= 7f)
+				.Where(cell => GenSight.LineOfSight(actorCell, cell, map, true))
+				.OrderBy(cell => cell.DistanceToSquared(actorCell))
+				.FirstOrDefault();
+			if (targetCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					error = "No clear line-of-sight target cell was found for the TarSmoke targeting fixture."
+				};
+			}
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+			actor.workSettings?.DisableAll();
+			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
+				?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false);
+			var weapon = weaponDef == null ? null : ThingMaker.MakeThing(weaponDef) as ThingWithComps;
+			if (weapon == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "No test ranged weapon def was available."
+				};
+			}
+			actor.equipment.AddEquipment(weapon);
+			actor.drafter.Drafted = true;
+
+			var darkSlimer = ZombieRuntimeActions.SpawnZombie(targetCell, map, ZombieType.DarkSlimer, true);
+			if (darkSlimer == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					error = "ZombieGenerator.SpawnZombie returned no dark slimer."
+				};
+			}
+
+			var verb = actor.equipment?.PrimaryEq?.PrimaryVerb;
+			if (verb == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					weaponDef = weaponDef.defName,
+					error = "The equipped ranged weapon had no primary verb."
+				};
+			}
+
+			var canHitBeforeSmoke = verb.CanHitTargetFrom(actor.Position, darkSlimer);
+			var gasAtTargetBefore = darkSlimer.Position.GetGas(map)?.def?.defName;
+			var tarSmokeThingsBefore = CountThingsNear(map, darkSlimer.Position, CustomDefs.TarSmoke, 3f);
+			var damageResult = darkSlimer.TakeDamage(new DamageInfo(DamageDefOf.Bullet, 1, 0f, -1f, actor, null, weaponDef, DamageInfo.SourceCategory.ThingOrUnknown, darkSlimer, true, true));
+			AdvanceGameTicks(5);
+			var gasAtTargetAfter = darkSlimer.Position.GetGas(map)?.def?.defName;
+			var tarSmokeThingsAfter = CountThingsNear(map, darkSlimer.Position, CustomDefs.TarSmoke, 3f);
+			var canHitAfterSmoke = verb.CanHitTargetFrom(actor.Position, darkSlimer);
+
+			return new
+			{
+				success = canHitBeforeSmoke
+					&& gasAtTargetBefore == null
+					&& gasAtTargetAfter == CustomDefs.TarSmoke.defName
+					&& tarSmokeThingsAfter > tarSmokeThingsBefore
+					&& canHitAfterSmoke == false,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				darkSlimer = DescribeZombie(darkSlimer),
+				weaponDef = weaponDef.defName,
+				verbLabel = verb.verbProps?.label,
+				actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+				targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+				canHitBeforeSmoke,
+				canHitAfterSmoke,
+				gasAtTargetBefore,
+				gasAtTargetAfter,
+				tarSmokeThingsBefore,
+				tarSmokeThingsAfter,
+				tarSmokeDelta = tarSmokeThingsAfter - tarSmokeThingsBefore,
+				damageTotal = damageResult.totalDamageDealt
+			};
+		}
+
 		[Tool("zombieland/mine_with_miner", Description = "Place a mineable block next to a miner zombie and verify Zombieland's mining code damages it.")]
 		public static object MineWithMiner(
 			[ToolParameter(Description = "Optional miner zombie id, ThingID, label, or short name. When omitted, a fresh miner is spawned near map center.", Required = false, DefaultValue = "")] string target = "")
