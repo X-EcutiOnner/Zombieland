@@ -5647,6 +5647,157 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_clear_pollution_contract", Description = "Verify real JobDriver_ClearPollution transfers contaminated polluted ground into the worker and spawned wastepack.")]
+		public static object ContaminationClearPollutionContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+			if (ThingDefOf.Wastepack == null || JobDefOf.ClearPollution == null)
+			{
+				return new
+				{
+					success = true,
+					skipped = true,
+					reason = "Wastepack or ClearPollution is unavailable in the active RimWorld configuration."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var pollutionCell, out var pollutionCellError) == false)
+				return pollutionCellError;
+			if (TryFindClearSpawnCell(map, pollutionCell + IntVec3.East, 8f, out var workerCell, out var workerCellError) == false)
+				return workerCellError;
+
+			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var oldGroundContamination = map.GetContamination(pollutionCell);
+			var oldPolluted = pollutionCell.IsPolluted(map);
+			var oldPollutionClear = map.areaManager.PollutionClear[pollutionCell];
+			var wastepacks = new List<Thing>();
+			try
+			{
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+				DisablePawnWork(worker);
+				worker.ClearContamination();
+				worker.jobs?.StopAll(false, true);
+				worker.pather?.StopDead();
+
+				const float groundContaminationBefore = 0.66f;
+				pollutionCell.Pollute(map, true);
+				map.areaManager.PollutionClear[pollutionCell] = true;
+				map.SetContamination(pollutionCell, groundContaminationBefore);
+
+				var existingWastepacks = map.listerThings.ThingsOfDef(ThingDefOf.Wastepack).ToHashSet();
+				var workerBefore = worker.GetContamination(false);
+				var groundBefore = map.GetContamination(pollutionCell);
+				var pollutedBefore = pollutionCell.IsPolluted(map);
+				var pollutionAdd = ZombieSettings.Values.contamination.pollutionAdd;
+				var wastePackAdd = ZombieSettings.Values.contamination.wastePackAdd;
+				var expectedWorkerAfter = groundBefore * pollutionAdd;
+				var laborSpeed = worker.GetStatValue(StatDefOf.GeneralLaborSpeed);
+				var sourceDerivedLaborTicks = Mathf.CeilToInt(5600f / laborSpeed);
+				var maxGameTicks = Mathf.CeilToInt(sourceDerivedLaborTicks / 60f) + 20;
+
+				var job = JobMaker.MakeJob(JobDefOf.ClearPollution, pollutionCell);
+				var jobDefAtCreation = job.def.defName;
+				job.playerForced = true;
+				worker.jobs.StartJob(job, JobCondition.InterruptForced, null, false, true);
+
+				var ticksRun = 0;
+				while (ticksRun < maxGameTicks && pollutionCell.IsPolluted(map))
+				{
+					AdvanceGameTicks(1);
+					ticksRun++;
+				}
+
+				wastepacks = map.listerThings.ThingsOfDef(ThingDefOf.Wastepack)
+					.Where(thing => existingWastepacks.Contains(thing) == false)
+					.ToList();
+				var wastepack = wastepacks.FirstOrDefault();
+				var workerAfter = worker.GetContamination(false);
+				var pollutedAfter = pollutionCell.IsPolluted(map);
+				var groundAfter = map.GetContamination(pollutionCell);
+				var wastepackGround = wastepack == null ? -1f : map.GetContamination(wastepack.Position);
+				var wastepackContamination = wastepack?.GetContamination() ?? -1f;
+				var expectedWastepackContamination = wastepack == null ? -1f : wastepackGround * wastePackAdd;
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var pollutionCleared = pollutedBefore && pollutedAfter == false;
+				var workerContaminated = pollutionCleared
+					&& CloseFloat(workerBefore, 0f)
+					&& CloseFloat(workerAfter, expectedWorkerAfter);
+				var wastepackContaminated = wastepacks.Count == 1
+					&& wastepack.Spawned
+					&& CloseFloat(wastepackContamination, expectedWastepackContamination);
+
+				return new
+				{
+					success = pollutionCleared && workerContaminated && wastepackContaminated,
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					pollutionCell = ZombieRuntimeActions.DescribeCell(pollutionCell),
+					jobDefAtCreation,
+					finalJob = worker.CurJobDef?.defName,
+					laborSpeed,
+					sourceDerivedLaborTicks,
+					maxGameTicks,
+					ticksRun,
+					pollutionAdd,
+					wastePackAdd,
+					workerBefore,
+					workerAfter,
+					expectedWorkerAfter,
+					pollutedBefore,
+					pollutedAfter,
+					groundBefore,
+					groundAfter,
+					wastepackCount = wastepacks.Count,
+					wastepack = ZombieRuntimeActions.StableThingId(wastepack),
+					wastepackCell = wastepack == null ? null : ZombieRuntimeActions.DescribeCell(wastepack.Position),
+					wastepackGround,
+					wastepackContamination,
+					expectedWastepackContamination,
+					pollutionCleared,
+					workerContaminated,
+					wastepackContaminated
+				};
+			}
+			finally
+			{
+				worker?.ClearContamination();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+				foreach (var wastepack in wastepacks)
+				{
+					wastepack.ClearContamination();
+					if (wastepack is { Destroyed: false, Spawned: true })
+						wastepack.Destroy();
+				}
+				if (pollutionCell.IsValid && pollutionCell.InBounds(map))
+				{
+					map.areaManager.PollutionClear[pollutionCell] = oldPollutionClear;
+					if (oldPolluted)
+						pollutionCell.Pollute(map, true);
+					else if (pollutionCell.IsPolluted(map))
+						pollutionCell.Unpollute(map);
+					map.SetContamination(pollutionCell, oldGroundContamination);
+				}
+			}
+		}
+
 		[Tool("zombieland/contamination_recipe_product_contract", Description = "Verify contamination transfers from spawned recipe ingredients into unspawned recipe products.")]
 		public static object ContaminationRecipeProductContract()
 		{
