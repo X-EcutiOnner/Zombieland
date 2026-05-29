@@ -5536,6 +5536,116 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_clear_snow_contract", Description = "Verify real JobDriver_ClearSnowAndSand transfers contaminated snow-cell ground into the worker when snow is cleared.")]
+		public static object ContaminationClearSnowContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var snowCell, out var snowCellError) == false)
+				return snowCellError;
+			if (TryFindClearSpawnCell(map, snowCell + IntVec3.East, 8f, out var workerCell, out var workerCellError) == false)
+				return workerCellError;
+
+			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var oldGroundContamination = map.GetContamination(snowCell);
+			var oldSnowDepth = map.snowGrid.GetDepth(snowCell);
+			try
+			{
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+				DisablePawnWork(worker);
+				worker.ClearContamination();
+				worker.jobs?.StopAll(false, true);
+				worker.pather?.StopDead();
+
+				const float snowDepthBefore = 1f;
+				const float groundContaminationBefore = 0.72f;
+				map.snowGrid.SetDepth(snowCell, snowDepthBefore);
+				map.SetContamination(snowCell, groundContaminationBefore);
+
+				var workerBefore = worker.GetContamination(false);
+				var snowBefore = map.snowGrid.GetDepth(snowCell);
+				var groundBefore = map.GetContamination(snowCell);
+				var snowAdd = ZombieSettings.Values.contamination.snowAdd;
+				var expectedWorkerAfter = groundBefore * snowAdd;
+				var laborSpeed = worker.GetStatValue(StatDefOf.GeneralLaborSpeed);
+				var sourceDerivedWorkTicks = Mathf.CeilToInt(50f * snowBefore / laborSpeed);
+				var maxTicks = sourceDerivedWorkTicks + 10;
+
+				var job = JobMaker.MakeJob(JobDefOf.ClearSnow, snowCell);
+				job.playerForced = true;
+				worker.jobs.StartJob(job, JobCondition.InterruptForced, null, false, true);
+
+				var ticksRun = 0;
+				while (ticksRun < maxTicks && map.snowGrid.GetDepth(snowCell) > 0f)
+				{
+					AdvanceGameTicks(1);
+					ticksRun++;
+				}
+
+				var workerAfter = worker.GetContamination(false);
+				var snowAfter = map.snowGrid.GetDepth(snowCell);
+				var groundAfter = map.GetContamination(snowCell);
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var snowCleared = snowBefore > 0f && CloseFloat(snowAfter, 0f);
+				var contaminationTransferred = snowCleared
+					&& CloseFloat(workerBefore, 0f)
+					&& CloseFloat(groundBefore, groundContaminationBefore)
+					&& CloseFloat(workerAfter, expectedWorkerAfter);
+
+				return new
+				{
+					success = snowCleared && contaminationTransferred,
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					snowCell = ZombieRuntimeActions.DescribeCell(snowCell),
+					jobDef = job.def.defName,
+					finalJob = worker.CurJobDef?.defName,
+					laborSpeed,
+					sourceDerivedWorkTicks,
+					maxTicks,
+					ticksRun,
+					snowAdd,
+					workerBefore,
+					workerAfter,
+					expectedWorkerAfter,
+					snowBefore,
+					snowAfter,
+					groundBefore,
+					groundAfter,
+					snowCleared,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				worker?.ClearContamination();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+				if (snowCell.IsValid && snowCell.InBounds(map))
+				{
+					map.snowGrid.SetDepth(snowCell, oldSnowDepth);
+					map.SetContamination(snowCell, oldGroundContamination);
+				}
+			}
+		}
+
 		[Tool("zombieland/contamination_recipe_product_contract", Description = "Verify contamination transfers from spawned recipe ingredients into unspawned recipe products.")]
 		public static object ContaminationRecipeProductContract()
 		{
