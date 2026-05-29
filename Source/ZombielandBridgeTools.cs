@@ -7407,6 +7407,215 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_plant_sow_contract", Description = "Sow a plant through the real PlantSow job and verify ground contamination plus sowing-pawn equalization reach the new plant.")]
+		public static object ContaminationPlantSowContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var plantDef = DefDatabase<ThingDef>.GetNamedSilentFail("Plant_Rice");
+			var sowJobDef = DefDatabase<JobDef>.GetNamedSilentFail("Sow");
+			if (plantDef == null || sowJobDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Plant_Rice or JobDef Sow is unavailable."
+				};
+			}
+
+			bool TryFindSowCell(IntVec3 root, float radius, out IntVec3 cell, out object error)
+			{
+				cell = IntVec3.Invalid;
+				error = null;
+				foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+				{
+					if (candidate.InBounds(map) == false)
+						continue;
+					if (candidate.Fogged(map))
+						continue;
+					if (candidate.GetEdifice(map) != null)
+						continue;
+					if (candidate.GetThingList(map).Any(thing =>
+						thing is Pawn
+						|| thing is Blueprint
+						|| thing is Frame
+						|| thing.def.category == ThingCategory.Plant
+						|| thing.def.category == ThingCategory.Building))
+						continue;
+
+					cell = candidate;
+					return true;
+				}
+
+				error = new
+				{
+					success = false,
+					error = $"No clear sow fixture cell was found near ({root.x}, {root.z})."
+				};
+				return false;
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindSowCell(root, 24f, out var sowCell, out var sowCellError) == false)
+				return sowCellError;
+			if (TryFindClearSpawnCell(map, sowCell + IntVec3.East, 8f, out var workerCell, out var workerCellError) == false)
+				return workerCellError;
+
+			var oldTerrain = map.terrainGrid.TerrainAt(sowCell);
+			var oldFoundation = map.terrainGrid.FoundationAt(sowCell);
+			var oldTempTerrain = map.terrainGrid.TempTerrainAt(sowCell);
+			var oldGroundContamination = map.GetContamination(sowCell);
+			var worker = (Pawn)null;
+			var plant = (Plant)null;
+			try
+			{
+				map.terrainGrid.SetTerrain(sowCell, TerrainDefOf.Soil);
+				map.terrainGrid.RemoveTempTerrain(sowCell);
+				if (map.terrainGrid.FoundationAt(sowCell) != null)
+					map.terrainGrid.RemoveFoundation(sowCell, false);
+				map.mapDrawer.MapMeshDirty(sowCell, MapMeshFlagDefOf.Terrain);
+
+				worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(worker, workerCell, map, WipeMode.Vanish);
+				DisablePawnWork(worker);
+				worker.skills?.GetSkill(SkillDefOf.Plants).Notify_SkillDisablesChanged();
+				worker.skills.GetSkill(SkillDefOf.Plants).Level = 20;
+
+				const float groundContaminationBefore = 0.50f;
+				const float workerContaminationBefore = 0.80f;
+				map.SetContamination(sowCell, groundContaminationBefore);
+				worker.SetContamination(workerContaminationBefore);
+
+				var canPlantBefore = plantDef.CanNowPlantAt(sowCell, map);
+				var job = JobMaker.MakeJob(sowJobDef, sowCell);
+				job.plantDefToSow = plantDef;
+				job.playerForced = true;
+				var started = worker.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
+				var workPerTick = worker.GetStatValue(StatDefOf.PlantWorkSpeed);
+				var sourceDerivedWorkTicks = Mathf.CeilToInt(plantDef.plant.sowWork / workPerTick);
+				var maxTicks = sourceDerivedWorkTicks + 60;
+				var tickHit = -1;
+				var samples = new List<object>();
+				var workerContaminationAfterSpawnEqualize = -1f;
+
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					plant = sowCell.GetPlant(map);
+					if (plant != null && workerContaminationAfterSpawnEqualize < 0)
+						workerContaminationAfterSpawnEqualize = worker.GetContamination(false);
+					var finished = plant != null && plant.def == plantDef && plant.Growth > 0f;
+					if (tick == 1 || tick == sourceDerivedWorkTicks || tick == maxTicks || finished)
+					{
+						samples.Add(new
+						{
+							tick,
+							workerJob = worker.CurJobDef?.defName,
+							plantSpawned = plant?.Spawned ?? false,
+							plantGrowth = plant?.Growth ?? -1f,
+							plantContamination = plant?.GetContamination() ?? -1f,
+							workerContamination = worker.GetContamination(false)
+						});
+					}
+					if (finished)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var groundAdd = groundContaminationBefore * ZombieSettings.Values.contamination.sowedPlantAdd;
+				var equalizeWeight = ZombieSettings.Values.contamination.sowingPawnEqualize;
+				var high = workerContaminationBefore;
+				var low = groundAdd;
+				if (high < low)
+					(high, low) = (low, high);
+				var expectedHighAfter = high * (1f - equalizeWeight) + low * equalizeWeight;
+				var expectedLowAfter = high * equalizeWeight + low * (1f - equalizeWeight);
+				var expectedWorkerContamination = workerContaminationBefore >= groundAdd ? expectedHighAfter : expectedLowAfter;
+				var expectedPlantContamination = workerContaminationBefore >= groundAdd ? expectedLowAfter : expectedHighAfter;
+				var plantContamination = plant?.GetContamination() ?? -1f;
+				var workerContamination = worker.GetContamination(false);
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+				return new
+				{
+					success = canPlantBefore
+						&& started
+						&& tickHit > 0
+						&& plant != null
+						&& plant.def == plantDef
+						&& plant.sown
+						&& plant.Growth > 0f
+						&& CloseFloat(plantContamination, expectedPlantContamination)
+						&& CloseFloat(workerContaminationAfterSpawnEqualize, expectedWorkerContamination),
+					worker = DescribePawn(worker),
+					cells = new
+					{
+						worker = ZombieRuntimeActions.DescribeCell(workerCell),
+						sow = ZombieRuntimeActions.DescribeCell(sowCell)
+					},
+					jobDef = sowJobDef.defName,
+					plantDef = plantDef.defName,
+					started,
+					canPlantBefore,
+					tickHit,
+					maxTicks,
+					sourceDerivedWorkTicks,
+					workPerTick,
+					sowWork = plantDef.plant.sowWork,
+					groundContaminationBefore,
+					workerContaminationBefore,
+					groundAdd,
+					sowedPlantAdd = ZombieSettings.Values.contamination.sowedPlantAdd,
+					sowingPawnEqualize = equalizeWeight,
+					plant = ZombieRuntimeActions.StableThingId(plant),
+					plantGrowth = plant?.Growth ?? -1f,
+					plantSown = plant?.sown ?? false,
+					plantContamination,
+					expectedPlantContamination,
+					workerContamination,
+					expectedWorkerContamination,
+					workerContaminationAfterSpawnEqualize,
+					samples
+				};
+			}
+			finally
+			{
+				plant?.ClearContamination();
+				if (plant is { Destroyed: false, Spawned: true })
+					plant.Destroy();
+				worker?.ClearContamination();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+				map.SetContamination(sowCell, oldGroundContamination);
+				if (map.terrainGrid.FoundationAt(sowCell) != null)
+					map.terrainGrid.RemoveFoundation(sowCell, false);
+				map.terrainGrid.SetTerrain(sowCell, oldTerrain);
+				if (oldFoundation != null)
+					map.terrainGrid.SetFoundation(sowCell, oldFoundation);
+				if (oldTempTerrain != null)
+					map.terrainGrid.SetTempTerrain(sowCell, oldTempTerrain);
+				map.mapDrawer.MapMeshDirty(sowCell, MapMeshFlagDefOf.Terrain);
+			}
+		}
+
 		[Tool("zombieland/contamination_roof_collapse_contract", Description = "Verify contaminated ground transfers into collapsed roof rock through real RoofCollapserImmediate.DropRoofInCellPhaseOne.")]
 		public static object ContaminationRoofCollapseContract()
 		{
