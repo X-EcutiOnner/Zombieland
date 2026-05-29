@@ -7760,6 +7760,125 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_ambrosia_sprout_contract", Description = "Run the real AmbrosiaSprout incident and verify contaminated ground transfers to spawned ambrosia.")]
+		public static object ContaminationAmbrosiaSproutContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var incidentDef = DefDatabase<IncidentDef>.AllDefs
+				.FirstOrDefault(def => def.workerClass == typeof(IncidentWorker_AmbrosiaSprout));
+			var worker = incidentDef?.Worker as IncidentWorker_AmbrosiaSprout;
+			var canSpawnAtMethod = typeof(IncidentWorker_AmbrosiaSprout).GetMethod("CanSpawnAt", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (incidentDef == null || worker == null || canSpawnAtMethod == null)
+			{
+				return new
+				{
+					success = false,
+					error = "AmbrosiaSprout incident worker or CanSpawnAt method is unavailable."
+				};
+			}
+
+			bool CanSpawnAt(IntVec3 cell) => (bool)canSpawnAtMethod.Invoke(worker, new object[] { cell, map });
+
+			var validCells = map.AllCells.Where(CanSpawnAt).ToList();
+			if (validCells.Count == 0)
+			{
+				return new
+				{
+					success = true,
+					skipped = true,
+					reason = "No valid AmbrosiaSprout cells are available on the current map/date.",
+					incidentDef = incidentDef.defName
+				};
+			}
+
+			const float groundContamination = 0.68f;
+			var oldContamination = validCells.ToDictionary(cell => cell, cell => map.GetContamination(cell));
+			var ambrosiaBefore = map.listerThings.ThingsOfDef(ThingDefOf.Plant_Ambrosia)
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			var spawnedAmbrosia = new List<Thing>();
+			try
+			{
+				foreach (var cell in validCells)
+					map.SetContamination(cell, groundContamination);
+
+				var parms = new IncidentParms
+				{
+					target = map
+				};
+				var executed = false;
+				Rand.PushState(68141);
+				try
+				{
+					executed = worker.TryExecute(parms);
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				spawnedAmbrosia = map.listerThings.ThingsOfDef(ThingDefOf.Plant_Ambrosia)
+					.Where(thing => ambrosiaBefore.Contains(ZombieRuntimeActions.StableThingId(thing)) == false)
+					.ToList();
+				var expectedContamination = groundContamination * ZombieSettings.Values.contamination.ambrosiaAdd;
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var contaminationSamples = spawnedAmbrosia
+					.Select(thing => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(thing),
+						cell = ZombieRuntimeActions.DescribeCell(thing.Position),
+						contamination = thing.GetContamination()
+					})
+					.ToList();
+				var allContaminated = spawnedAmbrosia.Count > 0
+					&& spawnedAmbrosia.All(thing => CloseFloat(thing.GetContamination(), expectedContamination));
+
+				return new
+				{
+					success = executed
+						&& spawnedAmbrosia.Count > 0
+						&& allContaminated,
+					incidentDef = incidentDef.defName,
+					executed,
+					validCellCount = validCells.Count,
+					spawnedCount = spawnedAmbrosia.Count,
+					groundContamination,
+					ambrosiaAdd = ZombieSettings.Values.contamination.ambrosiaAdd,
+					expectedContamination,
+					allContaminated,
+					contaminationSamples
+				};
+			}
+			finally
+			{
+				foreach (var thing in spawnedAmbrosia)
+				{
+					thing?.ClearContamination();
+					if (thing is { Destroyed: false, Spawned: true })
+						thing.Destroy();
+				}
+				foreach (var pair in oldContamination)
+					map.SetContamination(pair.Key, pair.Value);
+			}
+		}
+
 		[Tool("zombieland/contamination_roof_collapse_contract", Description = "Verify contaminated ground transfers into collapsed roof rock through real RoofCollapserImmediate.DropRoofInCellPhaseOne.")]
 		public static object ContaminationRoofCollapseContract()
 		{
