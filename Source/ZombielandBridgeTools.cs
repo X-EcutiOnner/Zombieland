@@ -303,6 +303,7 @@ namespace ZombieLand
 		static readonly MethodInfo fireDoFireDamageMethod = typeof(Fire).GetMethod("DoFireDamage", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Thing) }, null);
 		static readonly MethodInfo fireVulnerableToRainMethod = typeof(Fire).GetMethod("VulnerableToRain", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		static readonly MethodInfo fireWatcherUpdateObservationsMethod = typeof(FireWatcher).GetMethod("UpdateObservations", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+		static readonly MethodInfo meleeDamageInfosToApplyMethod = typeof(Verb_MeleeAttackDamage).GetMethod("DamageInfosToApply", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
 		static bool TryCostToMoveIntoCell(Pawn pawn, IntVec3 cell, out float cost, out string error)
 		{
@@ -358,6 +359,33 @@ namespace ZombieLand
 
 			vulnerable = (bool)fireVulnerableToRainMethod.Invoke(fire, null);
 			return true;
+		}
+
+		static bool TryMeleeDamageInfosToApply(Verb verb, LocalTargetInfo target, out DamageInfo[] damageInfos, out string error)
+		{
+			damageInfos = Array.Empty<DamageInfo>();
+			error = null;
+			if (meleeDamageInfosToApplyMethod == null)
+			{
+				error = "Could not find Verb_MeleeAttackDamage.DamageInfosToApply(LocalTargetInfo).";
+				return false;
+			}
+			if (verb is not Verb_MeleeAttackDamage)
+			{
+				error = $"Verb is not Verb_MeleeAttackDamage: {verb?.GetType().Name ?? "null"}.";
+				return false;
+			}
+
+			try
+			{
+				damageInfos = ((IEnumerable<DamageInfo>)meleeDamageInfosToApplyMethod.Invoke(verb, new object[] { target })).ToArray();
+				return true;
+			}
+			catch (TargetInvocationException ex)
+			{
+				error = ex.InnerException?.Message ?? ex.Message;
+				return false;
+			}
 		}
 
 		static bool TrySampleRainVulnerability(Fire fire, int samples, int seed, out int trueCount, out int falseCount, out string error)
@@ -616,6 +644,20 @@ namespace ZombieLand
 				damageIsRanged = damageDef?.isRanged,
 				canHarmElectric = verb.CanHarmElectricZombies()
 			};
+		}
+
+		static object[] DescribeDamageInfos(IEnumerable<DamageInfo> damageInfos)
+		{
+			return damageInfos
+				.Select(info => new
+				{
+					def = info.Def?.defName,
+					amount = info.Amount,
+					weapon = info.Weapon?.defName,
+					instigator = ZombieRuntimeActions.StableThingId(info.Instigator as Thing)
+				})
+				.Cast<object>()
+				.ToArray();
 		}
 
 		static object DescribeTankyArmor(Zombie zombie)
@@ -6620,6 +6662,143 @@ namespace ZombieLand
 				disabledAbsorbAfter,
 				activeAbsorbed,
 				disabledDamaged
+			};
+		}
+
+		[Tool("zombieland/active_electrifier_melee_shock_contract", Description = "Verify active electrifier melee hides zombie bite and converts a smokepop-belt hit into ElectricalShock.")]
+		public static object ActiveElectrifierMeleeShockContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var activeCell, out var activeSpawnError) == false)
+				return activeSpawnError;
+			if (TryFindClearSpawnCell(map, activeCell + new IntVec3(2, 0, 0), 8f, out var activeTargetCell, out var activeTargetError) == false)
+				return activeTargetError;
+			if (TryFindClearSpawnCell(map, activeCell + new IntVec3(5, 0, 0), 10f, out var disabledCell, out var disabledSpawnError) == false)
+				return disabledSpawnError;
+			if (TryFindClearSpawnCell(map, disabledCell + new IntVec3(2, 0, 0), 8f, out var disabledTargetCell, out var disabledTargetError) == false)
+				return disabledTargetError;
+
+			var apparelDef = DefDatabase<ThingDef>.GetNamed("Apparel_SmokepopBelt", false);
+			if (apparelDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "ThingDef Apparel_SmokepopBelt was not found."
+				};
+			}
+
+			var active = ZombieRuntimeActions.SpawnZombie(activeCell, map, ZombieType.Electrifier, true);
+			var disabled = ZombieRuntimeActions.SpawnZombie(disabledCell, map, ZombieType.Electrifier, true);
+			var activeTarget = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var disabledTarget = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(activeTarget, activeTargetCell, map, Rot4.South);
+			GenSpawn.Spawn(disabledTarget, disabledTargetCell, map, Rot4.South);
+			DisablePawnWork(activeTarget);
+			DisablePawnWork(disabledTarget);
+			NormalizeFireDamagePawn(activeTarget);
+			NormalizeFireDamagePawn(disabledTarget);
+			if (active == null || disabled == null)
+			{
+				return new
+				{
+					success = false,
+					active = DescribeZombie(active),
+					disabled = DescribeZombie(disabled),
+					error = "ZombieGenerator.SpawnZombie returned no active or disabled electrifier test zombie."
+				};
+			}
+			NormalizeFireDamagePawn(active);
+			NormalizeFireDamagePawn(disabled);
+			active.electricDisabledUntil = GenTicks.TicksGame - 1;
+			disabled.electricDisabledUntil = GenTicks.TicksGame + GenDate.TicksPerHour;
+
+			var activeBelt = ThingMaker.MakeThing(apparelDef) as Apparel;
+			var disabledBelt = ThingMaker.MakeThing(apparelDef) as Apparel;
+			if (activeBelt == null || disabledBelt == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Apparel_SmokepopBelt did not create Apparel."
+				};
+			}
+			activeTarget.apparel.Wear(activeBelt, false);
+			disabledTarget.apparel.Wear(disabledBelt, false);
+
+			var activeWasElectric = active.IsActiveElectric;
+			var disabledWasElectric = disabled.IsActiveElectric;
+			var activeAvailableVerbs = active.meleeVerbs.GetUpdatedAvailableVerbsList(false);
+			var disabledAvailableVerbs = disabled.meleeVerbs.GetUpdatedAvailableVerbsList(false);
+			var activeHasZombieBite = activeAvailableVerbs.Any(entry => entry.verb.GetDamageDef() == CustomDefs.ZombieBite);
+			var disabledHasZombieBite = disabledAvailableVerbs.Any(entry => entry.verb.GetDamageDef() == CustomDefs.ZombieBite);
+			var activeVerb = active.meleeVerbs.TryGetMeleeVerb(activeTarget);
+			var disabledVerb = disabled.meleeVerbs.TryGetMeleeVerb(disabledTarget);
+
+			if (TryMeleeDamageInfosToApply(activeVerb, activeTarget, out var activeDamageInfos, out var activeError) == false)
+			{
+				return new
+				{
+					success = false,
+					active = DescribeZombie(active),
+					activeVerb = DescribeVerb(activeVerb),
+					error = activeError
+				};
+			}
+			if (TryMeleeDamageInfosToApply(disabledVerb, disabledTarget, out var disabledDamageInfos, out var disabledError) == false)
+			{
+				return new
+				{
+					success = false,
+					disabled = DescribeZombie(disabled),
+					disabledVerb = DescribeVerb(disabledVerb),
+					error = disabledError
+				};
+			}
+
+			var activeElectricalShock = activeDamageInfos.Any(info => info.Def == CustomDefs.ElectricalShock && info.Weapon == CustomDefs.ElectricalField);
+			var disabledElectricalShock = disabledDamageInfos.Any(info => info.Def == CustomDefs.ElectricalShock);
+			var activeBiteHidden = activeHasZombieBite == false;
+			var disabledBiteHidden = disabledHasZombieBite == false;
+
+			return new
+			{
+				success = activeWasElectric
+					&& disabledWasElectric == false
+					&& activeBiteHidden
+					&& disabledBiteHidden
+					&& activeElectricalShock
+					&& disabledElectricalShock == false,
+				destroyedZombies,
+				active = DescribeZombie(active),
+				disabled = DescribeZombie(disabled),
+				activeTarget = DescribePawn(activeTarget),
+				disabledTarget = DescribePawn(disabledTarget),
+				activeWasElectric,
+				disabledWasElectric,
+				activeVerb = DescribeVerb(activeVerb),
+				disabledVerb = DescribeVerb(disabledVerb),
+				activeAvailableDamageDefs = activeAvailableVerbs.Select(entry => entry.verb.GetDamageDef()?.defName).ToArray(),
+				disabledAvailableDamageDefs = disabledAvailableVerbs.Select(entry => entry.verb.GetDamageDef()?.defName).ToArray(),
+				activeBiteHidden,
+				disabledBiteHidden,
+				activeElectricalShock,
+				disabledElectricalShock,
+				activeDamageInfos = DescribeDamageInfos(activeDamageInfos),
+				disabledDamageInfos = DescribeDamageInfos(disabledDamageInfos),
+				activeBeltDef = activeBelt.def?.defName,
+				disabledBeltDef = disabledBelt.def?.defName
 			};
 		}
 
