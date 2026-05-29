@@ -2440,6 +2440,131 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/albino_does_not_hold_door_open", Description = "Verify an albino zombie in an open door does not reset the auto-close delay while a normal zombie still does.")]
+		public static object AlbinoDoesNotHoldDoorOpen()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var ticksUntilCloseField = typeof(Building_Door).GetField("ticksUntilClose", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+			if (ticksUntilCloseField == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not access Building_Door.ticksUntilClose."
+				};
+			}
+
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 16f, out var normalDoorCell, out var spawnError) == false)
+				return spawnError;
+
+			var albinoDoorCell = GenRadial.RadialCellsAround(normalDoorCell, 8f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetEdifice(map) == null)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.DistanceTo(normalDoorCell) >= 2f)
+				.OrderBy(cell => cell.DistanceToSquared(normalDoorCell))
+				.FirstOrDefault();
+			if (albinoDoorCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					normalDoorCell = ZombieRuntimeActions.DescribeCell(normalDoorCell),
+					error = "No second clear door cell was found for the albino door fixture."
+				};
+			}
+
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var actorCell = GenRadial.RadialCellsAround(normalDoorCell, 4f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.OrderByDescending(cell => cell.DistanceToSquared(normalDoorCell))
+				.FirstOrDefault();
+			if (actorCell.IsValid == false)
+				actorCell = normalDoorCell;
+			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+			actor.workSettings?.DisableAll();
+
+			var normalDoor = ThingMaker.MakeThing(ThingDefOf.Door, GenStuff.DefaultStuffFor(ThingDefOf.Door)) as Building_Door;
+			var albinoDoor = ThingMaker.MakeThing(ThingDefOf.Door, GenStuff.DefaultStuffFor(ThingDefOf.Door)) as Building_Door;
+			if (normalDoor == null || albinoDoor == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create one or both test doors."
+				};
+			}
+			GenSpawn.Spawn(normalDoor, normalDoorCell, map, WipeMode.Vanish);
+			GenSpawn.Spawn(albinoDoor, albinoDoorCell, map, WipeMode.Vanish);
+			normalDoor.SetFaction(Faction.OfPlayer);
+			albinoDoor.SetFaction(Faction.OfPlayer);
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+			normalDoor.StartManualOpenBy(actor);
+			albinoDoor.StartManualOpenBy(actor);
+
+			var normalZombie = ZombieRuntimeActions.SpawnZombie(normalDoorCell, map, ZombieType.Normal, true);
+			var albinoZombie = ZombieRuntimeActions.SpawnZombie(albinoDoorCell, map, ZombieType.Albino, true);
+			if (normalZombie == null || albinoZombie == null)
+			{
+				return new
+				{
+					success = false,
+					normalDoorCell = ZombieRuntimeActions.DescribeCell(normalDoorCell),
+					albinoDoorCell = ZombieRuntimeActions.DescribeCell(albinoDoorCell),
+					error = "ZombieGenerator.SpawnZombie returned no normal or albino test zombie."
+				};
+			}
+
+			const int initialTicksUntilClose = 10;
+			ticksUntilCloseField.SetValue(normalDoor, initialTicksUntilClose);
+			ticksUntilCloseField.SetValue(albinoDoor, initialTicksUntilClose);
+			AdvanceGameTicks(1);
+			var normalTicksAfter = (int)ticksUntilCloseField.GetValue(normalDoor);
+			var albinoTicksAfter = (int)ticksUntilCloseField.GetValue(albinoDoor);
+
+			return new
+			{
+				success = normalDoor.Open
+					&& albinoDoor.Open
+					&& normalTicksAfter > initialTicksUntilClose
+					&& albinoTicksAfter == initialTicksUntilClose - 1,
+				destroyedZombies,
+				actor = DescribePawn(actor),
+				normalZombie = DescribeZombie(normalZombie),
+				albinoZombie = DescribeZombie(albinoZombie),
+				normalDoor = new
+				{
+					id = ZombieRuntimeActions.StableThingId(normalDoor),
+					position = ZombieRuntimeActions.DescribeCell(normalDoor.Position),
+					normalDoor.Open
+				},
+				albinoDoor = new
+				{
+					id = ZombieRuntimeActions.StableThingId(albinoDoor),
+					position = ZombieRuntimeActions.DescribeCell(albinoDoor.Position),
+					albinoDoor.Open
+				},
+				initialTicksUntilClose,
+				normalTicksAfter,
+				albinoTicksAfter
+			};
+		}
+
 		[Tool("zombieland/detonate_suicide_bomber", Description = "Kill a suicide bomber through Zombie.Kill, verify it queued a Zombieland explosion, then execute the explosion.")]
 		public static object DetonateSuicideBomber(
 			[ToolParameter(Description = "Optional zombie id, ThingID, label, or short name. When omitted, the first spawned suicide bomber is used.", Required = false, DefaultValue = "")] string target = "")

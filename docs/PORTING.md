@@ -32,6 +32,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 - Latest verified: `zombieland/avoid_grid_blocks_door_and_danger` verifies the adjacent avoidance APIs that colonist jobs depend on: `DangerUtility.GetDangerFor` reports an avoided door cell as `Deadly`, `Building_Door.PawnCanOpen` rejects a non-drafted/non-forced colonist for the avoided door, and drafted or player-forced states still bypass the avoid-grid block.
 - Latest verified: `zombieland/avoid_grid_interrupts_existing_path` starts a real non-forced `Goto` job, waits only until RimWorld creates a valid path, uses Zombieland's source-derived `curPath.Peek(4)` lookahead cell, places a tracking zombie off the path so the lookahead cell becomes avoided without vanilla pawn collision, and verifies `Pawn_PathFollower.NeedNewPath` flips from false to true.
 - Latest verified: `zombieland/zombie_manual_door_close_ignored` opens a real player door, sets `Building_Door.ticksUntilClose` to a sentinel, verifies `StartManualCloseBy` from a zombie leaves it unchanged, and verifies the same vanilla call from a colonist still schedules the door close.
+- Latest verified: `zombieland/albino_does_not_hold_door_open` covers the `Building_Door.Tick` transpiler against RimWorld 1.6's real auto-close loop: a normal zombie standing in the doorway resets `ticksUntilClose` from 10 to 109, while an albino zombie in the same situation is ignored by the pawn-presence check and lets it count down to 9.
 - Next blocker cluster: validate special zombie behaviors beyond visuals.
 
 ## Decisions
