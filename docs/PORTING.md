@@ -31,6 +31,7 @@ This file is the single live coordination document for the RimWorld 1.6 port. Ke
 - Latest verified: `zombieland/workgiver_respects_avoid_grid` verifies work assignment gating around zombie danger: a non-forced `WorkGiver_DoubleTap` rejects an infected corpse positioned in the avoid grid while the actor is outside danger, and the same target still creates a forced `DoubleTap` command job.
 - Latest verified: `zombieland/avoid_grid_blocks_door_and_danger` verifies the adjacent avoidance APIs that colonist jobs depend on: `DangerUtility.GetDangerFor` reports an avoided door cell as `Deadly`, `Building_Door.PawnCanOpen` rejects a non-drafted/non-forced colonist for the avoided door, and drafted or player-forced states still bypass the avoid-grid block.
 - Latest verified: `zombieland/avoid_grid_interrupts_existing_path` starts a real non-forced `Goto` job, waits only until RimWorld creates a valid path, uses Zombieland's source-derived `curPath.Peek(4)` lookahead cell, places a tracking zombie off the path so the lookahead cell becomes avoided without vanilla pawn collision, and verifies `Pawn_PathFollower.NeedNewPath` flips from false to true.
+- Latest verified: `zombieland/zombie_manual_door_close_ignored` opens a real player door, sets `Building_Door.ticksUntilClose` to a sentinel, verifies `StartManualCloseBy` from a zombie leaves it unchanged, and verifies the same vanilla call from a colonist still schedules the door close.
 - Next blocker cluster: validate special zombie behaviors beyond visuals.
 
 ## Decisions
