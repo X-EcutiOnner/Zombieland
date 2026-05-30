@@ -244,21 +244,22 @@ Fixture:
 
 Runtime:
 - Spawn a colonist actor, an ordinary zombie, and a former-colonist zombie converted from a player pawn.
-- Exercise social memories, acquaintance, opinions, social thoughts, thought eligibility, direct interactions, observed zombie corpses, map-click selection, selector selection, and label color.
+- Exercise social memories, acquaintance, opinions, social thoughts, thought eligibility, direct interactions, interaction ticking, observed zombie corpses, map-click selection, selector selection, and label color.
 
 Assertions:
 - Zombies do not become social-memory partners, known pawns, opinion targets, social-thought targets, interaction partners, or ordinary thought recipients.
+- Zombie interaction tick processing is skipped while an ordinary pawn control still runs the deterministic vanilla `Off` social-mode branch.
 - Observed zombie corpses do not emit ordinary corpse thoughts or history events.
 - Ordinary live zombies and ordinary zombie corpses are not map-click selectable.
 - Former-colonist live zombies and corpses are map-click selectable, former-colonist corpses can be selected through the real selector, and former-colonist zombies use the Zombieland label color.
 - Log summary contains no social, thought, selector, or corpse exceptions.
 
 Current runtime evidence:
-- Added 2026-05-30 with `zombieland/zombie_social_thought_suppression` from `EMPTY.rws`. The live run proved `hasAnySocialMemoryWithZombie=false`, both `PawnsKnowEachOther` directions false, both opinions `0`, `socialThoughtCountAboutZombie=0`, both `TryInteractWith(..., Chitchat)` directions false, `GiveObservedThought(actor)=null`, and `GiveObservedHistoryEvent(actor)=null` for a killed normal zombie's `ZombieCorpse`. The same run proved the ordinary actor can receive `DebugBad` while the normal zombie cannot. `rimbridge/list_logs minimumLevel=warning` returned no entries.
+- Added 2026-05-30 with `zombieland/zombie_social_thought_suppression` from `EMPTY.rws`. The live run proved `hasAnySocialMemoryWithZombie=false`, both `PawnsKnowEachOther` directions false, both opinions `0`, `socialThoughtCountAboutZombie=0`, both `TryInteractWith(..., Chitchat)` directions false, `GiveObservedThought(actor)=null`, and `GiveObservedHistoryEvent(actor)=null` for a killed normal zombie's `ZombieCorpse`. The same run proved the ordinary actor can receive `DebugBad` while the normal zombie cannot. The interaction-tick subprobe temporarily forced both actor and zombie into no-faction `Off` social mode, set both private `wantsRandomInteract` flags true, ticked both interaction trackers for 60 ticks, and proved the actor flag cleared while the zombie flag remained true. `rimbridge/list_logs minimumLevel=warning` returned no entries.
 - Added 2026-05-30 with `zombieland/zombie_selection_respects_former_colonist` from `EMPTY.rws`. The live run proved ordinary live zombies and ordinary zombie corpses are not map-click selectable, former-colonist live zombies and corpses are map-click selectable, the real selector rejects ordinary zombie corpses and selects former-colonist zombie corpses, and only the former-colonist zombie returned the Zombieland label color `{r:0.7,g:1,b:0.7,a:1}`. `rimbridge/list_logs minimumLevel=warning` returned no entries.
 
 Completion:
-- Partially covered by the 2026-05-30 focused contracts. Remaining proof: direct `Pawn_InteractionsTracker.InteractionsTrackerTickInterval` suppression and player-facing inspect-tab behavior for selected former-colonist zombie corpses.
+- Partially covered by the 2026-05-30 focused contracts. Remaining proof: player-facing inspect-tab behavior for selected former-colonist zombie corpses.
 
 ## S-Special-Gauntlet
 

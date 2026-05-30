@@ -333,16 +333,15 @@ Code surface: social/thought/selection patches in `Source/Patches.cs`, `Source/B
 Already evidenced:
 - `6d2afda Restore zombie social suppression`
 - `2ca0e7b Add former-colonist selection smoke`
-- Live social hygiene evidence: `zombieland/zombie_social_thought_suppression` from `EMPTY.rws` proved a colonist and normal zombie do not count as social-memory partners, do not know each other, have zero bidirectional opinion, return no social thoughts about the zombie, cannot interact with each other through `Chitchat`, and suppress observed zombie-corpse thought/history-event returns. The same run proved an ordinary colonist can receive `DebugBad` while the normal zombie cannot. `rimbridge/list_logs minimumLevel=warning` returned no entries.
+- Live social hygiene evidence: `zombieland/zombie_social_thought_suppression` from `EMPTY.rws` proved a colonist and normal zombie do not count as social-memory partners, do not know each other, have zero bidirectional opinion, return no social thoughts about the zombie, cannot interact with each other through `Chitchat`, and suppress observed zombie-corpse thought/history-event returns. The same run proved an ordinary colonist can receive `DebugBad` while the normal zombie cannot. The contract now also directly probes interaction ticking: under temporary no-faction `Off` social mode, a normal pawn's `wantsRandomInteract` flag cleared on tick while the zombie flag stayed true because the Zombieland prefix skipped the tick. `rimbridge/list_logs minimumLevel=warning` returned no entries.
 - Live selection evidence: `zombieland/zombie_selection_respects_former_colonist` from `EMPTY.rws` proved ordinary live zombies and zombie corpses are not map-click selectable, former-colonist live zombies and corpses are map-click selectable, the real selector rejects ordinary zombie corpses and accepts former-colonist zombie corpses, and former-colonist zombies receive the Zombieland label color while ordinary zombies do not. `rimbridge/list_logs minimumLevel=warning` returned no entries.
 
 Required tests:
 - Social suppression scenario: ordinary colonist controls plus zombie participant through memories, opinions, social thoughts, interactions, observed corpses, and thought eligibility.
 - Selection scenario: live/corpse ordinary zombies versus former-colonist zombies through map-click selection, real selector selection, label color, and inspect tab behavior.
-- Interaction ticking scenario: prove zombie `Pawn_InteractionsTracker.InteractionsTrackerTickInterval` is skipped while ordinary pawn interaction ticking remains intact.
 
 Current gap:
-- The social-memory, thought, interaction-call, observed-corpse, label-color, selector, and map-click boundaries now have direct runtime evidence. Remaining K work is a direct interaction-tick probe and broader player-facing inspect-tab UI coverage.
+- The social-memory, thought, interaction-call, direct interaction-tick, observed-corpse, label-color, selector, and map-click boundaries now have direct runtime evidence. Remaining K work is broader player-facing inspect-tab UI coverage.
 
 ### L. External Mod Integrations
 

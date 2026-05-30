@@ -208,6 +208,18 @@ namespace ZombieLand
 			actor.needs?.mood?.thoughts?.GetSocialThoughts(zombie, socialThoughtsAboutZombie);
 			var actorInteractWithZombie = actor.interactions?.TryInteractWith(zombie, InteractionDefOf.Chitchat) ?? false;
 			var zombieInteractWithActor = zombie.interactions?.TryInteractWith(actor, InteractionDefOf.Chitchat) ?? false;
+			if (TryProbeInteractionTickSuppression(actor, zombie, out var interactionTickSuppressed, out var interactionTickProbe, out var interactionTickError) == false)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					error = interactionTickError
+				};
+			}
 
 			zombie.Kill(null);
 			var zombieCorpse = zombie.Corpse as ZombieCorpse
@@ -241,6 +253,7 @@ namespace ZombieLand
 					&& socialThoughtsAboutZombie.Count == 0
 					&& actorInteractWithZombie == false
 					&& zombieInteractWithActor == false
+					&& interactionTickSuppressed
 					&& observedZombieCorpseThought == null
 					&& observedZombieCorpseHistoryEvent == null,
 				destroyedZombies,
@@ -259,6 +272,7 @@ namespace ZombieLand
 				socialThoughtCountAboutZombie = socialThoughtsAboutZombie.Count,
 				actorInteractWithZombie,
 				zombieInteractWithActor,
+				interactionTickProbe,
 				observedZombieCorpseThoughtDef = observedZombieCorpseThought?.def?.defName,
 				observedZombieCorpseHistoryEventDef = observedZombieCorpseHistoryEvent?.defName
 			};
@@ -778,6 +792,66 @@ namespace ZombieLand
 				humanImmunityAdvanced,
 				zombieImmunitySuppressed
 			};
+		}
+
+		static readonly FieldInfo thingFactionIntField = typeof(Thing).GetField("factionInt", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+		static readonly FieldInfo interactionsWantsRandomInteractField = typeof(Pawn_InteractionsTracker).GetField("wantsRandomInteract", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+		static bool TryProbeInteractionTickSuppression(Pawn controlPawn, Pawn zombie, out bool success, out object evidence, out string error)
+		{
+			success = false;
+			evidence = null;
+			error = null;
+			if (controlPawn?.interactions == null || zombie?.interactions == null)
+			{
+				error = "Interaction tick probe requires both pawns to have interaction trackers.";
+				return false;
+			}
+			if (thingFactionIntField == null || interactionsWantsRandomInteractField == null)
+			{
+				error = "Interaction tick probe could not resolve required RimWorld private fields.";
+				return false;
+			}
+
+			var controlFactionBefore = controlPawn.Faction;
+			var zombieFactionBefore = zombie.Faction;
+			try
+			{
+				thingFactionIntField.SetValue(controlPawn, null);
+				thingFactionIntField.SetValue(zombie, null);
+				interactionsWantsRandomInteractField.SetValue(controlPawn.interactions, true);
+				interactionsWantsRandomInteractField.SetValue(zombie.interactions, true);
+
+				var controlBeforeTick = (bool)interactionsWantsRandomInteractField.GetValue(controlPawn.interactions);
+				var zombieBeforeTick = (bool)interactionsWantsRandomInteractField.GetValue(zombie.interactions);
+				const int tickInterval = 60;
+				controlPawn.interactions.InteractionsTrackerTickInterval(tickInterval);
+				zombie.interactions.InteractionsTrackerTickInterval(tickInterval);
+				var controlAfterTick = (bool)interactionsWantsRandomInteractField.GetValue(controlPawn.interactions);
+				var zombieAfterTick = (bool)interactionsWantsRandomInteractField.GetValue(zombie.interactions);
+				success = controlBeforeTick
+					&& zombieBeforeTick
+					&& controlAfterTick == false
+					&& zombieAfterTick;
+
+				evidence = new
+				{
+					success,
+					tickInterval,
+					controlFactionForcedNull = controlPawn.Faction == null,
+					zombieFactionForcedNull = zombie.Faction == null,
+					controlBeforeTick,
+					controlAfterTick,
+					zombieBeforeTick,
+					zombieAfterTick
+				};
+				return true;
+			}
+			finally
+			{
+				thingFactionIntField.SetValue(controlPawn, controlFactionBefore);
+				thingFactionIntField.SetValue(zombie, zombieFactionBefore);
+			}
 		}
 
 	}
