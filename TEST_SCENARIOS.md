@@ -228,6 +228,38 @@ Current runtime evidence:
 Completion:
 - Partially covered by focused contracts and the 2026-05-30 medical/corpse patch runs. Remaining workflow proof: save-load during corpse conversion countdown, infection alert list behavior, and cure/double-tap/extract/medical UI in one player-facing map session.
 
+## S-Social-Selection
+
+Goal: prove Zombieland pawns and corpses stay out of ordinary RimWorld social/thought systems while former-colonist zombies remain selectable and identifiable where the mod intentionally allows it.
+
+Prior evidence:
+- `6d2afda`, `2ca0e7b`
+
+Source checks:
+- Zombieland: social, corpse, thought, interaction, label-color, selector, and map-click patches in `Source/Patches.cs`; bridge fixtures in `Source/BridgeTools/ZombielandBridgeTools.Social.cs`.
+- RimWorld 1.6 decompiler: `RelationsUtility.HasAnySocialMemoryWith`, `Pawn_RelationsTracker.OpinionOf`, `RelationsUtility.PawnsKnowEachOther`, `ThoughtHandler.GetSocialThoughts`, `Corpse.GiveObservedThought`, `Corpse.GiveObservedHistoryEvent`, `ThoughtUtility.CanGetThought`, `Pawn_InteractionsTracker.TryInteractWith`, `PawnNameColorUtility.PawnNameColorOf`, `Selector.SelectInternal`, and `ThingSelectionUtility.SelectableByMapClick`.
+
+Fixture:
+- Immutable input: `EMPTY.rws`.
+
+Runtime:
+- Spawn a colonist actor, an ordinary zombie, and a former-colonist zombie converted from a player pawn.
+- Exercise social memories, acquaintance, opinions, social thoughts, thought eligibility, direct interactions, observed zombie corpses, map-click selection, selector selection, and label color.
+
+Assertions:
+- Zombies do not become social-memory partners, known pawns, opinion targets, social-thought targets, interaction partners, or ordinary thought recipients.
+- Observed zombie corpses do not emit ordinary corpse thoughts or history events.
+- Ordinary live zombies and ordinary zombie corpses are not map-click selectable.
+- Former-colonist live zombies and corpses are map-click selectable, former-colonist corpses can be selected through the real selector, and former-colonist zombies use the Zombieland label color.
+- Log summary contains no social, thought, selector, or corpse exceptions.
+
+Current runtime evidence:
+- Added 2026-05-30 with `zombieland/zombie_social_thought_suppression` from `EMPTY.rws`. The live run proved `hasAnySocialMemoryWithZombie=false`, both `PawnsKnowEachOther` directions false, both opinions `0`, `socialThoughtCountAboutZombie=0`, both `TryInteractWith(..., Chitchat)` directions false, `GiveObservedThought(actor)=null`, and `GiveObservedHistoryEvent(actor)=null` for a killed normal zombie's `ZombieCorpse`. The same run proved the ordinary actor can receive `DebugBad` while the normal zombie cannot. `rimbridge/list_logs minimumLevel=warning` returned no entries.
+- Added 2026-05-30 with `zombieland/zombie_selection_respects_former_colonist` from `EMPTY.rws`. The live run proved ordinary live zombies and ordinary zombie corpses are not map-click selectable, former-colonist live zombies and corpses are map-click selectable, the real selector rejects ordinary zombie corpses and selects former-colonist zombie corpses, and only the former-colonist zombie returned the Zombieland label color `{r:0.7,g:1,b:0.7,a:1}`. `rimbridge/list_logs minimumLevel=warning` returned no entries.
+
+Completion:
+- Partially covered by the 2026-05-30 focused contracts. Remaining proof: direct `Pawn_InteractionsTracker.InteractionsTrackerTickInterval` suppression and player-facing inspect-tab behavior for selected former-colonist zombie corpses.
+
 ## S-Special-Gauntlet
 
 Goal: prove all special zombie types work together on one controlled map and that their visuals/effects remain correct across damage, action, death, cleanup, and save-load.
