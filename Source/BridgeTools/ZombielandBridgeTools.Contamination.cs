@@ -2081,7 +2081,7 @@ namespace ZombieLand
 			}
 		}
 
-		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns/things create contaminated blood, vomit, birth, dissolve-gear, liquid projectile, tunnel-hive, explosion, comp-spawned, damage, butcher, and leavings products.")]
+		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns/things create contaminated blood, execution blood, vomit, birth, dissolve-gear, liquid projectile, tunnel-hive, explosion, comp-spawned, damage, butcher, and leavings products.")]
 		public static object ContaminationFilthLeavingsContract(
 			[ToolParameter(Description = "Destroy generated filth and leavings before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
 		{
@@ -2156,6 +2156,7 @@ namespace ZombieLand
 				var liquidProjectileFilth = VerifyLiquidProjectileFilthTransfer(map, shipChunkCell + new IntVec3(48, 0, 0));
 				var tunnelHiveFilth = VerifyTunnelHiveSpawnerTickFilthTransfer(map, shipChunkCell + new IntVec3(54, 0, 0));
 				var explosionFilth = VerifyExplosionSpawnedFilthTransfer(map, shipChunkCell + new IntVec3(60, 0, 0));
+				var executionBlood = VerifyExecutionBloodTransfer(map, shipChunkCell + new IntVec3(66, 0, 0));
 
 				var shipChunkAfter = shipChunk.GetContamination();
 				var leavingsContamination = leavings.Select(thing => thing.GetContamination()).ToArray();
@@ -2184,7 +2185,8 @@ namespace ZombieLand
 						&& ObjectSuccess(dissolveGearFilth)
 						&& ObjectSuccess(liquidProjectileFilth)
 						&& ObjectSuccess(tunnelHiveFilth)
-						&& ObjectSuccess(explosionFilth),
+						&& ObjectSuccess(explosionFilth)
+						&& ObjectSuccess(executionBlood),
 					cleanup,
 					pawn = DescribePawn(pawn),
 					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
@@ -2220,7 +2222,8 @@ namespace ZombieLand
 					dissolveGearFilth,
 					liquidProjectileFilth,
 					tunnelHiveFilth,
-					explosionFilth
+					explosionFilth,
+					executionBlood
 				};
 			}
 			finally
@@ -2243,6 +2246,109 @@ namespace ZombieLand
 					shipChunk.Destroy();
 				if (pawn is { Destroyed: false, Spawned: true })
 					pawn.Destroy();
+			}
+		}
+
+		static object VerifyExecutionBloodTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("ExecutionUtility_ExecutionInt_Patch");
+			var executionInt = typeof(ExecutionUtility).GetMethod("ExecutionInt", BindingFlags.Static | BindingFlags.NonPublic);
+			if (executionInt == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "ExecutionUtility.ExecutionInt private helper was not found."
+				};
+			}
+			if (TryFindClearSpawnCell(map, root, 16f, out var executionerCell, out var executionerCellError) == false)
+				return executionerCellError;
+			if (TryFindClearSpawnCell(map, executionerCell + IntVec3.East, 8f, out var victimCell, out var victimCellError) == false)
+				return victimCellError;
+
+			var executioner = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var victim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var bloodFilths = new List<Filth>();
+			Corpse corpse = null;
+			try
+			{
+				foreach (var cell in GenRadial.RadialCellsAround(victimCell, 2f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+				GenSpawn.Spawn(executioner, executionerCell, map, Rot4.East);
+				GenSpawn.Spawn(victim, victimCell, map, Rot4.West);
+				DisablePawnWork(executioner);
+				DisablePawnWork(victim);
+				executioner.ClearContamination();
+				const float victimContamination = 0.68f;
+				victim.SetContamination(victimContamination);
+				var victimBefore = victim.GetContamination();
+
+				Rand.PushState(7104);
+				try
+				{
+					executionInt.Invoke(null, new object[] { executioner, victim, false, 3, true });
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				corpse = victim.Corpse;
+				bloodFilths = GenRadial.RadialCellsAround(victimCell, 2f, true)
+					.Where(cell => cell.InBounds(map))
+					.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+					.Where(filth => filth.def == ThingDefOf.Filth_Blood)
+					.OrderByDescending(filth => filth.GetContamination())
+					.ToList();
+				var bloodContaminations = bloodFilths.Select(filth => filth.GetContamination()).ToArray();
+				var expectedBloodContamination = victimBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var bloodContaminated = bloodFilths.Count > 0
+					&& bloodContaminations.All(value => Approximately(value, expectedBloodContamination, 0.0001f));
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& victim.Dead
+						&& bloodContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					method = $"{executionInt.DeclaringType?.FullName}::{executionInt}",
+					executioner = DescribePawn(executioner),
+					executionerCell = ZombieRuntimeActions.DescribeCell(executionerCell),
+					victim = DescribePawn(victim),
+					victimCell = ZombieRuntimeActions.DescribeCell(victimCell),
+					victimBefore,
+					victimDead = victim.Dead,
+					corpse = ZombieRuntimeActions.StableThingId(corpse),
+					bloodPerWeight = 3,
+					filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+					expectedBloodContamination,
+					bloodFilths = bloodFilths.Select(filth => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(filth),
+						cell = filth.Spawned ? ZombieRuntimeActions.DescribeCell(filth.Position) : null,
+						contamination = filth.GetContamination()
+					}).ToArray(),
+					bloodFilthCount = bloodFilths.Count,
+					bloodContaminated
+				};
+			}
+			finally
+			{
+				foreach (var filth in bloodFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					filth.ClearContamination();
+					filth.Destroy();
+				}
+				executioner?.ClearContamination();
+				victim?.ClearContamination();
+				corpse?.ClearContamination();
+				if (corpse is { Destroyed: false, Spawned: true })
+					corpse.Destroy();
+				if (victim is { Destroyed: false, Spawned: true })
+					victim.Destroy();
+				if (executioner is { Destroyed: false, Spawned: true })
+					executioner.Destroy();
 			}
 		}
 
@@ -4393,6 +4499,269 @@ namespace ZombieLand
 					map.areaManager.Home[filthCell] = oldHome;
 				}
 			}
+
+			[Tool("zombieland/contamination_social_transfer_contract", Description = "Verify real mating and lovin contamination transfer patches on prepared pawns and the JobDriver_Lovin lay-down toil.")]
+		public static object ContaminationSocialTransferContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var mated = VerifyMatedContaminationTransfer(map, new IntVec3(map.Size.x / 2, 0, map.Size.z / 2));
+			var lovin = VerifyLovinContaminationTransfer(map, new IntVec3(map.Size.x / 2 + 8, 0, map.Size.z / 2));
+			return new
+			{
+				success = ObjectSuccess(mated) && ObjectSuccess(lovin),
+				mated,
+				lovin
+			};
+		}
+
+		static object VerifyMatedContaminationTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("PawnUtility_Mated_Patch");
+			if (TryFindClearSpawnCell(map, root, 16f, out var maleCell, out var maleCellError) == false)
+				return maleCellError;
+			if (TryFindClearSpawnCell(map, maleCell + IntVec3.East, 8f, out var femaleCell, out var femaleCellError) == false)
+				return femaleCellError;
+
+			var male = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var female = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			try
+			{
+				GenSpawn.Spawn(male, maleCell, map, Rot4.East);
+				GenSpawn.Spawn(female, femaleCell, map, Rot4.West);
+				DisablePawnWork(male);
+				DisablePawnWork(female);
+				male.ClearContamination();
+				female.ClearContamination();
+				const float maleContamination = 0.8f;
+				const float femaleContamination = 0.2f;
+				male.SetContamination(maleContamination);
+				female.SetContamination(femaleContamination);
+				var maleBefore = male.GetContamination(false);
+				var femaleBefore = female.GetContamination(false);
+				var expectedMaleAfter = maleBefore * 0.5f + femaleBefore * 0.5f;
+				var expectedFemaleAfter = maleBefore + femaleBefore - expectedMaleAfter;
+
+				Rand.PushState(7105);
+				try
+				{
+					PawnUtility.Mated(male, female);
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				var maleAfter = male.GetContamination(false);
+				var femaleAfter = female.GetContamination(false);
+				var equalized = Approximately(maleAfter, expectedMaleAfter, 0.0001f)
+					&& Approximately(femaleAfter, expectedFemaleAfter, 0.0001f);
+
+				return new
+				{
+					success = patchTargets.Length > 0 && equalized,
+					targets = CompactPatchTargets(patchTargets),
+					male = DescribePawn(male),
+					female = DescribePawn(female),
+					maleCell = ZombieRuntimeActions.DescribeCell(maleCell),
+					femaleCell = ZombieRuntimeActions.DescribeCell(femaleCell),
+					maleBefore,
+					femaleBefore,
+					maleAfter,
+					femaleAfter,
+					expectedMaleAfter,
+					expectedFemaleAfter,
+					equalized
+				};
+			}
+			finally
+			{
+				male?.ClearContamination();
+				female?.ClearContamination();
+				if (male is { Destroyed: false, Spawned: true })
+					male.Destroy();
+				if (female is { Destroyed: false, Spawned: true })
+					female.Destroy();
+			}
+		}
+
+		static object VerifyLovinContaminationTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("JobDriver_Lovin_MakeNewToils_Patch");
+			if (TryFindClearSpawnCell(map, root, 16f, out var loverCell, out var loverCellError) == false)
+				return loverCellError;
+			if (TryFindClearSpawnCell(map, loverCell + IntVec3.East, 8f, out var partnerCell, out var partnerCellError) == false)
+				return partnerCellError;
+			var bedDef = DefDatabase<ThingDef>.GetNamedSilentFail("DoubleBed") ?? ThingDefOf.Bed;
+			if (TryFindClearBuildingFootprint(map, bedDef, partnerCell + new IntVec3(2, 0, 0), 12f, out var bedCell, out _) == false)
+			{
+				return new
+				{
+					success = false,
+					root = ZombieRuntimeActions.DescribeCell(root),
+					error = "No clear bed footprint was found for the lovin contamination transfer fixture."
+				};
+			}
+
+			var lover = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var partner = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var bed = ThingMaker.MakeThing(bedDef, GenStuff.DefaultStuffFor(bedDef)) as Building_Bed;
+			if (bed == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not create a bed for the lovin contamination transfer fixture."
+				};
+			}
+
+			try
+			{
+				bed.SetFactionDirect(Faction.OfPlayer);
+				GenSpawn.Spawn(bed, bedCell, map, Rot4.North, WipeMode.Vanish, false);
+				GenSpawn.Spawn(lover, loverCell, map, Rot4.East);
+				GenSpawn.Spawn(partner, partnerCell, map, Rot4.West);
+				DisablePawnWork(lover);
+				DisablePawnWork(partner);
+				lover.needs?.AddOrRemoveNeedsAsAppropriate();
+				partner.needs?.AddOrRemoveNeedsAsAppropriate();
+				lover.ClearContamination();
+				partner.ClearContamination();
+				lover.jobs?.StopAll(false, true);
+				partner.jobs?.StopAll(false, true);
+				lover.pather?.StopDead();
+				partner.pather?.StopDead();
+				lover.relations?.AddDirectRelation(PawnRelationDefOf.Lover, partner);
+				bed.CompAssignableToPawn?.TryAssignPawn(lover);
+				bed.CompAssignableToPawn?.TryAssignPawn(partner);
+				bed.NotifyRoomAssignedPawnsChanged();
+
+				const float loverContamination = 0.8f;
+				const float partnerContamination = 0.2f;
+				lover.SetContamination(loverContamination);
+				partner.SetContamination(partnerContamination);
+				var loverBefore = lover.GetContamination(false);
+				var partnerBefore = partner.GetContamination(false);
+				const float equalizeWeight = 0.1f;
+				var expectedLoverAfterOne = loverBefore * (1f - equalizeWeight) + partnerBefore * equalizeWeight;
+				var expectedPartnerAfterOne = loverBefore + partnerBefore - expectedLoverAfterOne;
+				var expectedLoverAfterTwo = expectedLoverAfterOne * (1f - equalizeWeight) + expectedPartnerAfterOne * equalizeWeight;
+				var expectedPartnerAfterTwo = loverBefore + partnerBefore - expectedLoverAfterTwo;
+
+				var job = JobMaker.MakeJob(JobDefOf.Lovin, partner, bed);
+				job.playerForced = true;
+				Exception startException = null;
+				try
+				{
+					lover.jobs.StartJob(job, JobCondition.InterruptForced, null, false, true);
+				}
+				catch (Exception ex)
+				{
+					startException = ex;
+				}
+
+				var startedJob = startException == null && lover.CurJobDef == JobDefOf.Lovin;
+				var ticksRun = 0;
+				var firstTransferTick = -1;
+				const int maxTicks = 2000;
+				while (startedJob && ticksRun < maxTicks)
+				{
+					if (lover.jobs?.curDriver is JobDriver_Lovin activeLoverDriver && activeLoverDriver.ticksLeft > 100)
+						activeLoverDriver.ticksLeft = 100;
+					if (partner.jobs?.curDriver is JobDriver_Lovin activePartnerDriver && activePartnerDriver.ticksLeft > 100)
+						activePartnerDriver.ticksLeft = 100;
+					AdvanceGameTicks(1);
+					ticksRun++;
+					var loverNow = lover.GetContamination(false);
+					var partnerNow = partner.GetContamination(false);
+					if (firstTransferTick < 0 && Mathf.Abs(loverNow - loverBefore) > 0.01f)
+						firstTransferTick = ticksRun;
+					if (firstTransferTick >= 0 && ticksRun - firstTransferTick >= 10)
+						break;
+				}
+
+				var loverAfter = lover.GetContamination(false);
+				var partnerAfter = partner.GetContamination(false);
+				var matchedOneTransfer = Approximately(loverAfter, expectedLoverAfterOne)
+					&& Approximately(partnerAfter, expectedPartnerAfterOne);
+				var matchedTwoTransfers = Approximately(loverAfter, expectedLoverAfterTwo)
+					&& Approximately(partnerAfter, expectedPartnerAfterTwo);
+				var equalized = startException == null && (matchedOneTransfer || matchedTwoTransfers);
+				var loverDriver = lover.jobs?.curDriver as JobDriver_Lovin;
+				var partnerDriver = partner.jobs?.curDriver as JobDriver_Lovin;
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& startedJob
+						&& firstTransferTick >= 0
+						&& equalized,
+					targets = CompactPatchTargets(patchTargets),
+					lover = DescribePawn(lover),
+					partner = DescribePawn(partner),
+					bed = ZombieRuntimeActions.StableThingId(bed),
+					loverCell = ZombieRuntimeActions.DescribeCell(loverCell),
+					partnerCell = ZombieRuntimeActions.DescribeCell(partnerCell),
+					bedCell = ZombieRuntimeActions.DescribeCell(bedCell),
+					bedDef = bed.def?.defName,
+					bedOccupants = bed.CurOccupants.Select(ZombieRuntimeActions.StableThingId).ToArray(),
+					jobDef = job.def?.defName,
+					startedJob,
+					startException = startException?.GetType().FullName,
+					startExceptionMessage = startException?.Message,
+					ticksRun,
+					maxTicks,
+					firstTransferTick,
+					durationGate = 25000,
+					driverTicksLeftClamp = 100,
+					loverJobAfter = lover.CurJobDef?.defName,
+					partnerJobAfter = partner.CurJobDef?.defName,
+					loverDriverTicksLeft = loverDriver?.ticksLeft ?? -1,
+					partnerDriverTicksLeft = partnerDriver?.ticksLeft ?? -1,
+					equalizeWeight,
+					loverBefore,
+					partnerBefore,
+					loverAfter,
+					partnerAfter,
+					expectedLoverAfterOne,
+					expectedPartnerAfterOne,
+					expectedLoverAfterTwo,
+					expectedPartnerAfterTwo,
+					matchedOneTransfer,
+					matchedTwoTransfers,
+					equalized
+				};
+			}
+			finally
+			{
+				lover.jobs?.StopAll(false, true);
+				partner.jobs?.StopAll(false, true);
+				lover?.ClearContamination();
+				partner?.ClearContamination();
+				if (lover is { Destroyed: false, Spawned: true })
+					lover.Destroy();
+				if (partner is { Destroyed: false, Spawned: true })
+					partner.Destroy();
+				if (bed is { Destroyed: false, Spawned: true })
+					bed.Destroy();
+			}
+		}
 
 			[Tool("zombieland/contamination_clear_pollution_contract", Description = "Verify real JobDriver_ClearPollution transfers contaminated polluted ground into the worker and spawned wastepack.")]
 		public static object ContaminationClearPollutionContract(
