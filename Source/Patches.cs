@@ -1337,10 +1337,13 @@ namespace ZombieLand
 		{
 			static void Postfix(ref float __result, Thing instigator)
 			{
-				if (ZombieSettings.Values.zombiesCauseManhuntingResponse == false)
-					__result = 0;
-				else if (instigator is Zombie)
-					__result /= 20;
+				if (instigator is Zombie)
+				{
+					if (ZombieSettings.Values.zombiesCauseManhuntingResponse == false)
+						__result = 0;
+					else
+						__result /= 20;
+				}
 				else if (instigator is ZombieBlob || instigator is ZombieSpitter)
 					__result = 0;
 			}
