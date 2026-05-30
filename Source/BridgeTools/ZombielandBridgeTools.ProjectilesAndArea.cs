@@ -66,6 +66,8 @@ namespace ZombieLand
 				action = RunAreaWorkflowJobGate(map);
 			else if (normalizedActionMode == "special-melee-verbs")
 				action = RunAreaWorkflowSpecialMeleeVerbs(map);
+			else if (normalizedActionMode == "special-damage")
+				action = RunAreaWorkflowSpecialDamage(map);
 			else if (normalizedActionMode == "electrifier-melee-damage")
 				action = RunAreaWorkflowElectrifierMeleeDamage(map);
 			else if (normalizedActionMode == "animal-response")
@@ -94,7 +96,7 @@ namespace ZombieLand
 				{
 					success = false,
 					actionMode,
-					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, or visual-support."
+					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, or visual-support."
 				};
 			}
 			var actionSucceeded = normalizedActionMode == "read"
@@ -864,7 +866,9 @@ namespace ZombieLand
 				var fleeJob = actor.CurJob;
 				var fleeDestination = fleeJob?.targetA.Cell ?? IntVec3.Invalid;
 				var fleeDestinationAvoids = fleeDestination.IsValid && avoidGrid.ShouldAvoid(map, fleeDestination) == false;
+				var hostilityResponse = VerifyAreaWorkflowHostilityResponse(map, actor, zombie, actorCell);
 				var meleeInterruption = VerifyAreaWorkflowMeleeInterruption(map, actorCell, zombie, avoidGrid);
+				var destroyCleanup = VerifyAreaWorkflowPawnDestroyCleanup(map, actorCell + new IntVec3(6, 0, 0), colonistInsideArea, zombieInsideArea);
 
 				return new
 				{
@@ -880,7 +884,9 @@ namespace ZombieLand
 						&& tickHit > 0
 						&& fleeJob?.playerForced == true
 						&& fleeDestinationAvoids
-						&& ObjectSuccess(meleeInterruption),
+						&& ObjectSuccess(hostilityResponse)
+						&& ObjectSuccess(meleeInterruption)
+						&& ObjectSuccess(destroyCleanup),
 					actor = DescribePawn(actor),
 					zombie = DescribeZombie(zombie),
 					assignedArea = actor.playerSettings.AreaRestrictionInPawnCurrentMap?.Label,
@@ -910,13 +916,206 @@ namespace ZombieLand
 						fleeDestinationAvoids,
 						samples
 					},
-					meleeInterruption
+					hostilityResponse,
+					meleeInterruption,
+					destroyCleanup
 				};
 			}
 			finally
 			{
 				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
 				ZombieSettings.Values.highlightDangerousAreas = oldHighlightDangerousAreas;
+			}
+		}
+
+		static object VerifyAreaWorkflowHostilityResponse(Map map, Pawn fleeingPawn, Zombie nearbyZombie, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("JobGiver_ConfigurableHostilityResponse_TryGetAttackNearbyEnemyJob_Patch");
+			var prefix = FindNestedPatchMethod("JobGiver_ConfigurableHostilityResponse_TryGetAttackNearbyEnemyJob_Patch", "Prefix");
+			var reachHelper = FindNestedPatchMethod("JobGiver_ConfigurableHostilityResponse_TryGetAttackNearbyEnemyJob_Patch", "MyCanReachImmediate");
+			if (prefix == null || reachHelper == null)
+			{
+				return new
+				{
+					success = false,
+					patchTargets,
+					reflection = new
+					{
+						prefix = prefix != null,
+						reachHelper = reachHelper != null
+					},
+					error = "Could not reflect hostility-response patch helpers."
+				};
+			}
+
+			var prefixArgs = new object[] { fleeingPawn, JobMaker.MakeJob(JobDefOf.AttackMelee, nearbyZombie) };
+			var prefixContinues = (bool)prefix.Invoke(null, prefixArgs);
+			var prefixResult = prefixArgs[1] as Job;
+			var nearbyZombieHostile = nearbyZombie != null && nearbyZombie.HostileTo(fleeingPawn);
+
+			if (TryFindClearSpawnCell(map, root + new IntVec3(12, 0, 0), 12f, out var electricCell, out var electricError) == false)
+				return electricError;
+			if (TryFindClearSpawnCell(map, root + new IntVec3(16, 0, 0), 12f, out var normalCell, out var normalError) == false)
+				return normalError;
+
+			Zombie electric = null;
+			Zombie normal = null;
+			try
+			{
+				electric = ZombieRuntimeActions.SpawnZombie(electricCell, map, ZombieType.Electrifier, true);
+				normal = ZombieRuntimeActions.SpawnZombie(normalCell, map, ZombieType.Normal, true);
+				if (electric != null)
+					electric.Name = new NameSingle("ZL_Area_HostilityActiveElectric");
+				if (normal != null)
+					normal.Name = new NameSingle("ZL_Area_HostilityNormalReach");
+
+				if (electric == null || normal == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						electric = DescribeZombie(electric),
+						normal = DescribeZombie(normal),
+						error = "Could not create hostility-response reach fixtures."
+					};
+				}
+
+				electric.electricDisabledUntil = GenTicks.TicksGame - 1;
+				var electricTarget = new LocalTargetInfo(electric);
+				var normalTarget = new LocalTargetInfo(normal);
+				var vanillaElectricReach = fleeingPawn.CanReachImmediate(electricTarget, PathEndMode.Touch);
+				var patchedElectricReach = (bool)reachHelper.Invoke(null, new object[] { fleeingPawn, electricTarget, PathEndMode.Touch });
+				var vanillaNormalReach = fleeingPawn.CanReachImmediate(normalTarget, PathEndMode.Touch);
+				var patchedNormalReach = (bool)reachHelper.Invoke(null, new object[] { fleeingPawn, normalTarget, PathEndMode.Touch });
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& fleeingPawn.CurJobDef == JobDefOf.Flee
+						&& (fleeingPawn.CurJob?.playerForced ?? false)
+						&& nearbyZombieHostile
+						&& prefixContinues == false
+						&& prefixResult == null
+						&& electric.IsActiveElectric
+						&& vanillaElectricReach == false
+						&& patchedElectricReach
+						&& patchedNormalReach == vanillaNormalReach,
+					patchTargets,
+					forcedFleePrefix = new
+					{
+						pawn = DescribePawn(fleeingPawn),
+						nearbyZombie = DescribeZombie(nearbyZombie),
+						nearbyZombieHostile,
+						prefixContinues,
+						resultJob = prefixResult?.def?.defName
+					},
+					activeElectricReach = new
+					{
+						electric = DescribeZombie(electric),
+						active = electric.IsActiveElectric,
+						distanceSquared = fleeingPawn.Position.DistanceToSquared(electric.Position),
+						vanillaReach = vanillaElectricReach,
+						patchedReach = patchedElectricReach
+					},
+					normalReachControl = new
+					{
+						normal = DescribeZombie(normal),
+						distanceSquared = fleeingPawn.Position.DistanceToSquared(normal.Position),
+						vanillaReach = vanillaNormalReach,
+						patchedReach = patchedNormalReach
+					}
+				};
+			}
+			finally
+			{
+				if (electric != null && electric.Destroyed == false)
+					electric.Destroy(DestroyMode.Vanish);
+				if (normal != null && normal.Destroyed == false)
+					normal.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object VerifyAreaWorkflowPawnDestroyCleanup(Map map, IntVec3 root, Area colonistArea, Area zombieArea)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Pawn_Destroy_Patch");
+			if (TryFindClearSpawnCell(map, root, 10f, out var colonistCell, out var colonistError) == false)
+				return colonistError;
+			if (TryFindClearSpawnCell(map, root + new IntVec3(3, 0, 0), 10f, out var zombieCell, out var zombieError) == false)
+				return zombieError;
+
+			Pawn colonist = null;
+			Zombie zombie = null;
+			try
+			{
+				colonist = GenerateAreaWorkflowPawn(Faction.OfPlayer, false);
+				colonist.Name = new NameSingle("ZL_Area_DestroyCleanupColonist");
+				GenSpawn.Spawn(colonist, colonistCell, map, Rot4.South);
+				DisablePawnWork(colonist);
+
+				zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						colonist = DescribePawn(colonist),
+						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+						error = "ZombieGenerator.SpawnZombie returned no destroy-cleanup zombie."
+					};
+				}
+				zombie.Name = new NameSingle("ZL_Area_DestroyCleanupZombie");
+
+				var config = ColonistSettings.Values.ConfigFor(colonist);
+				var colonistConfigBefore = config != null && ColonistSettings.colonists.ContainsKey(colonist);
+				ZombieAreaManager.pawnsInDanger[colonist] = colonistArea;
+				ZombieAreaManager.pawnsInDanger[zombie] = zombieArea;
+				var dangerContainsColonistBefore = ZombieAreaManager.pawnsInDanger.ContainsKey(colonist);
+				var dangerContainsZombieBefore = ZombieAreaManager.pawnsInDanger.ContainsKey(zombie);
+
+				colonist.Destroy(DestroyMode.Vanish);
+				zombie.Destroy(DestroyMode.Vanish);
+
+				var dangerContainsColonistAfter = ZombieAreaManager.pawnsInDanger.ContainsKey(colonist);
+				var dangerContainsZombieAfter = ZombieAreaManager.pawnsInDanger.ContainsKey(zombie);
+				var colonistConfigAfter = ColonistSettings.colonists.ContainsKey(colonist);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& colonistConfigBefore
+						&& dangerContainsColonistBefore
+						&& dangerContainsZombieBefore
+						&& dangerContainsColonistAfter == false
+						&& dangerContainsZombieAfter == false
+						&& colonistConfigAfter == false,
+					patchTargets,
+					colonist = DescribePawn(colonist),
+					zombie = DescribeZombie(zombie),
+					colonistConfigBefore,
+					colonistConfigAfter,
+					dangerContainsColonistBefore,
+					dangerContainsColonistAfter,
+					dangerContainsZombieBefore,
+					dangerContainsZombieAfter
+				};
+			}
+			finally
+			{
+				if (colonist != null)
+				{
+					ZombieAreaManager.pawnsInDanger.Remove(colonist);
+					ColonistSettings.Values.RemoveColonist(colonist);
+					if (colonist.Destroyed == false)
+						colonist.Destroy(DestroyMode.Vanish);
+				}
+				if (zombie != null)
+				{
+					ZombieAreaManager.pawnsInDanger.Remove(zombie);
+					if (zombie.Destroyed == false)
+						zombie.Destroy(DestroyMode.Vanish);
+				}
 			}
 		}
 
@@ -1384,6 +1583,20 @@ namespace ZombieLand
 			try
 			{
 				return VerifyAreaWorkflowSpecialMeleeVerbs(map, new IntVec3(104, 0, 126), spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowSpecialDamage(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowSpecialDamage(map, new IntVec3(104, 0, 136), spawnedThings);
 			}
 			finally
 			{
@@ -2868,6 +3081,8 @@ namespace ZombieLand
 		{
 			var settingsSnapshot = SnapshotZombieSettings();
 			var meleePatchTargets = PatchedMethodsForPatchClass("Verb_MeleeAttack_TryCastShot_Patch");
+			var scratchHitPartTargets = PatchedMethodsForPatchClass("DamageWorker_Scratch_ChooseHitPart_Patch");
+			var biteHitPartTargets = PatchedMethodsForPatchClass("DamageWorker_Bite_ChooseHitPart_Patch");
 			try
 			{
 				ApplyZombieSettingsOverride(settings =>
@@ -2880,17 +3095,23 @@ namespace ZombieLand
 				var chainsawSuppression = VerifySmartMeleeChainsawSuppression(map, root + new IntVec3(8, 0, 0), spawnedThings);
 				var ropedKill = VerifySmartMeleeRopedKill(map, root + new IntVec3(16, 0, 0), spawnedThings);
 				var ordinaryFallback = VerifySmartMeleeOrdinaryFallback(map, root + new IntVec3(24, 0, 0), spawnedThings);
+				var downedHitParts = VerifySmartMeleeDownedHitParts(map, root + new IntVec3(32, 0, 0), spawnedThings);
 
 				return new
 				{
 					success = meleePatchTargets.Length > 0
+						&& scratchHitPartTargets.Length > 0
+						&& biteHitPartTargets.Length > 0
 						&& ObjectSuccess(smartBlock)
 						&& ObjectSuccess(chainsawSuppression)
 						&& ObjectSuccess(ropedKill)
-						&& ObjectSuccess(ordinaryFallback),
+						&& ObjectSuccess(ordinaryFallback)
+						&& ObjectSuccess(downedHitParts),
 					patchTargets = new
 					{
-						melee = meleePatchTargets
+						melee = meleePatchTargets,
+						scratchHitPart = scratchHitPartTargets,
+						biteHitPart = biteHitPartTargets
 					},
 					settings = new
 					{
@@ -2900,13 +3121,125 @@ namespace ZombieLand
 					smartBlock,
 					chainsawSuppression,
 					ropedKill,
-					ordinaryFallback
+					ordinaryFallback,
+					downedHitParts
 				};
 			}
 			finally
 			{
 				RestoreZombieSettings(settingsSnapshot);
 			}
+		}
+
+		static object VerifySmartMeleeDownedHitParts(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			if (TryFindAdjacentPawnPairCells(map, root, out var downedCell, out var targetCell, out var cellError) == false)
+				return cellError;
+			if (TryFindClearSpawnCell(map, root + new IntVec3(4, 0, 0), 8f, out var standingCell, out var standingError) == false)
+				return standingError;
+
+			var downedZombie = SpawnTargetZombie(map, downedCell, ZombieType.Normal, "ZL_Area_SmartMeleeDownedHitPart", spawnedThings);
+			var standingZombie = SpawnTargetZombie(map, standingCell, ZombieType.Normal, "ZL_Area_SmartMeleeStandingHitPart", spawnedThings);
+			var target = SpawnMeleeAreaWorkflowPawn(map, "ZL_Area_SmartMeleeHitPartTarget", targetCell, Faction.OfPlayer, spawnedThings);
+			if (downedZombie == null || standingZombie == null || target == null)
+			{
+				return new
+				{
+					success = false,
+					downedZombie = DescribeZombie(downedZombie),
+					standingZombie = DescribeZombie(standingZombie),
+					target = DescribePawn(target),
+					error = "Could not create downed hit-part fixtures."
+				};
+			}
+			if (TryMakeDownedForCombat(downedZombie, out var downedError) == false)
+			{
+				return new
+				{
+					success = false,
+					downedZombie = DescribeZombie(downedZombie),
+					error = downedError
+				};
+			}
+
+			var scratchDef = DefDatabase<DamageDef>.GetNamed("Scratch", false);
+			var biteDef = DefDatabase<DamageDef>.GetNamed("Bite", false) ?? CustomDefs.ZombieBite;
+			var scratch = InvokeDownedChooseHitPartProbe("scratch", typeof(DamageWorker_Scratch), "DamageWorker_Scratch_ChooseHitPart_Patch", scratchDef, downedZombie, standingZombie, target, 7101);
+			var bite = InvokeDownedChooseHitPartProbe("bite", typeof(DamageWorker_Bite), "DamageWorker_Bite_ChooseHitPart_Patch", biteDef, downedZombie, standingZombie, target, 7102);
+
+			return new
+			{
+				success = ObjectSuccess(scratch)
+					&& ObjectSuccess(bite),
+				downedZombie = DescribeZombie(downedZombie),
+				standingZombie = DescribeZombie(standingZombie),
+				target = DescribePawn(target),
+				scratch,
+				bite
+			};
+		}
+
+		static object InvokeDownedChooseHitPartProbe(string label, Type damageWorkerType, string patchClassName, DamageDef damageDef, Zombie downedZombie, Zombie standingZombie, Pawn target, int seed)
+		{
+			var chooseHitPart = AccessTools.Method(damageWorkerType, "ChooseHitPart");
+			var prefix = FindNestedPatchMethod(patchClassName, "Prefix");
+			if (chooseHitPart == null || prefix == null || damageDef == null)
+			{
+				return new
+				{
+					success = false,
+					label,
+					damageWorkerType = damageWorkerType?.Name,
+					damageDef = damageDef?.defName,
+					reflection = new
+					{
+						chooseHitPart = chooseHitPart != null,
+						prefix = prefix != null
+					},
+					error = "Could not reflect downed choose-hit-part members."
+				};
+			}
+
+			var standingInfo = new DamageInfo(damageDef, 1f, 0f, -1f, standingZombie, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+			var standingArgs = new object[] { standingInfo };
+			prefix.Invoke(null, standingArgs);
+			standingInfo = (DamageInfo)standingArgs[0];
+
+			var downedInfo = new DamageInfo(damageDef, 1f, 0f, -1f, downedZombie, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+			BodyPartRecord part;
+			Rand.PushState(seed);
+			try
+			{
+				var worker = Activator.CreateInstance(damageWorkerType, true);
+				part = chooseHitPart.Invoke(worker, new object[] { downedInfo, target }) as BodyPartRecord;
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			return new
+			{
+				success = standingInfo.Height == BodyPartHeight.Undefined
+					&& part != null
+					&& part.height == BodyPartHeight.Bottom
+					&& part.depth == BodyPartDepth.Outside,
+				label,
+				damageWorkerType = damageWorkerType.Name,
+				damageDef = damageDef.defName,
+				seed,
+				standingPrefix = new
+				{
+					heightAfterPrefix = standingInfo.Height.ToString()
+				},
+				downed = new
+				{
+					zombie = DescribeZombie(downedZombie),
+					part = DescribeBodyPartDetail(part),
+					height = part?.height.ToString(),
+					depth = part?.depth.ToString()
+				}
+			};
 		}
 
 		static object VerifySmartMeleeBiteBlock(Map map, IntVec3 root, List<Thing> spawnedThings)
@@ -3466,6 +3799,477 @@ namespace ZombieLand
 		static bool SpecialVerbCaseHidesBite(object value)
 		{
 			return value is SpecialMeleeVerbCase meleeCase && meleeCase.success && meleeCase.hasZombieBite == false;
+		}
+
+		static object VerifyAreaWorkflowSpecialDamage(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("DamageWorker_AddInjury_ApplyDamageToPart_Patch");
+			if (FindAreaWorkflowCells(map, root, 13, 18f, out var cells, out var cellError) == false)
+				return cellError;
+
+			var oldSpitterThreat = ZombieSettings.Values.spitterThreat;
+			try
+			{
+				ZombieSettings.Values.spitterThreat = 1f;
+
+				var spitterMelee = SpawnFireFixturePawn(map, cells[0], "spitter") as ZombieSpitter;
+				var spitterRanged = SpawnFireFixturePawn(map, cells[1], "spitter") as ZombieSpitter;
+				var normal = SpawnTargetZombie(map, cells[2], ZombieType.Normal, "ZL_Area_DamageNormal", spawnedThings);
+				var former = SpawnFormerZombieForDamage(map, cells[3], spawnedThings);
+				var albino = SpawnTargetZombie(map, cells[4], ZombieType.Albino, "ZL_Area_DamageAlbino", spawnedThings);
+				var explosiveAlbino = SpawnTargetZombie(map, cells[5], ZombieType.Albino, "ZL_Area_DamageAlbinoExplosive", spawnedThings);
+				var darkSlimer = SpawnTargetZombie(map, cells[6], ZombieType.DarkSlimer, "ZL_Area_DamageDarkSlimer", spawnedThings);
+				var electrifierRanged = SpawnTargetZombie(map, cells[7], ZombieType.Electrifier, "ZL_Area_DamageElectricRanged", spawnedThings);
+				var electrifierCut = SpawnTargetZombie(map, cells[8], ZombieType.Electrifier, "ZL_Area_DamageElectricCut", spawnedThings);
+				var armorHuman = SpawnAreaWorkflowPawn(map, "ZL_Area_DamageArmorHuman", cells[9], Faction.OfPlayer, spawnedThings);
+				var shieldTanky = SpawnTargetZombie(map, cells[10], ZombieType.TankyOperator, "ZL_Area_DamageShieldTanky", spawnedThings);
+				var helmetTanky = SpawnTargetZombie(map, cells[11], ZombieType.TankyOperator, "ZL_Area_DamageHelmetTanky", spawnedThings);
+				var suitTanky = SpawnTargetZombie(map, cells[12], ZombieType.TankyOperator, "ZL_Area_DamageSuitTanky", spawnedThings);
+
+				foreach (var pawn in new Pawn[] { spitterMelee, spitterRanged })
+					if (pawn != null)
+						spawnedThings.Add(pawn);
+				armorHuman?.apparel?.DestroyAll();
+				foreach (var zombie in new[] { normal, former, albino, explosiveAlbino, darkSlimer, electrifierRanged, electrifierCut, shieldTanky, helmetTanky, suitTanky })
+					zombie?.apparel?.DestroyAll();
+
+				if (spitterMelee == null || spitterRanged == null || normal == null || former == null || albino == null || explosiveAlbino == null || darkSlimer == null || electrifierRanged == null || electrifierCut == null || armorHuman == null || shieldTanky == null || helmetTanky == null || suitTanky == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						spitterMelee = DescribePawn(spitterMelee),
+						spitterRanged = DescribePawn(spitterRanged),
+						normal = DescribeZombie(normal),
+						former = DescribeZombie(former),
+						albino = DescribeZombie(albino),
+						explosiveAlbino = DescribeZombie(explosiveAlbino),
+						darkSlimer = DescribeZombie(darkSlimer),
+						electrifierRanged = DescribeZombie(electrifierRanged),
+						electrifierCut = DescribeZombie(electrifierCut),
+						armorHuman = DescribePawn(armorHuman),
+						shieldTanky = DescribeZombie(shieldTanky),
+						helmetTanky = DescribeZombie(helmetTanky),
+						suitTanky = DescribeZombie(suitTanky),
+						error = "Could not create all special damage fixtures."
+					};
+				}
+
+				electrifierRanged.electricDisabledUntil = GenTicks.TicksGame - 1;
+				electrifierCut.electricDisabledUntil = GenTicks.TicksGame - 1;
+
+				var spitterScaling = VerifySpecialDamageSpitterScaling(spitterMelee, spitterRanged);
+				var formerReduction = VerifySpecialDamageFormerReduction(normal, former);
+				var albinoGating = VerifySpecialDamageAlbinoGating(albino, explosiveAlbino);
+				var darkSlimerSmoke = VerifySpecialDamageDarkSlimerSmoke(map, darkSlimer);
+				var electricAbsorption = VerifySpecialDamageElectricAbsorption(electrifierRanged, electrifierCut);
+				var tankyArmor = VerifySpecialDamageTankyArmor(armorHuman, shieldTanky, helmetTanky, suitTanky);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& ObjectSuccess(spitterScaling)
+						&& ObjectSuccess(formerReduction)
+						&& ObjectSuccess(albinoGating)
+						&& ObjectSuccess(darkSlimerSmoke)
+						&& ObjectSuccess(electricAbsorption)
+						&& ObjectSuccess(tankyArmor),
+					patchTargets = new
+					{
+						applyDamageToPart = patchTargets,
+						armorUtility = PatchedMethodsForPatchClass("ArmorUtility_GetPostArmorDamage_Patch")
+					},
+					spitterScaling,
+					formerReduction,
+					albinoGating,
+					darkSlimerSmoke,
+					electricAbsorption,
+					tankyArmor,
+					settings = new
+					{
+						spitterThreat = ZombieSettings.Values.spitterThreat,
+						difficulty = Tools.Difficulty()
+					}
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.spitterThreat = oldSpitterThreat;
+			}
+		}
+
+		static bool FindAreaWorkflowCells(Map map, IntVec3 root, int count, float radius, out IntVec3[] cells, out object error)
+		{
+			var result = new List<IntVec3>();
+			var nextRoot = root;
+			for (var i = 0; i < count; i++)
+			{
+				if (TryFindClearSpawnCell(map, nextRoot, radius, out var cell, out var spawnError) == false)
+				{
+					cells = result.ToArray();
+					error = new
+					{
+						success = false,
+						root = ZombieRuntimeActions.DescribeCell(root),
+						foundCells = result.Count,
+						requestedCells = count,
+						error = spawnError
+					};
+					return false;
+				}
+				result.Add(cell);
+				nextRoot = cell + new IntVec3(4, 0, 0);
+			}
+
+			cells = result.ToArray();
+			error = null;
+			return true;
+		}
+
+		static Zombie SpawnFormerZombieForDamage(Map map, IntVec3 cell, List<Thing> spawnedThings)
+		{
+			var beforeIds = CurrentZombies(map)
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+			DisablePawnWork(pawn);
+			pawn.apparel?.DestroyAll();
+			pawn.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			pawn.inventory?.DestroyAll();
+			ZombieRuntimeActions.ConvertPawnToZombie(pawn, map, true);
+			var former = CurrentZombies(map)
+				.OfType<Zombie>()
+				.Where(zombie => beforeIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+				.OrderBy(zombie => zombie.Position.DistanceToSquared(cell))
+				.FirstOrDefault();
+			if (former != null)
+				spawnedThings.Add(former);
+			return former;
+		}
+
+		static object VerifySpecialDamageSpitterScaling(ZombieSpitter meleeSpitter, ZombieSpitter rangedSpitter)
+		{
+			var factor = 6f - ZombieSettings.Values.spitterThreat;
+			var meleePart = FindNonHeadPart(meleeSpitter);
+			var rangedPart = FindNonHeadPart(rangedSpitter);
+			var meleeBefore = TotalInjurySeverity(meleeSpitter);
+			var rangedBefore = TotalInjurySeverity(rangedSpitter);
+			var meleeDamage = ApplyPawnDamage(meleeSpitter, DamageDefOf.Cut, 2f, meleePart, 6501, 0f);
+			var rangedDamage = ApplyPawnDamage(rangedSpitter, DamageDefOf.Bullet, 10f, rangedPart, 6502, 0f);
+			var meleeAfter = TotalInjurySeverity(meleeSpitter);
+			var rangedAfter = TotalInjurySeverity(rangedSpitter);
+			return new
+			{
+				success = meleeDamage.totalDamage > rangedDamage.totalDamage * 2f
+					&& meleeDamage.injuryDelta > rangedDamage.injuryDelta * 2f,
+				factor,
+				meleeSpitter = DescribePawn(meleeSpitter),
+				rangedSpitter = DescribePawn(rangedSpitter),
+				meleePart = DescribeBodyPartDetail(meleePart),
+				rangedPart = DescribeBodyPartDetail(rangedPart),
+				meleeBefore,
+				meleeAfter,
+				meleeInjuryDelta = meleeAfter - meleeBefore,
+				rangedBefore,
+				rangedAfter,
+				rangedInjuryDelta = rangedAfter - rangedBefore,
+				meleeDamage,
+				rangedDamage
+			};
+		}
+
+		static object VerifySpecialDamageFormerReduction(Zombie normal, Zombie former)
+		{
+			var normalPart = FindNonHeadPart(normal);
+			var formerPart = FindNonHeadPart(former);
+			var normalDamage = ApplyPawnDamage(normal, DamageDefOf.Bullet, 12f, normalPart, 6503, 0f);
+			var formerDamage = ApplyPawnDamage(former, DamageDefOf.Bullet, 12f, formerPart, 6504, 0f);
+			return new
+			{
+				success = former.wasMapPawnBefore
+					&& normal.wasMapPawnBefore == false
+					&& normalDamage.totalDamage > 0f
+					&& formerDamage.totalDamage > 0f
+					&& formerDamage.totalDamage < normalDamage.totalDamage,
+				normal = DescribeZombie(normal),
+				former = DescribeZombie(former),
+				normalPart = DescribeBodyPartDetail(normalPart),
+				formerPart = DescribeBodyPartDetail(formerPart),
+				normalDamage,
+				formerDamage
+			};
+		}
+
+		static object VerifySpecialDamageAlbinoGating(Zombie albino, Zombie explosiveAlbino)
+		{
+			var part = FindNonHeadPart(albino);
+			var explosivePart = FindNonHeadPart(explosiveAlbino);
+			var bulletTotals = new List<float>();
+			var bulletInjuryDeltas = new List<float>();
+			for (var i = 0; i < 24; i++)
+			{
+				var before = TotalInjurySeverity(albino);
+				var result = ApplyPawnDamage(albino, DamageDefOf.Bullet, 1f, part, 6505 + i, 0f);
+				var after = TotalInjurySeverity(albino);
+				bulletTotals.Add(result.totalDamage);
+				bulletInjuryDeltas.Add(after - before);
+				if (bulletTotals.Any(total => total > 0f) && bulletTotals.Any(total => total <= 0f))
+					break;
+			}
+
+			var explosiveDamage = ApplyPawnDamage(explosiveAlbino, DamageDefOf.Bomb, 1f, explosivePart, 6530, 0f);
+			var bulletHits = bulletTotals.Count(total => total > 0f);
+			var bulletBlocked = bulletTotals.Count(total => total <= 0f);
+			return new
+			{
+				success = albino.isAlbino
+					&& explosiveAlbino.isAlbino
+					&& bulletHits > 0
+					&& bulletBlocked > 0
+					&& explosiveDamage.totalDamage > 0f,
+				albino = DescribeZombie(albino),
+				explosiveAlbino = DescribeZombie(explosiveAlbino),
+				part = DescribeBodyPartDetail(part),
+				explosivePart = DescribeBodyPartDetail(explosivePart),
+				bulletAttempts = bulletTotals.Count,
+				bulletHits,
+				bulletBlocked,
+				bulletTotals = bulletTotals.ToArray(),
+				bulletInjuryDeltas = bulletInjuryDeltas.ToArray(),
+				explosiveDamage
+			};
+		}
+
+		static object VerifySpecialDamageDarkSlimerSmoke(Map map, Zombie darkSlimer)
+		{
+			var part = FindNonHeadPart(darkSlimer);
+			var position = darkSlimer.Position;
+			var smokeRadius = 1f + Tools.Difficulty();
+			var countRadius = smokeRadius + 1f;
+			var ticksToRun = Math.Max(1, (int)Math.Ceiling(smokeRadius * 1.5f) + 2);
+			var tarSmokeThingsBefore = CountThingsNear(map, position, CustomDefs.TarSmoke, countRadius);
+			var gasAtPositionBefore = position.GetGas(map)?.def?.defName;
+			var damage = ApplyPawnDamage(darkSlimer, DamageDefOf.Bullet, 1f, part, 6531, 0f);
+			AdvanceGameTicks(ticksToRun);
+			var tarSmokeThingsAfter = CountThingsNear(map, position, CustomDefs.TarSmoke, countRadius);
+			var gasAtPositionAfter = position.GetGas(map)?.def?.defName;
+			return new
+			{
+				success = darkSlimer.isDarkSlimer
+					&& tarSmokeThingsAfter > tarSmokeThingsBefore
+					&& gasAtPositionAfter == CustomDefs.TarSmoke.defName,
+				darkSlimer = DescribeZombie(darkSlimer),
+				part = DescribeBodyPartDetail(part),
+				position = ZombieRuntimeActions.DescribeCell(position),
+				smokeRadius,
+				countRadius,
+				ticksToRun,
+				gasAtPositionBefore,
+				gasAtPositionAfter,
+				tarSmokeThingsBefore,
+				tarSmokeThingsAfter,
+				tarSmokeThingDelta = tarSmokeThingsAfter - tarSmokeThingsBefore,
+				damage
+			};
+		}
+
+		static object VerifySpecialDamageElectricAbsorption(Zombie rangedElectric, Zombie cutElectric)
+		{
+			var rangedPart = FindNonHeadPart(rangedElectric);
+			var cutPart = FindNonHeadPart(cutElectric);
+			var rangedAbsorbBefore = rangedElectric.absorbAttack.Count;
+			var rangedDamage = ApplyPawnDamage(rangedElectric, DamageDefOf.Bullet, 4f, rangedPart, 6532, 45f);
+			var rangedAbsorbAfter = rangedElectric.absorbAttack.Count;
+			var cutDamage = ApplyPawnDamage(cutElectric, DamageDefOf.Cut, 1f, cutPart, 6533, 0f);
+			return new
+			{
+				success = rangedElectric.IsActiveElectric
+					&& cutElectric.IsActiveElectric
+					&& rangedDamage.totalDamage <= 0f
+					&& rangedAbsorbAfter > rangedAbsorbBefore
+					&& cutDamage.totalDamage > 0f,
+				rangedElectric = DescribeZombie(rangedElectric),
+				cutElectric = DescribeZombie(cutElectric),
+				rangedPart = DescribeBodyPartDetail(rangedPart),
+				cutPart = DescribeBodyPartDetail(cutPart),
+				rangedAbsorbBefore,
+				rangedAbsorbAfter,
+				rangedAbsorbDelta = rangedAbsorbAfter - rangedAbsorbBefore,
+				rangedAbsorbAttack = rangedElectric.absorbAttack.Select(pair => new { angle = pair.Key, index = pair.Value }).ToArray(),
+				rangedDamage,
+				cutDamage
+			};
+		}
+
+		static object VerifySpecialDamageTankyArmor(Pawn humanControl, Zombie shieldTanky, Zombie helmetTanky, Zombie suitTanky)
+		{
+			shieldTanky.hasTankyShield = 1f;
+			shieldTanky.hasTankyHelmet = -1f;
+			shieldTanky.hasTankySuit = -1f;
+			helmetTanky.hasTankyShield = -1f;
+			helmetTanky.hasTankyHelmet = 1f;
+			helmetTanky.hasTankySuit = -1f;
+			suitTanky.hasTankyShield = -1f;
+			suitTanky.hasTankyHelmet = -1f;
+			suitTanky.hasTankySuit = 1f;
+
+			var humanPart = FindNonHeadPart(humanControl);
+			var shieldPart = FindNonHeadPart(shieldTanky);
+			var helmetPart = FindHeadshotPart(helmetTanky);
+			var suitPart = FindNonHeadPart(suitTanky);
+			var human = InvokeArmorUtilityProbe(humanControl, humanPart, 10f, 0f, 6540);
+			var shield = InvokeArmorUtilityProbe(shieldTanky, shieldPart, 10f, 0f, 6541);
+			var helmet = InvokeArmorUtilityProbe(helmetTanky, helmetPart, 5f, 0f, 6542);
+			var suit = InvokeArmorUtilityProbe(suitTanky, suitPart, 10f, 0f, 6543);
+
+			return new
+			{
+				success = human.result > 0f
+					&& human.deflected == false
+					&& human.diminished == false
+					&& shield.result <= 0f
+					&& shield.deflected
+					&& shield.diminished
+					&& shield.armorAfter.shield > 0f
+					&& shield.armorAfter.shield < shield.armorBefore.shield
+					&& helmet.result <= 0f
+					&& helmet.deflected
+					&& helmet.diminished
+					&& helmet.armorAfter.helmet > 0f
+					&& helmet.armorAfter.helmet < helmet.armorBefore.helmet
+					&& suit.result <= 0f
+					&& suit.deflected
+					&& suit.diminished
+					&& suit.armorAfter.suit > 0f
+					&& suit.armorAfter.suit < suit.armorBefore.suit,
+				humanControl = DescribePawn(humanControl),
+				shieldTanky = DescribeZombie(shieldTanky),
+				helmetTanky = DescribeZombie(helmetTanky),
+				suitTanky = DescribeZombie(suitTanky),
+				human,
+				shield,
+				helmet,
+				suit
+			};
+		}
+
+		static ArmorUtilityProbeResult InvokeArmorUtilityProbe(Pawn pawn, BodyPartRecord part, float amount, float armorPenetration, int seed)
+		{
+			var damageDef = DamageDefOf.Bullet;
+			var armorBefore = pawn is Zombie zombieBefore ? DescribeTankyArmorSnapshot(zombieBefore) : null;
+			float result;
+			bool deflected;
+			bool diminished;
+			Rand.PushState(seed);
+			try
+			{
+				result = ArmorUtility.GetPostArmorDamage(pawn, amount, armorPenetration, part, ref damageDef, out deflected, out diminished);
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			return new ArmorUtilityProbeResult
+			{
+				pawn = DescribePawn(pawn),
+				part = DescribeBodyPartDetail(part),
+				inputAmount = amount,
+				armorPenetration = armorPenetration,
+				seed = seed,
+				damageDef = damageDef?.defName,
+				result = result,
+				deflected = deflected,
+				diminished = diminished,
+				armorBefore = armorBefore,
+				armorAfter = pawn is Zombie zombieAfter ? DescribeTankyArmorSnapshot(zombieAfter) : null
+			};
+		}
+
+		static TankyArmorSnapshot DescribeTankyArmorSnapshot(Zombie zombie)
+		{
+			return zombie == null
+				? null
+				: new TankyArmorSnapshot
+				{
+					shield = zombie.hasTankyShield,
+					helmet = zombie.hasTankyHelmet,
+					suit = zombie.hasTankySuit,
+					isTanky = zombie.IsTanky
+				};
+		}
+
+		sealed class TankyArmorSnapshot
+		{
+			public float shield { get; set; }
+			public float helmet { get; set; }
+			public float suit { get; set; }
+			public bool isTanky { get; set; }
+		}
+
+		sealed class ArmorUtilityProbeResult
+		{
+			public object pawn { get; set; }
+			public object part { get; set; }
+			public float inputAmount { get; set; }
+			public float armorPenetration { get; set; }
+			public int seed { get; set; }
+			public string damageDef { get; set; }
+			public float result { get; set; }
+			public bool deflected { get; set; }
+			public bool diminished { get; set; }
+			public TankyArmorSnapshot armorBefore { get; set; }
+			public TankyArmorSnapshot armorAfter { get; set; }
+		}
+
+		static DamageProbeResult ApplyPawnDamage(Pawn pawn, DamageDef damageDef, float amount, BodyPartRecord part, int seed, float angle)
+		{
+			var before = TotalInjurySeverity(pawn);
+			DamageWorker.DamageResult result;
+			Rand.PushState(seed);
+			try
+			{
+				var dinfo = new DamageInfo(damageDef, amount, 0f, angle, null, part, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+				result = pawn.TakeDamage(dinfo);
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+			var after = TotalInjurySeverity(pawn);
+			return new DamageProbeResult
+			{
+				damageDef = damageDef?.defName,
+				inputAmount = amount,
+				seed = seed,
+				angle = angle,
+				totalDamage = result.totalDamageDealt,
+				partsHit = result.parts?.Select(DescribeBodyPartDetail).ToArray() ?? Array.Empty<object>(),
+				headshot = result.headshot,
+				deflected = result.deflected,
+				diminished = result.diminished,
+				injuryBefore = before,
+				injuryAfter = after,
+				injuryDelta = after - before
+			};
+		}
+
+		sealed class DamageProbeResult
+		{
+			public string damageDef { get; set; }
+			public float inputAmount { get; set; }
+			public int seed { get; set; }
+			public float angle { get; set; }
+			public float totalDamage { get; set; }
+			public object[] partsHit { get; set; }
+			public bool headshot { get; set; }
+			public bool deflected { get; set; }
+			public bool diminished { get; set; }
+			public float injuryBefore { get; set; }
+			public float injuryAfter { get; set; }
+			public float injuryDelta { get; set; }
 		}
 
 		static object VerifyAreaWorkflowUiState(Map map, IntVec3 root, List<Thing> spawnedThings)
@@ -4861,6 +5665,7 @@ namespace ZombieLand
 		static object VerifyAreaWorkflowZombieStats(Map map, IntVec3 root, List<Thing> spawnedThings)
 		{
 			var patchTargets = PatchedMethodsForPatchClass("StatExtension_GetStatValue_Patch");
+			var damageFactorPatchTargets = PatchedMethodsForPatchClass("Verb_GetDamageFactorFor_Patch");
 			var prefix = FindNestedPatchMethod("StatExtension_GetStatValue_Patch", "Prefix");
 			var getStatValue = AccessTools.Method(typeof(StatExtension), nameof(StatExtension.GetStatValue), new[] { typeof(Thing), typeof(StatDef), typeof(bool), typeof(int) });
 			if (prefix == null || getStatValue == null)
@@ -4895,6 +5700,7 @@ namespace ZombieLand
 				ZombieSettings.Values.moveSpeedIdle = 0.25f;
 				ZombieSettings.Values.moveSpeedTracking = 0.75f;
 				ZombieSettings.Values.spitterThreat = 2.25f;
+				ZombieSettings.Values.damageFactor = 1.25f;
 				ZombieTicker.percentZombiesTicked = Enumerable.Repeat(1f, ZombieTicker.percentZombiesTicked.Length).ToArray();
 				ZombieTicker.percentZombiesTickedIndex = 0;
 				gameTickManager.CurTimeSpeed = TimeSpeed.Normal;
@@ -4990,15 +5796,19 @@ namespace ZombieLand
 				var humanPrefixContinues = (bool)prefix.Invoke(null, humanPrefixArgs);
 				var humanPrefixResultUnchanged = Mathf.Approximately((float)humanPrefixArgs[2], -12345f);
 				var humanMoveSpeed = human.GetStatValue(StatDefOf.MoveSpeed);
+				var damageFactors = VerifyZombieVerbDamageFactors(human, idleFat, trackingThin, formerHulk, tanky);
 
 				return new
 				{
 					success = patchTargets.Length > 0
+						&& damageFactorPatchTargets.Length > 0
 						&& humanPrefixContinues
 						&& humanPrefixResultUnchanged
 						&& humanMoveSpeed > 0f
-						&& cases.All(entry => entry.success),
+						&& cases.All(entry => entry.success)
+						&& ObjectSuccess(damageFactors),
 					patchTargets,
+					damageFactorPatchTargets,
 					fixtures = new
 					{
 						human = DescribePawn(human),
@@ -5027,6 +5837,7 @@ namespace ZombieLand
 						moveSpeed = humanMoveSpeed
 					},
 					cases = cases.ToArray(),
+					damageFactors,
 					optionalStats = new
 					{
 						smokeSensitivityPresent = smokeSensitivity != null,
@@ -5041,6 +5852,86 @@ namespace ZombieLand
 				ZombieTicker.percentZombiesTickedIndex = tickerSnapshot.percentZombiesTickedIndex;
 				gameTickManager.CurTimeSpeed = originalTimeSpeed;
 			}
+		}
+
+		static object VerifyZombieVerbDamageFactors(Pawn human, Zombie idleFat, Zombie trackingThin, Zombie formerHulk, Zombie tanky)
+		{
+			var verbProps = idleFat?.meleeVerbs?.TryGetMeleeVerb(human)?.verbProps;
+			if (verbProps == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find a zombie melee verb for damage-factor probing.",
+					zombie = DescribeZombie(idleFat),
+					target = DescribePawn(human)
+				};
+			}
+
+			var humanCase = MakeDamageFactorCase("humanPassThrough", human, verbProps, 1f, "ordinary human uses vanilla damage factor only");
+			var fatCase = MakeDamageFactorCase("fatZombie", idleFat, verbProps, 4f * ZombieSettings.Values.damageFactor, "Fat zombie scales by body type and damageFactor setting");
+			var thinCase = MakeDamageFactorCase("thinZombie", trackingThin, verbProps, 0.5f * ZombieSettings.Values.damageFactor, "Thin zombie scales by body type and damageFactor setting");
+			var formerCase = MakeDamageFactorCase("formerHulkZombie", formerHulk, verbProps, 3f * ZombieSettings.Values.damageFactor * 5f, "Former-map-pawn Hulk zombie scales by body type, damageFactor setting, and former-pawn multiplier");
+			tanky.hasTankyShield = 1f;
+			tanky.hasTankyHelmet = 1f;
+			tanky.hasTankySuit = 1f;
+			var tankyCase = MakeDamageFactorCase("fullyArmoredTanky", tanky, verbProps, 60f, "Tanky shield, helmet, and suit replace body-type scaling with equipment-weight scaling");
+			var cases = new[] { humanCase, fatCase, thinCase, formerCase, tankyCase };
+
+			return new
+			{
+				success = cases.All(entry => entry.success),
+				verb = new
+				{
+					label = verbProps.label,
+					isMeleeAttack = verbProps.IsMeleeAttack
+				},
+				damageFactorSetting = ZombieSettings.Values.damageFactor,
+				cases
+			};
+		}
+
+		static DamageFactorProbeCase MakeDamageFactorCase(string name, Pawn attacker, VerbProperties verbProps, float expectedPostfixMultiplier, string note, float tolerance = 0.0001f)
+		{
+			var baseFactor = CalculateExpectedVanillaDamageFactor(attacker, verbProps);
+			var actual = verbProps.GetDamageFactorFor(null, attacker, null);
+			var expected = baseFactor * expectedPostfixMultiplier;
+			return new DamageFactorProbeCase
+			{
+				name = name,
+				success = Mathf.Abs(actual - expected) <= tolerance,
+				attacker = DescribePawn(attacker),
+				baseFactor = baseFactor,
+				expectedPostfixMultiplier = expectedPostfixMultiplier,
+				actual = actual,
+				expected = expected,
+				tolerance = tolerance,
+				note = note
+			};
+		}
+
+		static float CalculateExpectedVanillaDamageFactor(Pawn attacker, VerbProperties verbProps)
+		{
+			var result = 1f;
+			if (attacker != null && verbProps.IsMeleeAttack)
+			{
+				result *= attacker.ageTracker.CurLifeStage.meleeDamageFactor;
+				result *= attacker.GetStatValue(StatDefOf.MeleeDamageFactor);
+			}
+			return result;
+		}
+
+		sealed class DamageFactorProbeCase
+		{
+			public string name { get; set; }
+			public bool success { get; set; }
+			public object attacker { get; set; }
+			public float baseFactor { get; set; }
+			public float expectedPostfixMultiplier { get; set; }
+			public float actual { get; set; }
+			public float expected { get; set; }
+			public float tolerance { get; set; }
+			public string note { get; set; }
 		}
 
 		static StatProbeCase MakeStatCase(string name, Thing thing, StatDef stat, float expected, string note, float tolerance = 0.0001f)
@@ -6044,6 +6935,7 @@ namespace ZombieLand
 				}
 
 				var helperProbe = VerifyRangedProjectilePatchHelpers(verb, shooter, zombie);
+				var deathStateTransitions = VerifyZombieDeathStateTransitionPatches(map, root + new IntVec3(10, 0, 0), spawnedThings);
 				var oldForcedMissRadius = (float)forcedMissRadiusField.GetValue(verb.verbProps);
 				var oldWarmupTime = (float)warmupTimeField.GetValue(verb.verbProps);
 				var projectilesBefore = map.listerThings.AllThings.OfType<Projectile>().Select(projectile => projectile.ThingID).ToHashSet();
@@ -6106,6 +6998,7 @@ namespace ZombieLand
 					success = projectilePatchTargets.Length > 0
 						&& launchPatchTargets.Length > 0
 						&& ObjectSuccess(helperProbe)
+						&& ObjectSuccess(deathStateTransitions)
 						&& castResult
 						&& castError == null
 						&& launchedProjectile != null
@@ -6131,6 +7024,7 @@ namespace ZombieLand
 					zombie = DescribeZombie(zombie),
 					verb = DescribeVerb(verb),
 					helperProbe,
+					deathStateTransitions,
 					forcedMissRadius = new
 					{
 						before = oldForcedMissRadius,
@@ -6212,6 +7106,193 @@ namespace ZombieLand
 				nonZombieZeroChance,
 				skipMissingAtZombie,
 				skipMissingAtShooter
+			};
+		}
+
+		static object VerifyZombieDeathStateTransitionPatches(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var headshotMethod = AccessTools.Method(typeof(DamageWorker_AddInjury), "IsHeadshot");
+			var headshotTargets = PatchedMethodsForPatchClass("DamageWorker_AddInjury_IsHeadshot_Patch");
+			var addDirectTargets = PatchedMethodsForPatchClass("HediffSet_AddDirect_Patch");
+			if (headshotMethod == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect DamageWorker_AddInjury.IsHeadshot.",
+					patchTargets = new
+					{
+						headshot = headshotTargets,
+						addDirect = addDirectTargets
+					}
+				};
+			}
+
+			var cells = GenRadial.RadialCellsAround(root, 14f, true)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Take(4)
+				.ToArray();
+			if (cells.Length < 4)
+			{
+				return new
+				{
+					success = false,
+					root = ZombieRuntimeActions.DescribeCell(root),
+					cellCount = cells.Length,
+					error = "Not enough clear cells were found for the zombie death-state transition fixture."
+				};
+			}
+
+			var headshotZombie = SpawnTargetZombie(map, cells[0], ZombieType.Normal, "ZL_Area_HeadshotStateZombie", spawnedThings);
+			var bodyshotZombie = SpawnTargetZombie(map, cells[1], ZombieType.Normal, "ZL_Area_BodyshotStateZombie", spawnedThings);
+			var brainInjuryZombie = SpawnTargetZombie(map, cells[2], ZombieType.Normal, "ZL_Area_BrainInjuryStateZombie", spawnedThings);
+			var limbInjuryZombie = SpawnTargetZombie(map, cells[3], ZombieType.Normal, "ZL_Area_LimbInjuryStateZombie", spawnedThings);
+			if (new[] { headshotZombie, bodyshotZombie, brainInjuryZombie, limbInjuryZombie }.Any(zombie => zombie == null))
+			{
+				return new
+				{
+					success = false,
+					patchTargets = new
+					{
+						headshot = headshotTargets,
+						addDirect = addDirectTargets
+					},
+					headshotZombie = DescribeZombie(headshotZombie),
+					bodyshotZombie = DescribeZombie(bodyshotZombie),
+					brainInjuryZombie = DescribeZombie(brainInjuryZombie),
+					limbInjuryZombie = DescribeZombie(limbInjuryZombie),
+					error = "Could not create all zombie death-state transition fixtures."
+				};
+			}
+
+			var headPart = FindHeadshotPart(headshotZombie);
+			var bodyPart = FindNonHeadPart(bodyshotZombie);
+			var brainPart = brainInjuryZombie.health?.hediffSet?.GetBrain();
+			var limbPart = FindNonConsciousnessPart(limbInjuryZombie);
+			if (headPart == null || bodyPart == null || brainPart == null || limbPart == null)
+			{
+				return new
+				{
+					success = false,
+					patchTargets = new
+					{
+						headshot = headshotTargets,
+						addDirect = addDirectTargets
+					},
+					parts = new
+					{
+						head = DescribeBodyPartDetail(headPart),
+						body = DescribeBodyPartDetail(bodyPart),
+						brain = DescribeBodyPartDetail(brainPart),
+						limb = DescribeBodyPartDetail(limbPart)
+					},
+					error = "Could not find all required body parts for the zombie death-state transition fixture."
+				};
+			}
+
+			var headDinfo = new DamageInfo(DamageDefOf.Bullet, 1f, 0f, -1f, null, headPart, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+			var bodyDinfo = new DamageInfo(DamageDefOf.Bullet, 1f, 0f, -1f, null, bodyPart, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+			var headshotResult = (bool)headshotMethod.Invoke(null, new object[] { headDinfo, headshotZombie });
+			var bodyshotResult = (bool)headshotMethod.Invoke(null, new object[] { bodyDinfo, bodyshotZombie });
+			var headshotStateAfter = headshotZombie.state;
+			var bodyshotStateAfter = bodyshotZombie.state;
+
+			var brainCut = HediffMaker.MakeHediff(HediffDefOf.Cut, brainInjuryZombie, brainPart);
+			brainInjuryZombie.health.hediffSet.AddDirect(brainCut, new DamageInfo(DamageDefOf.Cut, 1f), null);
+			var brainStateAfter = brainInjuryZombie.state;
+
+			var limbCut = HediffMaker.MakeHediff(HediffDefOf.Cut, limbInjuryZombie, limbPart);
+			limbInjuryZombie.health.hediffSet.AddDirect(limbCut, new DamageInfo(DamageDefOf.Cut, 1f), null);
+			var limbStateAfter = limbInjuryZombie.state;
+
+			return new
+			{
+				success = headshotTargets.Length > 0
+					&& addDirectTargets.Length > 0
+					&& headshotResult
+					&& headshotStateAfter == ZombieState.ShouldDie
+					&& bodyshotResult == false
+					&& bodyshotStateAfter != ZombieState.ShouldDie
+					&& brainCut.def.isBad
+					&& brainPart.def.tags.Contains(BodyPartTagDefOf.ConsciousnessSource)
+					&& brainStateAfter == ZombieState.ShouldDie
+					&& limbCut.def.isBad
+					&& limbPart.def.tags.Contains(BodyPartTagDefOf.ConsciousnessSource) == false
+					&& limbStateAfter != ZombieState.ShouldDie,
+				patchTargets = new
+				{
+					headshot = headshotTargets,
+					addDirect = addDirectTargets
+				},
+				headshot = new
+				{
+					zombie = DescribeZombie(headshotZombie),
+					part = DescribeBodyPartDetail(headPart),
+					result = headshotResult,
+					stateAfter = headshotStateAfter.ToString()
+				},
+				bodyshot = new
+				{
+					zombie = DescribeZombie(bodyshotZombie),
+					part = DescribeBodyPartDetail(bodyPart),
+					result = bodyshotResult,
+					stateAfter = bodyshotStateAfter.ToString()
+				},
+				brainInjury = new
+				{
+					zombie = DescribeZombie(brainInjuryZombie),
+					part = DescribeBodyPartDetail(brainPart),
+					hediff = brainCut.def.defName,
+					isBad = brainCut.def.isBad,
+					consciousnessSource = brainPart.def.tags.Contains(BodyPartTagDefOf.ConsciousnessSource),
+					stateAfter = brainStateAfter.ToString()
+				},
+				limbInjury = new
+				{
+					zombie = DescribeZombie(limbInjuryZombie),
+					part = DescribeBodyPartDetail(limbPart),
+					hediff = limbCut.def.defName,
+					isBad = limbCut.def.isBad,
+					consciousnessSource = limbPart.def.tags.Contains(BodyPartTagDefOf.ConsciousnessSource),
+					stateAfter = limbStateAfter.ToString()
+				}
+			};
+		}
+
+		static BodyPartRecord FindHeadshotPart(Pawn pawn)
+		{
+			return pawn?.health?.hediffSet?
+				.GetNotMissingParts()
+				.FirstOrDefault(part => part.groups.Contains(BodyPartGroupDefOf.FullHead));
+		}
+
+		static BodyPartRecord FindNonHeadPart(Pawn pawn)
+		{
+			return pawn?.health?.hediffSet?
+				.GetNotMissingParts()
+				.FirstOrDefault(part => part.groups.Contains(BodyPartGroupDefOf.FullHead) == false && part.depth == BodyPartDepth.Outside);
+		}
+
+		static BodyPartRecord FindNonConsciousnessPart(Pawn pawn)
+		{
+			return pawn?.health?.hediffSet?
+				.GetNotMissingParts()
+				.FirstOrDefault(part => part.def.tags.Contains(BodyPartTagDefOf.ConsciousnessSource) == false && part.depth == BodyPartDepth.Outside);
+		}
+
+		static object DescribeBodyPartDetail(BodyPartRecord part)
+		{
+			return part == null ? null : new
+			{
+				def = part.def?.defName,
+				label = part.Label,
+				height = part.height.ToString(),
+				depth = part.depth.ToString(),
+				groups = part.groups.Select(group => group.defName).ToArray(),
+				tags = part.def.tags.Select(tag => tag.defName).ToArray()
 			};
 		}
 

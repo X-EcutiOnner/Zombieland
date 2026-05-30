@@ -1476,6 +1476,8 @@ namespace ZombieLand
 		[Tool("zombieland/zombie_fire_attachment_state_contract", Description = "Verify real fire attachment add/remove keeps Zombie.isOnFire synchronized.")]
 		public static object ZombieFireAttachmentStateContract()
 		{
+			var addTargets = PatchedMethodsForPatchClass("CompAttachBase_AddAttachment_Patch");
+			var removeTargets = PatchedMethodsForPatchClass("CompAttachBase_RemoveAttachment_Patch");
 			var map = CurrentMap;
 			if (map == null)
 			{
@@ -1486,54 +1488,122 @@ namespace ZombieLand
 				};
 			}
 
+			Zombie zombie = null;
+			Fire fire = null;
+			Fire secondFire = null;
 			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
 			if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var spawnError) == false)
 				return spawnError;
 
-			var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
-			if (zombie == null)
+			try
 			{
+				zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets = new
+						{
+							add = addTargets,
+							remove = removeTargets
+						},
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						error = "Could not spawn a normal zombie for fire attachment state."
+					};
+				}
+
+				var initialHasFire = zombie.HasAttachment(ThingDefOf.Fire);
+				var initialIsOnFire = zombie.isOnFire;
+				var initialFireAttachmentCount = FireAttachmentCount(zombie);
+				FireUtility.TryAttachFire(zombie, 1f, null);
+				fire = zombie.GetAttachment(ThingDefOf.Fire) as Fire;
+				var afterAttachHasFire = zombie.HasAttachment(ThingDefOf.Fire);
+				var afterAttachIsOnFire = zombie.isOnFire;
+				var afterAttachFireAttachmentCount = FireAttachmentCount(zombie);
+
+				secondFire = ThingMaker.MakeThing(ThingDefOf.Fire) as Fire;
+				secondFire.fireSize = 0.75f;
+				secondFire.AttachTo(zombie);
+				var afterSecondAttachHasFire = zombie.HasAttachment(ThingDefOf.Fire);
+				var afterSecondAttachIsOnFire = zombie.isOnFire;
+				var afterSecondAttachFireAttachmentCount = FireAttachmentCount(zombie);
+
+				var comp = zombie.TryGetComp<CompAttachBase>();
+				if (fire != null)
+					comp?.RemoveAttachment(fire);
+				var afterRemoveFirstHasFire = zombie.HasAttachment(ThingDefOf.Fire);
+				var afterRemoveFirstIsOnFire = zombie.isOnFire;
+				var afterRemoveFirstFireAttachmentCount = FireAttachmentCount(zombie);
+
+				if (secondFire != null)
+					comp?.RemoveAttachment(secondFire);
+				var afterRemoveSecondHasFire = zombie.HasAttachment(ThingDefOf.Fire);
+				var afterRemoveSecondIsOnFire = zombie.isOnFire;
+				var afterRemoveSecondFireAttachmentCount = FireAttachmentCount(zombie);
+
 				return new
 				{
-					success = false,
-					cell = ZombieRuntimeActions.DescribeCell(cell),
-					error = "Could not spawn a normal zombie for fire attachment state."
+					success = addTargets.Length > 0
+						&& removeTargets.Length > 0
+						&& initialHasFire == false
+						&& initialIsOnFire == false
+						&& initialFireAttachmentCount == 0
+						&& fire != null
+						&& afterAttachHasFire
+						&& afterAttachIsOnFire
+						&& afterAttachFireAttachmentCount == 1
+						&& secondFire != null
+						&& afterSecondAttachHasFire
+						&& afterSecondAttachIsOnFire
+						&& afterSecondAttachFireAttachmentCount == 2
+						&& afterRemoveFirstHasFire
+						&& afterRemoveFirstIsOnFire
+						&& afterRemoveFirstFireAttachmentCount == 1
+						&& afterRemoveSecondHasFire == false
+						&& afterRemoveSecondIsOnFire == false
+						&& afterRemoveSecondFireAttachmentCount == 0,
+					patchTargets = new
+					{
+						add = addTargets,
+						remove = removeTargets
+					},
+					zombie = DescribeZombie(zombie),
+					fire = ZombieRuntimeActions.StableThingId(fire),
+					secondFire = ZombieRuntimeActions.StableThingId(secondFire),
+					initialHasFire,
+					initialIsOnFire,
+					initialFireAttachmentCount,
+					afterAttachHasFire,
+					afterAttachIsOnFire,
+					afterAttachFireAttachmentCount,
+					afterSecondAttachHasFire,
+					afterSecondAttachIsOnFire,
+					afterSecondAttachFireAttachmentCount,
+					afterRemoveFirstHasFire,
+					afterRemoveFirstIsOnFire,
+					afterRemoveFirstFireAttachmentCount,
+					afterRemoveSecondHasFire,
+					afterRemoveSecondIsOnFire,
+					afterRemoveSecondFireAttachmentCount
 				};
 			}
-
-			var initialHasFire = zombie.HasAttachment(ThingDefOf.Fire);
-			var initialIsOnFire = zombie.isOnFire;
-			FireUtility.TryAttachFire(zombie, 1f, null);
-			var fire = zombie.GetAttachment(ThingDefOf.Fire) as Fire;
-			var afterAttachHasFire = zombie.HasAttachment(ThingDefOf.Fire);
-			var afterAttachIsOnFire = zombie.isOnFire;
-
-			var comp = zombie.TryGetComp<CompAttachBase>();
-			if (fire != null)
-				comp?.RemoveAttachment(fire);
-			var afterRemoveHasFire = zombie.HasAttachment(ThingDefOf.Fire);
-			var afterRemoveIsOnFire = zombie.isOnFire;
-			if (fire != null && fire.Destroyed == false)
-				fire.Destroy(DestroyMode.Vanish);
-
-			return new
+			finally
 			{
-				success = initialHasFire == false
-					&& initialIsOnFire == false
-					&& fire != null
-					&& afterAttachHasFire
-					&& afterAttachIsOnFire
-					&& afterRemoveHasFire == false
-					&& afterRemoveIsOnFire == false,
-				zombie = DescribeZombie(zombie),
-				fire = ZombieRuntimeActions.StableThingId(fire),
-				initialHasFire,
-				initialIsOnFire,
-				afterAttachHasFire,
-				afterAttachIsOnFire,
-				afterRemoveHasFire,
-				afterRemoveIsOnFire
-			};
+				if (fire != null && fire.Destroyed == false)
+					fire.Destroy(DestroyMode.Vanish);
+				if (secondFire != null && secondFire.Destroyed == false)
+					secondFire.Destroy(DestroyMode.Vanish);
+				if (zombie != null && zombie.Destroyed == false)
+					zombie.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static int FireAttachmentCount(Pawn pawn)
+		{
+			var comp = pawn?.TryGetComp<CompAttachBase>();
+			var field = typeof(CompAttachBase).GetField("attachments", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+			return (field?.GetValue(comp) as List<AttachableThing>)?.Count(attachment => attachment?.def == ThingDefOf.Fire) ?? 0;
 		}
 
 		sealed class AmbientTemperatureCase

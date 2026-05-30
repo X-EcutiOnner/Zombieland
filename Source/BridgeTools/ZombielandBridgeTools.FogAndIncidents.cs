@@ -972,78 +972,94 @@ namespace ZombieLand
 			[ToolParameter(Description = "Optional electrifier zombie id, ThingID, label, or short name. When omitted, the first spawned electrifier is used, or one is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
 			[ToolParameter(Description = "EMP damage amount. The disable duration should increase by this amount times 60 ticks.", Required = false, DefaultValue = 5)] int damage = 5)
 		{
+			var patchTargets = PatchedMethodsForPatchClass("DamageFlasher_Notify_DamageApplied_Patch");
 			var map = CurrentMap;
 			if (map == null)
 			{
 				return new
 				{
 					success = false,
+					patchTargets,
 					error = "No current map is loaded."
 				};
 			}
 
-			Zombie electrifier;
+			Zombie electrifier = null;
 			var spawnedElectrifier = false;
-			if (string.IsNullOrWhiteSpace(target))
+			try
 			{
-				electrifier = CurrentZombies(map).OfType<Zombie>().FirstOrDefault(zombie => zombie.isElectrifier);
-				if (electrifier == null)
+				if (string.IsNullOrWhiteSpace(target))
 				{
-					var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
-					if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
-						return error;
+					electrifier = CurrentZombies(map).OfType<Zombie>().FirstOrDefault(zombie => zombie.isElectrifier);
+					if (electrifier == null)
+					{
+						var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+						if (TryFindClearSpawnCell(map, root, 16f, out var cell, out var error) == false)
+							return error;
 
-					electrifier = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Electrifier, true);
-					spawnedElectrifier = true;
+						electrifier = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Electrifier, true);
+						spawnedElectrifier = true;
+					}
 				}
-			}
-			else if (TryFindZombie(map, target, out var pawn, out var error) == false)
-			{
+				else if (TryFindZombie(map, target, out var pawn, out var error) == false)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						error
+					};
+				}
+				else
+				{
+					electrifier = pawn as Zombie;
+				}
+
+				if (electrifier == null || electrifier.isElectrifier == false)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						target = DescribeZombie(electrifier),
+						error = "Target is not an electrifier."
+					};
+				}
+
+				var cappedDamage = Math.Max(1, Math.Min(damage, 60));
+				var tickBefore = GenTicks.TicksGame;
+				var disabledUntilBefore = electrifier.electricDisabledUntil;
+				var activeBefore = electrifier.IsActiveElectric;
+				var before = DescribeZombie(electrifier);
+				var dinfo = new DamageInfo(DamageDefOf.EMP, cappedDamage, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+				var damageResult = electrifier.TakeDamage(dinfo);
+				var disabledUntilAfter = electrifier.electricDisabledUntil;
+				var activeAfter = electrifier.IsActiveElectric;
+
 				return new
 				{
-					success = false,
-					error
+					success = patchTargets.Length > 0
+						&& activeBefore
+						&& activeAfter == false
+						&& disabledUntilAfter >= tickBefore + cappedDamage * 60,
+					patchTargets,
+					spawnedElectrifier,
+					damage = cappedDamage,
+					tickBefore,
+					disabledUntilBefore,
+					disabledUntilAfter,
+					activeBefore,
+					activeAfter,
+					damageTotal = damageResult.totalDamageDealt,
+					before,
+					after = DescribeZombie(electrifier)
 				};
 			}
-			else
+			finally
 			{
-				electrifier = pawn as Zombie;
+				if (spawnedElectrifier && electrifier != null && electrifier.Destroyed == false)
+					electrifier.Destroy(DestroyMode.Vanish);
 			}
-
-			if (electrifier == null || electrifier.isElectrifier == false)
-			{
-				return new
-				{
-					success = false,
-					target = DescribeZombie(electrifier),
-					error = "Target is not an electrifier."
-				};
-			}
-
-			var cappedDamage = Math.Max(1, Math.Min(damage, 60));
-			var tickBefore = GenTicks.TicksGame;
-			var disabledUntilBefore = electrifier.electricDisabledUntil;
-			var activeBefore = electrifier.IsActiveElectric;
-			var before = DescribeZombie(electrifier);
-			var dinfo = new DamageInfo(DamageDefOf.EMP, cappedDamage, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
-			var damageResult = electrifier.TakeDamage(dinfo);
-			var disabledUntilAfter = electrifier.electricDisabledUntil;
-			var activeAfter = electrifier.IsActiveElectric;
-
-			return new
-			{
-				success = activeBefore && activeAfter == false && disabledUntilAfter >= tickBefore + cappedDamage * 60,
-				spawnedElectrifier,
-				damage = cappedDamage,
-				tickBefore,
-				disabledUntilBefore,
-				disabledUntilAfter,
-				activeBefore,
-				activeAfter,
-				damageTotal = damageResult.totalDamageDealt,
-				before,
-				after = DescribeZombie(electrifier)
-			};
 		}
 
 		[Tool("zombieland/electrify_powered_building", Description = "Place an active electrifier next to a real power conduit and verify the electrify handler disables it.")]
@@ -1170,72 +1186,239 @@ namespace ZombieLand
 				.Where(cell => cell.DistanceTo(actorCell) >= 7f)
 				.Where(cell => GenSight.LineOfSight(actorCell, cell, map, true))
 				.OrderBy(cell => cell.DistanceToSquared(actorCell))
-				.Take(2)
+				.Take(3)
 				.ToArray();
-			if (targetCells.Length < 2)
+			if (targetCells.Length < 3)
 			{
 				return new
 				{
 					success = false,
 					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
-					error = "Fewer than two clear line-of-sight target cells were found for the active electrifier attack-verb fixture."
+					error = "Fewer than three clear line-of-sight target cells were found for the active electrifier attack-verb fixture."
 				};
 			}
 
-			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
-			DisablePawnWork(actor);
-			actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
-			var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
-				?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false);
-			var weapon = weaponDef == null ? null : ThingMaker.MakeThing(weaponDef) as ThingWithComps;
-			if (weapon == null)
+			var closeZombieCell = GenRadial.RadialCellsAround(actorCell, Constants.HUMAN_PHEROMONE_RADIUS - 0.5f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.DistanceTo(actorCell) > 1f)
+				.Where(cell => cell.DistanceTo(actorCell) < Constants.HUMAN_PHEROMONE_RADIUS)
+				.Where(cell => GenSight.LineOfSight(actorCell, cell, map, true))
+				.OrderByDescending(cell => cell.DistanceToSquared(actorCell))
+				.FirstOrDefault();
+			if (closeZombieCell.IsValid == false)
 			{
 				return new
 				{
 					success = false,
-					actor = DescribePawn(actor),
-					error = "No test ranged weapon def was available."
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					error = "No close line-of-sight target cell was found for the time-slowdown fixture."
 				};
 			}
-			actor.equipment.AddEquipment(weapon);
-			actor.drafter.Drafted = true;
+			if (TryFindAdjacentPawnPairCells(map, actorCell + new IntVec3(-10, 0, 0), out var attackZombieCell, out var attackTargetCell, out var attackCellError) == false)
+				return attackCellError;
 
-			var normal = ZombieRuntimeActions.SpawnZombie(targetCells[0], map, ZombieType.Normal, true);
-			var electrifier = ZombieRuntimeActions.SpawnZombie(targetCells[1], map, ZombieType.Electrifier, true);
-			if (normal == null || electrifier == null)
+			var patchTargets = PatchedMethodsForPatchClass("Pawn_TryGetAttackVerb_Patch");
+			var slowdownPatchTargets = PatchedMethodsForPatchClass("Verb_CausesTimeSlowdown_Patch");
+			var startAttackPatchTargets = PatchedMethodsForPatchClass("Pawn_TryStartAttack_Patch");
+			var causesTimeSlowdownMethod = AccessTools.Method(typeof(Verb), "CausesTimeSlowdown");
+			var originalZombieKindDisabledWorkTags = ZombieDefOf.Zombie.disabledWorkTags;
+			Pawn actor = null;
+			Pawn spitter = null;
+			Pawn hostileHuman = null;
+			Pawn attackTarget = null;
+			Zombie normal = null;
+			Zombie closeNormal = null;
+			Zombie electrifier = null;
+			Zombie attackZombie = null;
+			try
 			{
+				actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				DisablePawnWork(actor);
+				actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+				actor.drafter.Drafted = true;
+
+				var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
+					?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false);
+				var weapon = weaponDef == null ? null : ThingMaker.MakeThing(weaponDef) as ThingWithComps;
+				if (weapon == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						actor = DescribePawn(actor),
+						error = "No test ranged weapon def was available."
+					};
+				}
+				actor.equipment.AddEquipment(weapon);
+
+				normal = ZombieRuntimeActions.SpawnZombie(targetCells[0], map, ZombieType.Normal, true);
+				electrifier = ZombieRuntimeActions.SpawnZombie(targetCells[1], map, ZombieType.Electrifier, true);
+				closeNormal = ZombieRuntimeActions.SpawnZombie(closeZombieCell, map, ZombieType.Normal, true);
+				attackZombie = ZombieRuntimeActions.SpawnZombie(attackZombieCell, map, ZombieType.Normal, true);
+				spitter = SpawnFireFixturePawn(map, targetCells[0] + new IntVec3(0, 0, 1), "spitter");
+				hostileHuman = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfAncientsHostile);
+				GenSpawn.Spawn(hostileHuman, targetCells[2], map, Rot4.South);
+				DisablePawnWork(hostileHuman);
+				attackTarget = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(attackTarget, attackTargetCell, map, Rot4.South);
+				DisablePawnWork(attackTarget);
+				if (normal == null || electrifier == null || closeNormal == null || attackZombie == null || spitter == null || hostileHuman == null || attackTarget == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						slowdownPatchTargets,
+						startAttackPatchTargets,
+						actor = DescribePawn(actor),
+						normal = DescribeZombie(normal),
+						electrifier = DescribeZombie(electrifier),
+						closeNormal = DescribeZombie(closeNormal),
+						attackZombie = DescribeZombie(attackZombie),
+						spitter = DescribePawn(spitter),
+						hostileHuman = DescribePawn(hostileHuman),
+						attackTarget = DescribePawn(attackTarget),
+						error = "ZombieGenerator.SpawnZombie returned no normal zombie, close zombie, attack zombie, electrifier, spitter, hostile-human, or attack-target test pawn."
+					};
+				}
+				if (causesTimeSlowdownMethod == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						slowdownPatchTargets,
+						startAttackPatchTargets,
+						error = "Could not reflect Verb.CausesTimeSlowdown."
+					};
+				}
+
+				electrifier.electricDisabledUntil = GenTicks.TicksGame - 1;
+				var electrifierActive = electrifier.IsActiveElectric;
+				var normalVerb = actor.TryGetAttackVerb(normal);
+				var electrifierVerb = actor.TryGetAttackVerb(electrifier);
+				var spitterVerb = spitter.TryGetAttackVerb(actor);
+				var normalRanged = normalVerb != null && normalVerb.IsMeleeAttack == false;
+				var electrifierSafe = electrifierVerb == null || electrifierVerb.CanHarmElectricZombies();
+				var spitterBlocked = spitterVerb == null;
+				var farZombieSlowdown = normalVerb != null && (bool)causesTimeSlowdownMethod.Invoke(normalVerb, new object[] { new LocalTargetInfo(normal) });
+				var closeZombieSlowdown = normalVerb != null && (bool)causesTimeSlowdownMethod.Invoke(normalVerb, new object[] { new LocalTargetInfo(closeNormal) });
+				var hostileHumanSlowdown = normalVerb != null && (bool)causesTimeSlowdownMethod.Invoke(normalVerb, new object[] { new LocalTargetInfo(hostileHuman) });
+				var slowdownSuppressionDistance = actor.Position.DistanceToSquared(normal.Position);
+				var closeSlowdownDistance = actor.Position.DistanceToSquared(closeNormal.Position);
+				var humanSlowdownDistance = actor.Position.DistanceToSquared(hostileHuman.Position);
+				var slowdownDistanceThreshold = Constants.HUMAN_PHEROMONE_RADIUS * Constants.HUMAN_PHEROMONE_RADIUS;
+				var timeSlowdownCovered = slowdownPatchTargets.Length > 0
+					&& slowdownSuppressionDistance >= slowdownDistanceThreshold
+					&& closeSlowdownDistance < slowdownDistanceThreshold
+					&& farZombieSlowdown == false
+					&& closeZombieSlowdown
+					&& hostileHumanSlowdown;
+
+				ZombieDefOf.Zombie.disabledWorkTags = originalZombieKindDisabledWorkTags | WorkTags.Violent;
+				var attackZombieViolentDisabled = attackZombie.WorkTagIsDisabled(WorkTags.Violent);
+				var attackVerb = attackZombie.TryGetAttackVerb(attackTarget);
+				var attackTargetInjuryBefore = TotalInjurySeverity(attackTarget);
+				var attackStarted = attackZombie.TryStartAttack(new LocalTargetInfo(attackTarget));
+				var attackTargetInjuryAfter = TotalInjurySeverity(attackTarget);
+				var attackCurrentStance = attackZombie.stances?.curStance?.GetType().Name;
+				var startAttackCovered = startAttackPatchTargets.Length > 0
+					&& attackZombieViolentDisabled
+					&& attackVerb != null
+					&& attackStarted;
+
+				var locationWeaponDef = DefDatabase<ThingDef>.GetNamed("Weapon_GrenadeFrag", false)
+					?? DefDatabase<ThingDef>.GetNamed("Weapon_GrenadeEMP", false)
+					?? DefDatabase<ThingDef>.GetNamed("Weapon_GrenadeMolotov", false);
+				actor.equipment.DestroyAllEquipment(DestroyMode.Vanish);
+				var locationWeapon = locationWeaponDef == null ? null : ThingMaker.MakeThing(locationWeaponDef) as ThingWithComps;
+				if (locationWeapon != null)
+					actor.equipment.AddEquipment(locationWeapon);
+				var equippedLocationVerb = actor.equipment?.PrimaryEq?.PrimaryVerb;
+				var primaryTargetsLocations = equippedLocationVerb?.targetParams?.canTargetLocations ?? false;
+				var locationVerb = actor.TryGetAttackVerb(electrifier);
+				var locationPassThrough = locationWeapon != null
+					&& primaryTargetsLocations
+					&& locationVerb != null
+					&& locationVerb.IsMeleeAttack == false
+					&& (locationVerb.targetParams?.canTargetLocations ?? false);
+
 				return new
 				{
-					success = false,
+					success = patchTargets.Length > 0
+						&& timeSlowdownCovered
+						&& startAttackCovered
+						&& normalRanged
+						&& electrifierSafe
+						&& electrifierActive
+						&& spitterBlocked
+						&& locationPassThrough,
+					destroyedZombies,
+					patchTargets,
+					slowdownPatchTargets,
+					startAttackPatchTargets,
 					actor = DescribePawn(actor),
+					weaponDef = weapon.def?.defName,
+					locationWeaponDef = locationWeaponDef?.defName,
 					normal = DescribeZombie(normal),
+					closeNormal = DescribeZombie(closeNormal),
 					electrifier = DescribeZombie(electrifier),
-					error = "ZombieGenerator.SpawnZombie returned no normal zombie or electrifier test zombie."
+					attackZombie = DescribeZombie(attackZombie),
+					attackTarget = DescribePawn(attackTarget),
+					spitter = DescribePawn(spitter),
+					hostileHuman = DescribePawn(hostileHuman),
+					electrifierActive,
+					normalVerb = DescribeVerb(normalVerb),
+					electrifierVerb = DescribeVerb(electrifierVerb),
+					spitterVerb = DescribeVerb(spitterVerb),
+					attackVerb = DescribeVerb(attackVerb),
+					locationVerb = DescribeVerb(locationVerb),
+					normalRanged,
+					electrifierSafe,
+					spitterBlocked,
+					farZombieSlowdown,
+					closeZombieSlowdown,
+					hostileHumanSlowdown,
+					slowdownSuppressionDistance,
+					closeSlowdownDistance,
+					humanSlowdownDistance,
+					slowdownDistanceThreshold,
+					timeSlowdownCovered,
+					attackZombieViolentDisabled,
+					attackStarted,
+					attackCurrentStance,
+					attackTargetInjuryBefore,
+					attackTargetInjuryAfter,
+					attackTargetInjuryDelta = attackTargetInjuryAfter - attackTargetInjuryBefore,
+					startAttackCovered,
+					primaryTargetsLocations,
+					locationPassThrough
 				};
 			}
-
-			electrifier.electricDisabledUntil = GenTicks.TicksGame - 1;
-			var electrifierActive = electrifier.IsActiveElectric;
-			var normalVerb = actor.TryGetAttackVerb(normal);
-			var electrifierVerb = actor.TryGetAttackVerb(electrifier);
-			var normalRanged = normalVerb != null && normalVerb.IsMeleeAttack == false;
-			var electrifierSafe = electrifierVerb == null || electrifierVerb.CanHarmElectricZombies();
-
-			return new
+			finally
 			{
-				success = normalRanged && electrifierSafe && electrifierActive,
-				destroyedZombies,
-				actor = DescribePawn(actor),
-				weaponDef = weapon.def?.defName,
-				normal = DescribeZombie(normal),
-				electrifier = DescribeZombie(electrifier),
-				electrifierActive,
-				normalVerb = DescribeVerb(normalVerb),
-				electrifierVerb = DescribeVerb(electrifierVerb),
-				normalRanged,
-				electrifierSafe
-			};
+				ZombieDefOf.Zombie.disabledWorkTags = originalZombieKindDisabledWorkTags;
+				if (actor != null)
+				{
+					actor.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+					if (actor.Destroyed == false)
+						actor.Destroy(DestroyMode.Vanish);
+				}
+				if (hostileHuman != null && hostileHuman.Destroyed == false)
+					hostileHuman.Destroy(DestroyMode.Vanish);
+				if (attackTarget != null && attackTarget.Destroyed == false)
+					attackTarget.Destroy(DestroyMode.Vanish);
+				DestroyFireFixturePawn(spitter);
+				DestroyFireFixturePawn(electrifier);
+				DestroyFireFixturePawn(closeNormal);
+				DestroyFireFixturePawn(attackZombie);
+				DestroyFireFixturePawn(normal);
+			}
 		}
 
 		[Tool("zombieland/active_electrifier_bullet_absorption_contract", Description = "Verify active electrifiers absorb ordinary bullets while disabled electrifiers still take normal zombie injury.")]

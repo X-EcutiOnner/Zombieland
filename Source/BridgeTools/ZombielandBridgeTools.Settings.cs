@@ -3,6 +3,7 @@ using RimWorld;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using UnityEngine;
 using Verse;
 using Verse.AI;
@@ -311,6 +312,7 @@ namespace ZombieLand
 				var extract = VerifySettingsExtractWorkgiver(map, pawn, spawnedThings);
 				var doubleTap = VerifySettingsDoubleTapWorkgiver(map, pawn, spawnedThings);
 				var avoidance = VerifySettingsAutoAvoidBehavior(map, pawn, spawnedThings);
+				var workGiverFanout = VerifySettingsWorkGiverFanoutPatches(map, pawn, config, spawnedThings);
 
 				return new
 				{
@@ -319,12 +321,14 @@ namespace ZombieLand
 						&& config.autoAvoidZombies == false
 						&& ObjectSuccess(extract)
 						&& ObjectSuccess(doubleTap)
-						&& ObjectSuccess(avoidance),
+						&& ObjectSuccess(avoidance)
+						&& ObjectSuccess(workGiverFanout),
 					pawn = DescribePawn(pawn),
 					colonistConfig = DescribeColonistConfig(config),
 					extract,
 					doubleTap,
-					avoidance
+					avoidance,
+					workGiverFanout
 				};
 			}
 			finally
@@ -528,6 +532,215 @@ namespace ZombieLand
 			if (pawn.Destroyed == false)
 				pawn.jobs?.EndCurrentJob(JobCondition.InterruptForced);
 			return result;
+		}
+
+		static object VerifySettingsWorkGiverFanoutPatches(Map map, Pawn pawn, ColonistConfig config, List<Thing> spawnedThings)
+		{
+			var hasCellTargets = PatchedMethodsForPatchClass("WorkGiver_Scanner_HasJobOnCell_Patches");
+			var jobCellTargets = PatchedMethodsForPatchClass("WorkGiver_Scanner_JobOnCell_Patches");
+			var hasThingTargets = PatchedMethodsForPatchClass("WorkGiver_Scanner_HasJobOnThing_Patches");
+			var jobThingTargets = PatchedMethodsForPatchClass("WorkGiver_Scanner_JobOnThing_Patches");
+			var hasCellShouldAvoid = FindNestedPatchMethod("WorkGiver_Scanner_HasJobOnCell_Patches", "ShouldAvoid");
+			var jobCellShouldAvoid = FindNestedPatchMethod("WorkGiver_Scanner_JobOnCell_Patches", "ShouldAvoid");
+			var hasThingShouldAvoid = FindNestedPatchMethod("WorkGiver_Scanner_HasJobOnThing_Patches", "ShouldAvoid");
+			var jobThingShouldAvoid = FindNestedPatchMethod("WorkGiver_Scanner_JobOnThing_Patches", "ShouldAvoid");
+
+			var oldAutoAvoid = config.autoAvoidZombies;
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			try
+			{
+				config.autoAvoidZombies = true;
+				ZombieSettings.Values.betterZombieAvoidance = true;
+				if (pawn.Destroyed == false)
+					pawn.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+
+				if (TryFindAdjacentClearCell(pawn, out var zombieCell) == false
+					&& TryFindClearSpawnCell(map, pawn.Position + new IntVec3(1, 0, 1), 8f, out zombieCell, out var zombieCellError) == false)
+					return zombieCellError;
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						error = "ZombieGenerator.SpawnZombie returned no zombie for WorkGiver fanout verification."
+					};
+				}
+				spawnedThings.Add(zombie);
+				zombie.state = ZombieState.Tracking;
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var targetCell = pawn.Position;
+				if (avoidGrid.ShouldAvoid(map, targetCell) == false)
+				{
+					targetCell = GenRadial.RadialCellsAround(pawn.Position, 5f, true)
+						.Where(cell => cell.InBounds(map))
+						.Where(cell => cell.Standable(map))
+						.Where(cell => avoidGrid.ShouldAvoid(map, cell))
+						.FirstOrDefault();
+				}
+				if (targetCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						zombie = DescribeZombie(zombie),
+						error = "No avoided target cell was found for WorkGiver fanout verification."
+					};
+				}
+				var marker = GenSpawn.Spawn(ThingMaker.MakeThing(ThingDefOf.Steel), targetCell, map, WipeMode.Vanish);
+				spawnedThings.Add(marker);
+				var avoidCost = AvoidCost(avoidGrid, map, targetCell);
+				var shouldAvoid = avoidGrid.ShouldAvoid(map, targetCell);
+
+				var hasCellError = null as string;
+				var jobCellError = null as string;
+				var hasThingError = null as string;
+				var jobThingError = null as string;
+				var hasCellNonForced = InvokeCellShouldAvoid(hasCellShouldAvoid, pawn, targetCell, false, out hasCellError);
+				var jobCellNonForced = InvokeCellShouldAvoid(jobCellShouldAvoid, pawn, targetCell, false, out jobCellError);
+				var hasThingNonForced = InvokeThingShouldAvoid(hasThingShouldAvoid, pawn, marker, false, out hasThingError);
+				var jobThingNonForced = InvokeThingShouldAvoid(jobThingShouldAvoid, pawn, marker, false, out jobThingError);
+				var hasCellForced = InvokeCellShouldAvoid(hasCellShouldAvoid, pawn, targetCell, true, out _);
+				var jobCellForced = InvokeCellShouldAvoid(jobCellShouldAvoid, pawn, targetCell, true, out _);
+				var hasThingForced = InvokeThingShouldAvoid(hasThingShouldAvoid, pawn, marker, true, out _);
+				var jobThingForced = InvokeThingShouldAvoid(jobThingShouldAvoid, pawn, marker, true, out _);
+
+				config.autoAvoidZombies = false;
+				var hasCellConfigOff = InvokeCellShouldAvoid(hasCellShouldAvoid, pawn, targetCell, false, out _);
+				var jobCellConfigOff = InvokeCellShouldAvoid(jobCellShouldAvoid, pawn, targetCell, false, out _);
+				var hasThingConfigOff = InvokeThingShouldAvoid(hasThingShouldAvoid, pawn, marker, false, out _);
+				var jobThingConfigOff = InvokeThingShouldAvoid(jobThingShouldAvoid, pawn, marker, false, out _);
+
+				return new
+				{
+					success = hasCellTargets.Length > 0
+						&& jobCellTargets.Length > 0
+						&& hasThingTargets.Length > 0
+						&& jobThingTargets.Length > 0
+						&& hasCellShouldAvoid != null
+						&& jobCellShouldAvoid != null
+						&& hasThingShouldAvoid != null
+						&& jobThingShouldAvoid != null
+						&& hasCellError == null
+						&& jobCellError == null
+						&& hasThingError == null
+						&& jobThingError == null
+						&& shouldAvoid
+						&& avoidCost > 0
+						&& hasCellNonForced
+						&& jobCellNonForced
+						&& hasThingNonForced
+						&& jobThingNonForced
+						&& hasCellForced == false
+						&& jobCellForced == false
+						&& hasThingForced == false
+						&& jobThingForced == false
+						&& hasCellConfigOff == false
+						&& jobCellConfigOff == false
+						&& hasThingConfigOff == false
+						&& jobThingConfigOff == false,
+					targets = new
+					{
+						hasJobOnCell = CompactPatchTargets(hasCellTargets),
+						jobOnCell = CompactPatchTargets(jobCellTargets),
+						hasJobOnThing = CompactPatchTargets(hasThingTargets),
+						jobOnThing = CompactPatchTargets(jobThingTargets)
+					},
+					methodsFound = new
+					{
+						hasJobOnCell = hasCellShouldAvoid != null,
+						jobOnCell = jobCellShouldAvoid != null,
+						hasJobOnThing = hasThingShouldAvoid != null,
+						jobOnThing = jobThingShouldAvoid != null
+					},
+					invocationErrors = new
+					{
+						hasJobOnCell = hasCellError,
+						jobOnCell = jobCellError,
+						hasJobOnThing = hasThingError,
+						jobOnThing = jobThingError
+					},
+					zombie = DescribeZombie(zombie),
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					targetThing = marker?.def?.defName,
+					avoidCost,
+					shouldAvoid,
+					autoAvoidEnabled = new
+					{
+						hasCellNonForced,
+						jobCellNonForced,
+						hasThingNonForced,
+						jobThingNonForced
+					},
+					forced = new
+					{
+						hasCellForced,
+						jobCellForced,
+						hasThingForced,
+						jobThingForced
+					},
+					autoAvoidDisabled = new
+					{
+						hasCellConfigOff,
+						jobCellConfigOff,
+						hasThingConfigOff,
+						jobThingConfigOff
+					}
+				};
+			}
+			finally
+			{
+				config.autoAvoidZombies = oldAutoAvoid;
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+			}
+		}
+
+		static object CompactPatchTargets(object[] targets)
+		{
+			return new
+			{
+				count = targets?.Length ?? 0,
+				sample = (targets ?? Array.Empty<object>()).Take(8).ToArray()
+			};
+		}
+
+		static bool InvokeCellShouldAvoid(MethodInfo method, Pawn pawn, IntVec3 cell, bool forced, out string error)
+		{
+			error = null;
+			if (method == null)
+			{
+				error = "ShouldAvoid method was not found.";
+				return false;
+			}
+			try
+			{
+				return (bool)method.Invoke(null, new object[] { pawn, cell, forced });
+			}
+			catch (Exception ex)
+			{
+				error = ex.GetBaseException().Message;
+				return false;
+			}
+		}
+
+		static bool InvokeThingShouldAvoid(MethodInfo method, Pawn pawn, Thing thing, bool forced, out string error)
+		{
+			error = null;
+			if (method == null)
+			{
+				error = "ShouldAvoid method was not found.";
+				return false;
+			}
+			try
+			{
+				return (bool)method.Invoke(null, new object[] { pawn, thing, forced });
+			}
+			catch (Exception ex)
+			{
+				error = ex.GetBaseException().Message;
+				return false;
+			}
 		}
 
 		static object VerifySettingsGizmoFixtures()

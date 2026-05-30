@@ -17,7 +17,7 @@ namespace ZombieLand
 		public static object DefenseRoomState(
 			[ToolParameter(Description = "Create a reusable defense-room fixture before reading state.", Required = false, DefaultValue = false)] bool setupFixture = false,
 			[ToolParameter(Description = "Try the equipped chainsaw's enabled command-action gizmo after setup/read preparation.", Required = false, DefaultValue = false)] bool activateChainsaw = false,
-			[ToolParameter(Description = "Optional action to run before readback: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure, or infestationThumper.", Required = false, DefaultValue = "read")] string actionMode = "read",
+			[ToolParameter(Description = "Optional action to run before readback: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure, infestationThumper, or turretFuel.", Required = false, DefaultValue = "read")] string actionMode = "read",
 			[ToolParameter(Description = "Ticks to advance before reading final state; clamped to 0..5000.", Required = false, DefaultValue = 0)] int advanceTicks = 0)
 		{
 			var map = CurrentMap;
@@ -420,10 +420,143 @@ namespace ZombieLand
 				case "infestationthumper":
 					result = RunSavedRoomInfestationThumper(map);
 					return true;
+				case "turretfuel":
+					result = RunSavedRoomTurretFuel(map);
+					return true;
 				default:
-					error = "actionMode must be one of: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure, infestationThumper.";
+					error = "actionMode must be one of: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure, infestationThumper, turretFuel.";
 					return false;
 			}
+		}
+
+		static object RunSavedRoomTurretFuel(Map map)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("CompRefuelable_ConsumeFuel_Patch");
+			var settingsSnapshot = SnapshotZombieSettings();
+			var fuelField = AccessTools.Field(typeof(CompRefuelable), "fuel");
+			if (fuelField == null)
+			{
+				return new
+				{
+					success = false,
+					patchTargets,
+					error = "Could not reflect CompRefuelable.fuel."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2 + 18, 0, map.Size.z / 2 - 18);
+			var turretDef = DefDatabase<ThingDef>.GetNamed("Turret_MiniTurret", false)
+				?? DefDatabase<ThingDef>.AllDefs.FirstOrDefault(def => def.thingClass != null && typeof(Building_Turret).IsAssignableFrom(def.thingClass) && def.GetCompProperties<CompProperties_Refuelable>() != null);
+			if (turretDef == null)
+			{
+				return new
+				{
+					success = false,
+					patchTargets,
+					error = "No refuelable turret def was available."
+				};
+			}
+			if (TryFindClearBuildingFootprint(map, turretDef, root, 24f, out var turretCell, out var turretCellError) == false)
+				return turretCellError;
+			if (TryFindClearBuildingFootprint(map, CustomDefs.Thumper, root + new IntVec3(8, 0, 0), 24f, out var thumperCell, out var thumperCellError) == false)
+				return thumperCellError;
+
+			Thing turret = null;
+			Thing thumper = null;
+			try
+			{
+				var stuff = turretDef.MadeFromStuff ? GenStuff.DefaultStuffFor(turretDef) ?? ThingDefOf.Steel : null;
+				turret = ThingMaker.MakeThing(turretDef, stuff);
+				turret.SetFactionDirect(Faction.OfPlayer);
+				GenSpawn.Spawn(turret, turretCell, map, Rot4.North, WipeMode.Vanish, false);
+
+				thumper = ThingMaker.MakeThing(CustomDefs.Thumper);
+				thumper.SetFactionDirect(Faction.OfPlayer);
+				GenSpawn.Spawn(thumper, thumperCell, map, Rot4.North, WipeMode.Vanish, false);
+
+				var turretRefuelable = turret.TryGetComp<CompRefuelable>();
+				var controlRefuelable = thumper.TryGetComp<CompRefuelable>();
+				if (turretRefuelable == null || controlRefuelable == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						turret = DescribeDefenseThing(turret),
+						control = DescribeDefenseThing(thumper),
+						error = "Turret or non-turret control had no refuelable comp."
+					};
+				}
+
+				ApplyZombieSettingsOverride(settings => settings.reducedTurretConsumption = 0.5f);
+				var normalAmount = 4f;
+				var startFuel = 20f;
+				SetRefuelableFuel(fuelField, turretRefuelable, startFuel);
+				SetRefuelableFuel(fuelField, controlRefuelable, startFuel);
+				var turretBefore = turretRefuelable.Fuel;
+				var controlBefore = controlRefuelable.Fuel;
+				turretRefuelable.ConsumeFuel(normalAmount);
+				controlRefuelable.ConsumeFuel(normalAmount);
+				var turretAfter = turretRefuelable.Fuel;
+				var controlAfter = controlRefuelable.Fuel;
+				var turretDelta = turretBefore - turretAfter;
+				var controlDelta = controlBefore - controlAfter;
+				var expectedTurretDelta = normalAmount * (1f - ZombieSettings.Values.reducedTurretConsumption);
+				var expectedControlDelta = normalAmount;
+
+				SetRefuelableFuel(fuelField, turretRefuelable, 1f);
+				var lowBefore = turretRefuelable.Fuel;
+				turretRefuelable.ConsumeFuel(normalAmount);
+				var lowAfter = turretRefuelable.Fuel;
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& Approximately(turretDelta, expectedTurretDelta, 0.0001f)
+						&& Approximately(controlDelta, expectedControlDelta, 0.0001f)
+						&& Approximately(lowBefore, 1f, 0.0001f)
+						&& Approximately(lowAfter, 0f, 0.0001f)
+						&& lowAfter >= 0f,
+					patchTargets,
+					setting = ZombieSettings.Values.reducedTurretConsumption,
+					inputAmount = normalAmount,
+					turret = new
+					{
+						thing = DescribeDefenseThing(turret),
+						fuelBefore = turretBefore,
+						fuelAfter = turretAfter,
+						fuelDelta = turretDelta,
+						expectedFuelDelta = expectedTurretDelta
+					},
+					nonTurretControl = new
+					{
+						thing = DescribeDefenseThing(thumper),
+						fuelBefore = controlBefore,
+						fuelAfter = controlAfter,
+						fuelDelta = controlDelta,
+						expectedFuelDelta = expectedControlDelta
+					},
+					lowFuelClamp = new
+					{
+						fuelBefore = lowBefore,
+						fuelAfter = lowAfter,
+						nonNegative = lowAfter >= 0f
+					}
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+				if (turret != null && turret.Destroyed == false)
+					turret.Destroy(DestroyMode.Vanish);
+				if (thumper != null && thumper.Destroyed == false)
+					thumper.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static void SetRefuelableFuel(FieldInfo fuelField, CompRefuelable refuelable, float fuel)
+		{
+			fuelField.SetValue(refuelable, Mathf.Clamp(fuel, 0f, refuelable.Props.fuelCapacity));
 		}
 
 		static object RunSavedRoomShockerZap(Map map)
@@ -1353,6 +1486,15 @@ namespace ZombieLand
 			var valid = worker.AllowsPlacing(CustomDefs.ZombieShocker, shocker.Position, shocker.Rotation, map);
 			var invalidCenter = shocker.Position + IntVec3.North.RotatedBy(shocker.Rotation);
 			var invalidInsideRoom = worker.AllowsPlacing(CustomDefs.ZombieShocker, invalidCenter, shocker.Rotation, map);
+			var edificeUnderShocker = map.edificeGrid[shocker.Position];
+			var thingsAtShockerCell = map.thingGrid.ThingsListAt(shocker.Position).ToArray();
+			var supportBuildings = thingsAtShockerCell
+				.Where(thing => thing != shocker && thing.def?.category == ThingCategory.Building)
+				.ToArray();
+			var spawningWipesPatchTargets = PatchedMethodsForPatchClass("GenSpawn_SpawningWipes_Patch");
+			var shockerWipesWall = GenSpawn.SpawningWipes(CustomDefs.ZombieShocker, ThingDefOf.Wall, true);
+			var shockerWipesDoor = GenSpawn.SpawningWipes(CustomDefs.ZombieShocker, ThingDefOf.Door, true);
+			var controlWallWipesWall = GenSpawn.SpawningWipes(ThingDefOf.Wall, ThingDefOf.Wall, true);
 			var noRoomCell = map.AllCells.FirstOrDefault(cell => cell.InBounds(map)
 				&& cell.Standable(map)
 				&& cell.Fogged(map) == false
@@ -1367,7 +1509,44 @@ namespace ZombieLand
 				valid = DescribeAcceptanceReport(valid),
 				invalidInsideRoom = DescribeAcceptanceReport(invalidInsideRoom),
 				invalidNoRoom = DescribeAcceptanceReport(invalidNoRoom),
-				noRoomCell = noRoomCell.IsValid ? ZombieRuntimeActions.DescribeCell(noRoomCell) : null
+				noRoomCell = noRoomCell.IsValid ? ZombieRuntimeActions.DescribeCell(noRoomCell) : null,
+				spawningWipes = new
+				{
+					success = spawningWipesPatchTargets.Length > 0
+						&& shocker.OnWall()
+						&& supportBuildings.Length > 0
+						&& shockerWipesWall == false
+						&& shockerWipesDoor == false
+						&& controlWallWipesWall,
+					patchTargets = spawningWipesPatchTargets,
+					shockerCell = ZombieRuntimeActions.DescribeCell(shocker.Position),
+					edificeUnderShocker = edificeUnderShocker == null ? null : new
+					{
+						id = ZombieRuntimeActions.StableThingId(edificeUnderShocker),
+						defName = edificeUnderShocker.def?.defName,
+						className = edificeUnderShocker.GetType().FullName,
+						spawned = edificeUnderShocker.Spawned,
+						destroyed = edificeUnderShocker.Destroyed
+					},
+					thingsAtShockerCell = thingsAtShockerCell.Select(thing => new
+					{
+						id = ZombieRuntimeActions.StableThingId(thing),
+						defName = thing.def?.defName,
+						className = thing.GetType().FullName,
+						spawned = thing.Spawned,
+						destroyed = thing.Destroyed
+					}).ToArray(),
+					supportBuildings = supportBuildings.Select(thing => new
+					{
+						id = ZombieRuntimeActions.StableThingId(thing),
+						defName = thing.def?.defName,
+						className = thing.GetType().FullName
+					}).ToArray(),
+					shockerOnWall = shocker.OnWall(),
+					shockerWipesWall,
+					shockerWipesDoor,
+					controlWallWipesWall
+				}
 			};
 		}
 

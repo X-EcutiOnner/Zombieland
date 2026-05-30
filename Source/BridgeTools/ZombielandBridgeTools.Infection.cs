@@ -106,8 +106,9 @@ namespace ZombieLand
 			};
 		}
 
-		[Tool("zombieland/infection_medical_state", Description = "Run compact medical patch contracts for zombie-bite natural healing, Pawn.Tick state sync, ShouldRemove persistence, and remove-body-part surgery targeting.")]
-		public static object InfectionMedicalState()
+		[Tool("zombieland/infection_medical_state", Description = "Run compact medical/death patch contracts for zombie-bite healing, Pawn.Tick state sync, Pawn.Kill infection/loot behavior, ShouldRemove persistence, and remove-body-part surgery targeting.")]
+		public static object InfectionMedicalState(
+			[ToolParameter(Description = "Action mode: all or pawn-kill.", Required = false, DefaultValue = "all")] string actionMode = "all")
 		{
 			var map = CurrentMap;
 			if (map == null)
@@ -116,6 +117,19 @@ namespace ZombieLand
 				{
 					success = false,
 					error = "No current map is loaded."
+				};
+			}
+
+			var normalizedMode = (actionMode ?? "all").Trim().ToLowerInvariant();
+			if (normalizedMode == "pawn-kill")
+				return VerifyPawnKillPatch(map, new IntVec3(map.Size.x / 2, 0, map.Size.z / 2));
+			if (normalizedMode != "all")
+			{
+				return new
+				{
+					success = false,
+					actionMode = normalizedMode,
+					error = "Unsupported infection_medical_state actionMode. Use all or pawn-kill."
 				};
 			}
 
@@ -204,16 +218,19 @@ namespace ZombieLand
 					&& missingBittenParts.Length == 0
 					&& duplicateParts.Length == 0;
 				var pawnTick = VerifyPawnTickPatch(map, patient.Position + new IntVec3(12, 0, 0), spawnedPawns);
+				var pawnKill = VerifyPawnKillPatch(map, patient.Position + new IntVec3(24, 0, 0));
 
 				return new
 				{
-					success = naturalHealingValid && shouldRemoveValid && removeBodyPartValid && ObjectSuccess(pawnTick),
+					success = naturalHealingValid && shouldRemoveValid && removeBodyPartValid && ObjectSuccess(pawnTick) && ObjectSuccess(pawnKill),
+					actionMode = normalizedMode,
 					patient = DescribePawn(patient),
 					infection = ZombieRuntimeActions.DescribePawnInfection(patient),
 					naturalHealingValid,
 					shouldRemoveValid,
 					removeBodyPartValid,
 					pawnTick,
+					pawnKill,
 					healCases,
 					animalHealCase,
 					animalCase = animalCase.description,
@@ -234,6 +251,330 @@ namespace ZombieLand
 				foreach (var pawn in spawnedPawns.Where(pawn => pawn != null && pawn.Destroyed == false).ToArray())
 					pawn.Destroy(DestroyMode.Vanish);
 			}
+		}
+
+		static object VerifyPawnKillPatch(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Pawn_Kill_Patch");
+			var cells = new List<IntVec3>();
+			var nextCellRoot = root;
+			for (var i = 0; i < 5; i++)
+				if (TryFindClearSpawnCell(map, nextCellRoot, 16f, out var cell, out var cellError))
+				{
+					cells.Add(cell);
+					nextCellRoot = cell + new IntVec3(4, 0, 0);
+				}
+				else
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						foundCells = cells.Count,
+						error = cellError
+					};
+				}
+
+			var animalKind = DefDatabase<PawnKindDef>.GetNamed("Muffalo", false)
+				?? DefDatabase<PawnKindDef>.GetNamed("WildBoar", false)
+				?? DefDatabase<PawnKindDef>.GetNamed("Hare", false);
+			if (animalKind == null)
+			{
+				return new
+				{
+					success = false,
+					patchTargets,
+					error = "Could not find a vanilla animal PawnKindDef for Pawn.Kill negative verification."
+				};
+			}
+
+			var oldLootExtractAmount = ZombieSettings.Values.lootExtractAmount;
+			var oldHoursAfterDeath = ZombieSettings.Values.hoursAfterDeathToBecomeZombie;
+			var spawnedThings = new List<Thing>();
+			var spawnedPawns = new List<Pawn>();
+			try
+			{
+				ZombieSettings.Values.lootExtractAmount = 1f;
+				ZombieSettings.Values.hoursAfterDeathToBecomeZombie = 2;
+
+				var normalZombie = ZombieRuntimeActions.SpawnZombie(cells[0], map, ZombieType.Normal, true) as Zombie;
+				var spitter = SpawnFireFixturePawn(map, cells[1], "spitter") as ZombieSpitter;
+				var infectedPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				var harmlessPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				var animalPawn = PawnGenerator.GeneratePawn(animalKind, null);
+				GenSpawn.Spawn(infectedPawn, cells[2], map, WipeMode.Vanish);
+				GenSpawn.Spawn(harmlessPawn, cells[3], map, WipeMode.Vanish);
+				GenSpawn.Spawn(animalPawn, cells[4], map, WipeMode.Vanish);
+				spawnedPawns.AddRange(new[] { normalZombie, spitter, infectedPawn, harmlessPawn, animalPawn }.Where(pawn => pawn != null));
+				DisablePawnWork(infectedPawn);
+				DisablePawnWork(harmlessPawn);
+
+				if (normalZombie == null || spitter == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						normalZombie = DescribePawn(normalZombie),
+						spitter = DescribePawn(spitter),
+						error = "Could not spawn both a normal zombie and spitter for Pawn.Kill verification."
+					};
+				}
+
+				var normalKill = VerifyPawnKillZombieJobAndLoot(map, normalZombie, spawnedThings);
+				var spitterKill = VerifyPawnKillSpitterLoot(map, spitter);
+				var infectedKill = VerifyPawnKillHumanInfection(infectedPawn, "final");
+				var harmlessKill = VerifyPawnKillHumanInfection(harmlessPawn, "harmless");
+				var animalKill = VerifyPawnKillAnimalNegative(animalPawn);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& ObjectSuccess(normalKill)
+						&& ObjectSuccess(spitterKill)
+						&& ObjectSuccess(infectedKill)
+						&& ObjectSuccess(harmlessKill)
+						&& ObjectSuccess(animalKill),
+					patchTargets,
+					normalKill,
+					spitterKill,
+					infectedKill,
+					harmlessKill,
+					animalKill,
+					settings = new
+					{
+						lootExtractAmount = ZombieSettings.Values.lootExtractAmount,
+						hoursAfterDeathToBecomeZombie = ZombieSettings.Values.hoursAfterDeathToBecomeZombie
+					}
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.lootExtractAmount = oldLootExtractAmount;
+				ZombieSettings.Values.hoursAfterDeathToBecomeZombie = oldHoursAfterDeath;
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+				foreach (var pawn in spawnedPawns.Where(pawn => pawn != null && pawn.Destroyed == false).ToArray())
+					pawn.Destroy(DestroyMode.Vanish);
+				foreach (var corpse in map.listerThings.AllThings.OfType<Corpse>().Where(corpse => corpse.Position.DistanceToSquared(root) < 900).ToArray())
+					corpse.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object VerifyPawnKillZombieJobAndLoot(Map map, Zombie zombie, List<Thing> spawnedThings)
+		{
+			var apparelDef = DefDatabase<ThingDef>.GetNamed("Apparel_Pants", false);
+			if (apparelDef == null)
+			{
+				return new
+				{
+					success = false,
+					zombie = DescribePawn(zombie),
+					error = "ThingDef Apparel_Pants was not found."
+				};
+			}
+
+			var apparelStuff = GenStuff.DefaultStuffFor(apparelDef);
+			var apparel = ThingMaker.MakeThing(apparelDef, apparelStuff) as Apparel;
+			if (apparel == null)
+			{
+				return new
+				{
+					success = false,
+				zombie = DescribePawn(zombie),
+				apparelDef = apparelDef.defName,
+				apparelStuff = apparelStuff?.defName,
+				error = "Apparel_Pants did not create Apparel."
+			};
+			}
+
+			spawnedThings.Add(apparel);
+			zombie.apparel.Wear(apparel, false);
+			EndCurrentPawnJob(zombie);
+			var waitJob = JobMaker.MakeJob(JobDefOf.Wait);
+			zombie.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+			var jobBefore = DescribeJob(zombie.CurJob);
+			var wornBefore = zombie.apparel.WornApparel.Contains(apparel);
+			var apparelSpawnedBefore = apparel.Spawned;
+			var apparelCountBefore = map.listerThings.AllThings.Count(thing => thing.def == apparelDef);
+
+			Rand.PushState(46812);
+			try
+			{
+				zombie.Kill(null);
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			var apparelCountAfter = map.listerThings.AllThings.Count(thing => thing.def == apparelDef);
+			var apparelDropped = apparel.Spawned && apparel.Map == map;
+			var jobCleared = zombie.CurJob == null;
+			var corpse = zombie.Corpse as ZombieCorpse
+				?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(zombie.PositionHeld)).FirstOrDefault();
+
+			return new
+			{
+				success = wornBefore
+					&& apparelSpawnedBefore == false
+					&& apparelDropped
+					&& apparelCountAfter > apparelCountBefore
+					&& jobBefore != null
+					&& jobCleared
+					&& zombie.Dead,
+				zombie = DescribeZombie(zombie),
+				corpse = DescribeCorpse(corpse),
+				jobBefore,
+				jobAfter = DescribeJob(zombie.CurJob),
+				wornBefore,
+				apparel = ZombieRuntimeActions.StableThingId(apparel),
+				apparelDef = apparelDef.defName,
+				apparelStuff = apparelStuff?.defName,
+				apparelSpawnedBefore,
+				apparelDropped,
+				apparelCountBefore,
+				apparelCountAfter,
+				jobCleared,
+				zombieDead = zombie.Dead
+			};
+		}
+
+		static object VerifyPawnKillSpitterLoot(Map map, ZombieSpitter spitter)
+		{
+			var serumDef = DefDatabase<ThingDef>.GetNamed("ZombieSerumSimple", false);
+			if (serumDef == null)
+			{
+				return new
+				{
+					success = false,
+					spitter = DescribePawn(spitter),
+					error = "ThingDef ZombieSerumSimple was not found."
+				};
+			}
+
+			spitter.aggressive = true;
+			var serumIdsBefore = map.listerThings.ThingsOfDef(serumDef)
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet();
+
+			Rand.PushState(46813);
+			try
+			{
+				spitter.Kill(null);
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			var newSerums = map.listerThings.ThingsOfDef(serumDef)
+				.Where(thing => serumIdsBefore.Contains(ZombieRuntimeActions.StableThingId(thing)) == false)
+				.ToArray();
+
+			return new
+			{
+				success = spitter.Dead && newSerums.Length == 1,
+				spitter = DescribePawn(spitter),
+				serumDef = serumDef.defName,
+				newSerumCount = newSerums.Length,
+				newSerums = newSerums.Select(thing => new
+				{
+					id = ZombieRuntimeActions.StableThingId(thing),
+					position = ZombieRuntimeActions.DescribeCell(thing.Position),
+					forbidden = thing.IsForbidden(Faction.OfPlayer)
+				}).ToArray(),
+				spitterDead = spitter.Dead
+			};
+		}
+
+		static object VerifyPawnKillHumanInfection(Pawn pawn, string biteStage)
+		{
+			if (ZombieRuntimeActions.AddZombieBite(pawn, biteStage, out var bite, out var biteError) == false)
+			{
+				return new
+				{
+					success = false,
+					pawn = DescribePawn(pawn),
+					biteStage,
+					error = biteError
+				};
+			}
+
+			bite.mayBecomeZombieWhenDead = false;
+			var biteStateBefore = bite.TendDuration?.GetInfectionState() ?? InfectionState.None;
+			var mayBecomeBefore = bite.mayBecomeZombieWhenDead;
+			var tickBefore = GenTicks.TicksGame;
+			var expectedTicksWhenBecomingZombie = tickBefore + GenDate.TicksPerHour * ZombieSettings.Values.hoursAfterDeathToBecomeZombie;
+			if (ZombieRuntimeActions.KillPawnToCorpse(pawn, out var corpse, out var killError) == false)
+			{
+				return new
+				{
+					success = false,
+					pawn = DescribePawn(pawn),
+					biteStage,
+					biteStateBefore = biteStateBefore.ToString(),
+					error = killError
+				};
+			}
+
+			var infectionHediffs = new List<Hediff_ZombieInfection>();
+			pawn.health.hediffSet.GetHediffs(ref infectionHediffs);
+			var infectionTicks = infectionHediffs.Select(hediff => hediff.ticksWhenBecomingZombie).ToArray();
+			var expectedMayBecome = biteStateBefore >= InfectionState.BittenInfectable;
+			var biteFlagMatches = bite.mayBecomeZombieWhenDead == expectedMayBecome;
+			var infectionInstalled = infectionHediffs.Count == 1
+				&& infectionTicks[0] == expectedTicksWhenBecomingZombie;
+
+			return new
+			{
+				success = pawn.Dead
+					&& corpse != null
+					&& biteFlagMatches
+					&& infectionInstalled,
+				pawn = DescribePawn(pawn),
+				corpse = DescribeCorpse(corpse),
+				biteStage,
+				biteStateBefore = biteStateBefore.ToString(),
+				mayBecomeBefore,
+				mayBecomeAfter = bite.mayBecomeZombieWhenDead,
+				expectedMayBecome,
+				biteFlagMatches,
+				tickBefore,
+				hoursAfterDeathToBecomeZombie = ZombieSettings.Values.hoursAfterDeathToBecomeZombie,
+				expectedTicksWhenBecomingZombie,
+				infectionHediffCount = infectionHediffs.Count,
+				infectionTicks,
+				infectionInstalled
+			};
+		}
+
+		static object VerifyPawnKillAnimalNegative(Pawn animal)
+		{
+			var tickBefore = GenTicks.TicksGame;
+			if (ZombieRuntimeActions.KillPawnToCorpse(animal, out var corpse, out var killError) == false)
+			{
+				return new
+				{
+					success = false,
+					animal = DescribePawn(animal),
+					error = killError
+				};
+			}
+
+			var infectionHediffs = new List<Hediff_ZombieInfection>();
+			animal.health.hediffSet.GetHediffs(ref infectionHediffs);
+			return new
+			{
+				success = animal.Dead
+					&& corpse != null
+					&& infectionHediffs.Count == 0,
+				animal = DescribePawn(animal),
+				corpse = DescribeCorpse(corpse),
+				tickBefore,
+				infectionHediffCount = infectionHediffs.Count,
+				infectionTicks = infectionHediffs.Select(hediff => hediff.ticksWhenBecomingZombie).ToArray()
+			};
 		}
 
 		static object VerifyPawnTickPatch(Map map, IntVec3 root, List<Pawn> spawnedPawns)

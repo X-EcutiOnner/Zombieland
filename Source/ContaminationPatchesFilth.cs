@@ -190,12 +190,19 @@ namespace ZombieLand
 
 		static IEnumerable<Thing> Postfix(IEnumerable<Thing> things, Corpse __instance)
 		{
-			foreach (var thing in things)
+			Filth_MakeThing_Patch.filthSource = __instance;
+			try
 			{
-				Filth_MakeThing_Patch.filthSource = __instance;
-				yield return thing;
+				foreach (var thing in things)
+				{
+					thing.AddContamination(__instance.GetContamination(includeHoldings: true), __instance.mapIndexOrState, ZombieSettings.Values.contamination.filthEqualize);
+					yield return thing;
+				}
 			}
-			Filth_MakeThing_Patch.filthSource = null;
+			finally
+			{
+				Filth_MakeThing_Patch.filthSource = null;
+			}
 		}
 	}
 
