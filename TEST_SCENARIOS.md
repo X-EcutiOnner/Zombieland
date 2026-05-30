@@ -209,6 +209,7 @@ Setup:
 
 Runtime:
 - Run compact medical patch contracts for natural healing, bite persistence, and remove-body-part targets.
+- Verify extract/serum filter visibility while zombie pawn/corpse defs stay hidden from ordinary filters.
 - Execute cure, double-tap, serum extraction, and corpse conversion countdown in one map session.
 - Save during the countdown, reload, and continue until either conversion or prevention is proven.
 - Read infection alerts before and after cure/conversion.
@@ -217,6 +218,7 @@ Assertions:
 - Hidden, infectable, and infecting zombie bites do not heal naturally and do not disappear when severity reaches zero.
 - Harmless bites, ordinary cuts, and non-human/non-infectable cases keep vanilla healing/removal behavior.
 - `RemoveBodyPart` offers every distinct bitten part exactly once and does not add null or duplicate surgery targets.
+- `ZombieExtract` and zombie serum remain available in filters/tree listings while zombie pawn and corpse defs stay hidden.
 - Cure/double-tap/extract/corpse conversion behaviors match the focused contracts in the same loaded workflow.
 - Infection alerts point to the expected pawns and clear after cure, harmless treatment, or conversion.
 - Log summary contains no health-card, recipe, hediff, corpse-rot, or conversion exceptions.
@@ -224,9 +226,10 @@ Assertions:
 Current runtime evidence:
 - Added 2026-05-30 with `zombieland/infection_medical_state` from `EMPTY.rws`. The live run spawned a temporary colonist and grizzly bear, applied hidden, harmless, infectable, and infecting `ZombieBite` hediffs plus a normal `Cut`, and verified natural healing behavior: hidden/infectable/infecting bites returned `CanHealNaturally=false`, harmless bites and ordinary cuts returned true, and an animal `ZombieBite` with infection state `None` also returned true through vanilla behavior. With severity set to zero, hidden/infectable/infecting bites returned `ShouldRemove=false`, while the harmless bite and ordinary cut returned true. `Recipe_RemoveBodyPart.GetPartsToApplyOn` returned all four distinct bitten parts once each, with no missing or duplicate bitten parts. `rimbridge/list_logs minimumLevel=warning` returned no entries.
 - Added 2026-05-30 with `zombieland/zombie_corpse_alert_forbid_contract` from `EMPTY.rws`. The live run proved a human corpse still returns true from the unburied-colonist alert helper and becomes forbidden when outside the home area. Normal and former zombie corpses both returned false for the alert helper and stayed unforbidden after the same outside-home forbid call. The same run verified serum extraction remains available for both zombie corpse variants and double-tap remains unavailable for both. `rimbridge/list_logs minimumLevel=warning` returned no entries.
+- Added 2026-05-30 with `zombieland/zombie_extract_filter_visibility` from `EMPTY.rws`. The live run proved `ThingFilter.SetAllow` allows `ZombieExtract` and `ZombieSerumSimple` but blocks `Corpse_Zombie` and `Zombie`; the reflected private `Listing_TreeThingFilter.Visible(ThingDef)` probe likewise returned visible for extract/serum and hidden for zombie corpse/pawn defs. `ZombieSerumFilterWorker` did not exclude extract, and `rimbridge/list_logs minimumLevel=warning` returned no entries.
 
 Completion:
-- Partially covered by focused contracts and the 2026-05-30 medical/corpse patch runs. Remaining workflow proof: save-load during corpse conversion countdown, infection alert list behavior, and cure/double-tap/extract/medical UI in one player-facing map session.
+- Partially covered by focused contracts and the 2026-05-30 medical/corpse/filter patch runs. Remaining workflow proof: save-load during corpse conversion countdown, infection alert list behavior, and cure/double-tap/extract/medical UI in one player-facing map session.
 
 ## S-Social-Selection
 

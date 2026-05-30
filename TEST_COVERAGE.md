@@ -169,6 +169,7 @@ Already evidenced:
 - `0235865 Cover non-flesh eating rejection`
 - Live partial `S-Infection-Medical` evidence: `zombieland/infection_medical_state` from `EMPTY.rws` covered the medical patch cluster in one runtime pass. Hidden, infectable, and infecting zombie bites returned `CanHealNaturally=false`; harmless bites, an ordinary `Cut`, and an animal zombie bite with infection state `None` returned true. After severity was forced to zero, hidden/infectable/infecting bites returned `ShouldRemove=false`, while harmless bite and ordinary cut returned true. `Recipe_RemoveBodyPart.GetPartsToApplyOn` returned the four distinct bitten body parts exactly once each with no missing or duplicate bitten parts. `rimbridge/list_logs minimumLevel=warning` returned no entries.
 - Live corpse/alert/forbid evidence: `zombieland/zombie_corpse_alert_forbid_contract` from `EMPTY.rws` proved a human corpse still counts for the unburied-colonist alert and is auto-forbidden outside home, while normal and former zombie corpses do not count for that alert and remain unforbidden outside home. The same run kept serum extraction available on both zombie corpse variants and double-tap unavailable for both; `rimbridge/list_logs minimumLevel=warning` returned no entries.
+- Live filter evidence: `zombieland/zombie_extract_filter_visibility` from `EMPTY.rws` proved `ThingFilter.SetAllow` and `Listing_TreeThingFilter.Visible(ThingDef)` both keep `ZombieExtract` and `ZombieSerumSimple` usable while blocking `Corpse_Zombie` and `Zombie` defs. The same run proved `ZombieSerumFilterWorker` does not exclude extract; `rimbridge/list_logs minimumLevel=warning` returned no entries.
 
 Required tests:
 - Infection progression scenario: bite, hidden stage, visible treatable stage, untreatable conversion, treatment in and out of bed, amputation/removal path if feasible.
@@ -177,7 +178,7 @@ Required tests:
 - Serum workflow: extract area, filter visibility, auto-extract workgiver, recipe cure, inventory/product handling.
 
 Current gap:
-- Focused contracts exist, and the natural-healing/remove-body-part/ShouldRemove medical patch cluster plus corpse alert/forbid boundaries now have live evidence. Remaining E gaps are infection alert/UI timing, save-load progression during corpse conversion, and proving cure/double-tap/extract/medical UI together as one player workflow.
+- Focused contracts exist, and the natural-healing/remove-body-part/ShouldRemove medical patch cluster, corpse alert/forbid boundaries, and extract/serum filter visibility now have live evidence. Remaining E gaps are infection alert/UI timing, save-load progression during corpse conversion, and proving cure/double-tap/extract/medical UI together as one player workflow.
 
 ### F. Contamination
 

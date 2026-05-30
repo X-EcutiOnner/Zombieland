@@ -441,6 +441,38 @@ namespace ZombieLand
 			var extractThing = ThingMaker.MakeThing(CustomDefs.ZombieExtract);
 			var serumFilterWorker = new ZombieSerumFilterWorker();
 			var extractExcludedBySerumFilter = serumFilterWorker.Matches(extractThing);
+			if (TryProbeTreeThingFilterVisibility(serumDef, out var treeVisibilitySuccess, out var treeVisibility, out var treeVisibilityError) == false)
+			{
+				return new
+				{
+					success = false,
+					extract = new
+					{
+						defName = CustomDefs.ZombieExtract.defName,
+						allowed = extractAllowed,
+						excludedBySerumFilter = extractExcludedBySerumFilter
+					},
+					serum = new
+					{
+						defName = serumDef.defName,
+						allowed = serumAllowed
+					},
+					blockedZombieDefs = new
+					{
+						corpse = new
+						{
+							defName = CustomDefs.Corpse_Zombie.defName,
+							allowed = zombieCorpseAllowed
+						},
+						pawn = new
+						{
+							defName = CustomDefs.Zombie.defName,
+							allowed = zombiePawnAllowed
+						}
+					},
+					error = treeVisibilityError
+				};
+			}
 
 			return new
 			{
@@ -448,7 +480,8 @@ namespace ZombieLand
 					&& serumAllowed
 					&& zombieCorpseAllowed == false
 					&& zombiePawnAllowed == false
-					&& extractExcludedBySerumFilter == false,
+					&& extractExcludedBySerumFilter == false
+					&& treeVisibilitySuccess,
 				extract = new
 				{
 					defName = CustomDefs.ZombieExtract.defName,
@@ -472,8 +505,53 @@ namespace ZombieLand
 						defName = CustomDefs.Zombie.defName,
 						allowed = zombiePawnAllowed
 					}
-				}
+				},
+				treeVisibility
 			};
+		}
+
+		static readonly MethodInfo listingTreeThingFilterVisibleMethod = typeof(Listing_TreeThingFilter).GetMethod(
+			"Visible",
+			BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+			null,
+			new[] { typeof(ThingDef) },
+			null);
+
+		static bool TryProbeTreeThingFilterVisibility(ThingDef serumDef, out bool success, out object evidence, out string error)
+		{
+			success = false;
+			evidence = null;
+			error = null;
+			if (listingTreeThingFilterVisibleMethod == null)
+			{
+				error = "Could not resolve Listing_TreeThingFilter.Visible(ThingDef).";
+				return false;
+			}
+
+			var listing = new Listing_TreeThingFilter(
+				new ThingFilter(),
+				null,
+				null,
+				null,
+				null,
+				new QuickSearchFilter());
+			var extractVisible = (bool)listingTreeThingFilterVisibleMethod.Invoke(listing, new object[] { CustomDefs.ZombieExtract });
+			var serumVisible = (bool)listingTreeThingFilterVisibleMethod.Invoke(listing, new object[] { serumDef });
+			var zombieCorpseVisible = (bool)listingTreeThingFilterVisibleMethod.Invoke(listing, new object[] { CustomDefs.Corpse_Zombie });
+			var zombiePawnVisible = (bool)listingTreeThingFilterVisibleMethod.Invoke(listing, new object[] { CustomDefs.Zombie });
+			success = extractVisible
+				&& serumVisible
+				&& zombieCorpseVisible == false
+				&& zombiePawnVisible == false;
+			evidence = new
+			{
+				success,
+				extractVisible,
+				serumVisible,
+				zombieCorpseVisible,
+				zombiePawnVisible
+			};
+			return true;
 		}
 
 		[Tool("zombieland/rope_zombie_job", Description = "Run the real RopeZombie job from a colonist to a live zombie and verify the zombie becomes roped.")]
