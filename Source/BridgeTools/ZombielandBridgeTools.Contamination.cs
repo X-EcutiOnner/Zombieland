@@ -1347,24 +1347,173 @@ namespace ZombieLand
 				var thingSetMaker = VerifyThingSetMakerGenerateHandoff(cleanup);
 				var tradeDeal = VerifyTradeDealHandoff(cleanup);
 				var mechCluster = VerifyMechClusterHandoff(map, root, cleanup);
+				var skyfallerProducts = VerifySkyfallerSpawnThingsHandoff(map, root + new IntVec3(0, 0, 8), cleanup);
 
 				return new
 				{
 					success = ObjectSuccess(thingSetMaker)
 						&& ObjectSuccess(tradeDeal)
-						&& ObjectSuccess(mechCluster),
+						&& ObjectSuccess(mechCluster)
+						&& ObjectSuccess(skyfallerProducts),
 					cleanup,
 					randomThingCreateChance = ZombieSettings.Values.contamination.randomThingCreateChance,
 					mechClusterChance = ZombieSettings.Values.contamination.mechClusterChance,
 					thingSetMaker,
 					tradeDeal,
-					mechCluster
+					mechCluster,
+					skyfallerProducts
 				};
 			}
 			finally
 			{
 				ZombieSettings.Values.contamination.randomThingCreateChance = oldRandomThingCreateChance;
 				ZombieSettings.Values.contamination.mechClusterChance = oldMechClusterChance;
+			}
+		}
+
+		static object VerifySkyfallerSpawnThingsHandoff(Map map, IntVec3 root, bool cleanup)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Skyfaller_SpawnThings_Patch");
+			var spawnThingsMethod = typeof(Skyfaller).GetMethod("SpawnThings", BindingFlags.Instance | BindingFlags.NonPublic);
+			var shipChunkCase = VerifySkyfallerSpawnThingsCase(
+				map,
+				root,
+				ThingDefOf.ShipChunkIncoming,
+				ThingDefOf.ShipChunk,
+				"shipChunk",
+				spawnThingsMethod,
+				cleanup);
+			var mineableCase = VerifySkyfallerSpawnThingsCase(
+				map,
+				root + new IntVec3(5, 0, 0),
+				ThingDefOf.MeteoriteIncoming,
+				ThingDefOf.MineableSteel,
+				"meteoriteMineable",
+				spawnThingsMethod,
+				cleanup);
+
+			return new
+			{
+				success = patchTargets.Length > 0
+					&& spawnThingsMethod != null
+					&& ObjectSuccess(shipChunkCase)
+					&& ObjectSuccess(mineableCase),
+				targets = CompactPatchTargets(patchTargets),
+				method = "RimWorld.Skyfaller::<SpawnThings>b__59_0(Thing, Int32)",
+				spawnThingsMethodFound = spawnThingsMethod != null,
+				shipChunkCase,
+				mineableCase
+			};
+		}
+
+		static object VerifySkyfallerSpawnThingsCase(
+			Map map,
+			IntVec3 root,
+			ThingDef skyfallerDef,
+			ThingDef innerDef,
+			string caseName,
+			MethodInfo spawnThingsMethod,
+			bool cleanup)
+		{
+			if (skyfallerDef == null || innerDef == null || spawnThingsMethod == null)
+			{
+				return new
+				{
+					success = false,
+					caseName,
+					skyfallerDef = skyfallerDef?.defName,
+					innerDef = innerDef?.defName,
+					spawnThingsMethodFound = spawnThingsMethod != null,
+					error = "Skyfaller fixture definitions or SpawnThings method were unavailable."
+				};
+			}
+			if (TryFindClearSpawnCell(map, root, 24f, out var skyfallerCell, out var spawnError) == false)
+				return spawnError;
+
+			var skyfaller = (Skyfaller)null;
+			var innerThing = (Thing)null;
+			var placedThings = new List<Thing>();
+			try
+			{
+				innerThing = ThingMaker.MakeThing(innerDef);
+				if (innerThing == null)
+				{
+					return new
+					{
+						success = false,
+						caseName,
+						skyfallerDef = skyfallerDef.defName,
+						innerDef = innerDef.defName,
+						error = "Could not create skyfaller inner thing."
+					};
+				}
+
+				var existing = map.listerThings.ThingsOfDef(innerDef).ToHashSet();
+				skyfaller = SkyfallerMaker.MakeSkyfaller(skyfallerDef, innerThing);
+				GenSpawn.Spawn(skyfaller, skyfallerCell, map, WipeMode.Vanish);
+
+				spawnThingsMethod.Invoke(skyfaller, Array.Empty<object>());
+
+				placedThings = map.listerThings.ThingsOfDef(innerDef)
+					.Where(thing => existing.Contains(thing) == false)
+					.ToList();
+				var meteoriteAdd = ZombieSettings.Values.contamination.meteoriteAdd;
+				var placedProducts = placedThings.Select(thing => new
+				{
+					thing = ZombieRuntimeActions.StableThingId(thing),
+					def = thing.def?.defName,
+					cell = thing.Spawned ? ZombieRuntimeActions.DescribeCell(thing.Position) : null,
+					isMineable = thing is Mineable,
+					isShipChunk = thing.def == ThingDefOf.ShipChunk,
+					contamination = thing.GetContamination()
+				}).ToArray();
+				var productsContaminated = placedThings.Count > 0
+					&& placedThings.All(thing => Approximately(thing.GetContamination(), meteoriteAdd));
+				var branchEligibleProducts = placedThings.Count > 0
+					&& placedThings.All(thing => thing is Mineable || thing.def == ThingDefOf.ShipChunk);
+
+				return new
+				{
+					success = productsContaminated && branchEligibleProducts,
+					caseName,
+					skyfallerDef = skyfallerDef.defName,
+					innerDef = innerDef.defName,
+					skyfallerCell = ZombieRuntimeActions.DescribeCell(skyfallerCell),
+					meteoriteAdd,
+					placedCount = placedThings.Count,
+					productsContaminated,
+					branchEligibleProducts,
+					placedProducts
+				};
+			}
+			catch (TargetInvocationException ex)
+			{
+				return new
+				{
+					success = false,
+					caseName,
+					skyfallerDef = skyfallerDef.defName,
+					innerDef = innerDef.defName,
+					error = ex.InnerException?.Message ?? ex.Message
+				};
+			}
+			finally
+			{
+				if (cleanup)
+				{
+					foreach (var thing in placedThings.Where(thing => thing is { Destroyed: false }).ToArray())
+					{
+						thing.ClearContamination();
+						if (thing.Spawned)
+							thing.Destroy(DestroyMode.Vanish);
+						else
+							thing.Destroy();
+					}
+				}
+				if (skyfaller is { Destroyed: false, Spawned: true })
+					skyfaller.Destroy(DestroyMode.Vanish);
+				else if (skyfaller is { Destroyed: false })
+					skyfaller.Destroy();
 			}
 		}
 
@@ -2081,7 +2230,7 @@ namespace ZombieLand
 			}
 		}
 
-		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns/things create contaminated blood, execution blood, vomit, birth, dissolve-gear, liquid projectile, tunnel-hive, explosion, comp-spawned, damage, butcher, and leavings products.")]
+		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns/things create contaminated blood, carried filth, execution blood, vomit, birth, dissolve-gear, liquid projectile, tunnel-hive, explosion, comp-spawned, damage, butcher, and leavings products.")]
 		public static object ContaminationFilthLeavingsContract(
 			[ToolParameter(Description = "Destroy generated filth and leavings before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
 		{
@@ -2157,6 +2306,7 @@ namespace ZombieLand
 				var tunnelHiveFilth = VerifyTunnelHiveSpawnerTickFilthTransfer(map, shipChunkCell + new IntVec3(54, 0, 0));
 				var explosionFilth = VerifyExplosionSpawnedFilthTransfer(map, shipChunkCell + new IntVec3(60, 0, 0));
 				var executionBlood = VerifyExecutionBloodTransfer(map, shipChunkCell + new IntVec3(66, 0, 0));
+				var carriedFilth = VerifyPawnGainFilthTransfer(map, shipChunkCell + new IntVec3(72, 0, 0));
 
 				var shipChunkAfter = shipChunk.GetContamination();
 				var leavingsContamination = leavings.Select(thing => thing.GetContamination()).ToArray();
@@ -2186,7 +2336,8 @@ namespace ZombieLand
 						&& ObjectSuccess(liquidProjectileFilth)
 						&& ObjectSuccess(tunnelHiveFilth)
 						&& ObjectSuccess(explosionFilth)
-						&& ObjectSuccess(executionBlood),
+						&& ObjectSuccess(executionBlood)
+						&& ObjectSuccess(carriedFilth),
 					cleanup,
 					pawn = DescribePawn(pawn),
 					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
@@ -2223,7 +2374,8 @@ namespace ZombieLand
 					liquidProjectileFilth,
 					tunnelHiveFilth,
 					explosionFilth,
-					executionBlood
+					executionBlood,
+					carriedFilth
 				};
 			}
 			finally
@@ -2244,6 +2396,88 @@ namespace ZombieLand
 					shipChunk?.ClearContamination();
 				if (cleanup && shipChunk is { Destroyed: false, Spawned: true })
 					shipChunk.Destroy();
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+			}
+		}
+
+		static object VerifyPawnGainFilthTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Filth_MakeThing_Patch");
+			var gainFilthMethod = typeof(Pawn_FilthTracker).GetMethods()
+				.FirstOrDefault(method =>
+					method.Name == nameof(Pawn_FilthTracker.GainFilth)
+					&& method.GetParameters().Length == 2);
+			if (gainFilthMethod == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "Pawn_FilthTracker.GainFilth two-argument overload was not found."
+				};
+			}
+			if (TryFindClearSpawnCell(map, root, 16f, out var pawnCell, out var pawnCellError) == false)
+				return pawnCellError;
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			try
+			{
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+				DisablePawnWork(pawn);
+				pawn.ClearContamination();
+				pawn.filth.CarriedFilthListForReading.Clear();
+
+				const float pawnContamination = 0.58f;
+				pawn.SetContamination(pawnContamination);
+				var pawnBefore = pawn.GetContamination();
+				var filthDef = ThingDefOf.Filth_Dirt;
+				var filthEqualize = ZombieSettings.Values.contamination.filthEqualize;
+				var expectedFilthContamination = pawnBefore * filthEqualize;
+
+				Filth_MakeThing_Patch.filthSource = pawn;
+				try
+				{
+					pawn.filth.GainFilth(filthDef, new[] { "zombieland-bridge-gainfilth" });
+				}
+				finally
+				{
+					Filth_MakeThing_Patch.filthSource = null;
+				}
+
+				var carried = pawn.filth.CarriedFilthListForReading
+					.Where(filth => filth.def == filthDef)
+					.OrderByDescending(filth => filth.GetContamination())
+					.ToArray();
+				var carriedFilth = carried.FirstOrDefault();
+				var carriedContamination = carriedFilth?.GetContamination() ?? -1f;
+				var carriedFilthContaminated = carried.Length == 1
+					&& Approximately(carriedContamination, expectedFilthContamination, 0.0001f);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& carriedFilthContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					method = $"{gainFilthMethod.DeclaringType?.FullName}::{gainFilthMethod}",
+					pawn = DescribePawn(pawn),
+					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+					pawnBefore,
+					filthDef = filthDef.defName,
+					filthEqualize,
+					expectedFilthContamination,
+					carriedFilth = DescribeContaminationThing(carriedFilth),
+					carriedFilthCount = carried.Length,
+					carriedContamination,
+					carriedFilthContaminated
+				};
+			}
+			finally
+			{
+				Filth_MakeThing_Patch.filthSource = null;
+				Filth_MakeThing_Patch.filthCell = null;
+				pawn?.filth?.CarriedFilthListForReading.Clear();
+				pawn?.ClearContamination();
 				if (pawn is { Destroyed: false, Spawned: true })
 					pawn.Destroy();
 			}
@@ -4103,7 +4337,7 @@ namespace ZombieLand
 			}
 		}
 
-		[Tool("zombieland/contamination_carry_tracker_contract", Description = "Verify carried contaminated items equalize into the carrier through real Pawn_CarryTracker.CarryHandsTickInterval.")]
+		[Tool("zombieland/contamination_carry_tracker_contract", Description = "Verify carried contaminated items equalize into the carrier and both Pawn_CarryTracker.TryStartCarry overloads preserve contamination.")]
 		public static object ContaminationCarryTrackerContract()
 		{
 			var map = CurrentMap;
@@ -4178,6 +4412,7 @@ namespace ZombieLand
 				var carryEqualize = ZombieSettings.Values.contamination.carryEqualize;
 				var expectedPawnAfter = carriedBefore * carryEqualize;
 				var expectedCarriedAfter = carriedBefore * (1f - carryEqualize);
+				var countReserveCarry = VerifyTryStartCarryCountReserveOverload(map, itemCell + new IntVec3(4, 0, 0));
 				var tickStart = Find.TickManager.TicksGame;
 				var cadenceTick = pawn.thingIDNumber % 900;
 				var ticksToCadence = (cadenceTick - tickStart % 900 + 900) % 900;
@@ -4205,7 +4440,8 @@ namespace ZombieLand
 
 				return new
 				{
-					success = equalized,
+					success = equalized
+						&& ObjectSuccess(countReserveCarry),
 					pawn = DescribePawn(pawn),
 					item = ZombieRuntimeActions.StableThingId(item),
 					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
@@ -4231,7 +4467,8 @@ namespace ZombieLand
 					carriedAfter,
 					expectedCarriedAfter,
 					cadenceReached,
-					equalized
+					equalized,
+					countReserveCarry
 				};
 			}
 			finally
@@ -4239,6 +4476,86 @@ namespace ZombieLand
 				pawn?.ClearContamination();
 				item?.ClearContamination();
 				pawn?.carryTracker?.TryDropCarriedThing(pawn.Position, ThingPlaceMode.Near, out _);
+				if (item is { Destroyed: false, Spawned: true })
+					item.Destroy();
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+			}
+		}
+
+		static object VerifyTryStartCarryCountReserveOverload(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Pawn_CarryTracker_TryStartCarry_Patch_Patch");
+			if (TryFindClearSpawnCell(map, root, 16f, out var pawnCell, out var pawnCellError) == false)
+				return pawnCellError;
+			if (TryFindClearSpawnCell(map, pawnCell + IntVec3.East, 8f, out var itemCell, out var itemCellError) == false)
+				return itemCellError;
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var item = (Thing)null;
+			Thing carriedThing = null;
+			try
+			{
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+				DisablePawnWork(pawn);
+				pawn.ClearContamination();
+				pawn.jobs?.StopAll(false, true);
+				pawn.pather?.StopDead();
+
+				item = ThingMaker.MakeThing(ThingDefOf.Steel);
+				item.stackCount = 20;
+				GenSpawn.Spawn(item, itemCell, map, WipeMode.Vanish);
+				const float itemContaminationBefore = 0.7f;
+				item.SetContamination(itemContaminationBefore);
+				const int requestedCount = 5;
+				var stackCountBefore = item.stackCount;
+				var itemSpawnedBeforeCarry = item.Spawned;
+				var carriedCount = pawn.carryTracker.TryStartCarry(item, requestedCount, reserve: false);
+				carriedThing = pawn.carryTracker.CarriedThing;
+				var leftoverCount = item.stackCount;
+				var carriedContamination = carriedThing?.GetContamination() ?? -1f;
+				var leftoverContamination = item.GetContamination();
+				var carriedSplitValid = carriedThing != null
+					&& ReferenceEquals(carriedThing, item) == false
+					&& carriedThing.stackCount == requestedCount
+					&& carriedCount == requestedCount
+					&& carriedThing.Spawned == false
+					&& item.Spawned
+					&& leftoverCount == stackCountBefore - requestedCount;
+				var contaminationPreserved = Approximately(carriedContamination, itemContaminationBefore, 0.0001f)
+					&& Approximately(leftoverContamination, itemContaminationBefore, 0.0001f);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& carriedSplitValid
+						&& contaminationPreserved,
+					targets = CompactPatchTargets(patchTargets),
+					pawn = DescribePawn(pawn),
+					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+					item = DescribeContaminationThing(item),
+					itemCell = ZombieRuntimeActions.DescribeCell(itemCell),
+					carriedThing = DescribeContaminationThing(carriedThing),
+					requestedCount,
+					carriedCount,
+					stackCountBefore,
+					leftoverCount,
+					itemSpawnedBeforeCarry,
+					carriedContamination,
+					leftoverContamination,
+					expectedContamination = itemContaminationBefore,
+					carriedSplitValid,
+					contaminationPreserved
+				};
+			}
+			finally
+			{
+				pawn?.ClearContamination();
+				item?.ClearContamination();
+				carriedThing?.ClearContamination();
+				pawn?.carryTracker?.TryDropCarriedThing(pawn.Position, ThingPlaceMode.Near, out _);
+				if (carriedThing is { Destroyed: false, Spawned: true })
+					carriedThing.Destroy();
 				if (item is { Destroyed: false, Spawned: true })
 					item.Destroy();
 				if (pawn is { Destroyed: false, Spawned: true })
@@ -4788,16 +5105,19 @@ namespace ZombieLand
 			var lifespanContaminated = VerifyLifespanExpirePlantSpawnTransfer(map, root + new IntVec3(0, 0, 6), 0.75f, "contaminated");
 			var lifespanClean = VerifyLifespanExpirePlantSpawnTransfer(map, root + new IntVec3(4, 0, 6), 0f, "clean");
 			var medicalHediffThings = VerifyMedicalHediffSpawnTransfer(map, root + new IntVec3(8, 0, 6));
-			var removedImplant = VerifyRecipeRemoveImplantSpawnTransfer(map, root + new IntVec3(12, 0, 6));
+			var medicalNaturalPart = VerifyMedicalNaturalPartSpawnTransfer(map, root + new IntVec3(12, 0, 6));
+			var removedImplant = VerifyRecipeRemoveImplantSpawnTransfer(map, root + new IntVec3(16, 0, 6));
 			return new
 			{
 				success = ObjectSuccess(lifespanContaminated)
 					&& ObjectSuccess(lifespanClean)
 					&& ObjectSuccess(medicalHediffThings)
+					&& ObjectSuccess(medicalNaturalPart)
 					&& ObjectSuccess(removedImplant),
 				lifespanContaminated,
 				lifespanClean,
 				medicalHediffThings,
+				medicalNaturalPart,
 				removedImplant
 			};
 		}
@@ -5038,6 +5358,109 @@ namespace ZombieLand
 				{
 					thing.ClearContamination();
 					thing.Destroy();
+				}
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+			}
+		}
+
+		static object VerifyMedicalNaturalPartSpawnTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("MedicalRecipesUtility_GenSpawn_Spawn_Patches");
+			if (TryFindClearSpawnCell(map, root, 24f, out var pawnCell, out var pawnCellError) == false)
+				return pawnCellError;
+			if (TryFindClearSpawnCell(map, pawnCell + IntVec3.East, 8f, out var spawnCell, out var spawnCellError) == false)
+				return spawnCellError;
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			Thing spawnedThing = null;
+			BodyPartDef partDef = null;
+			ThingDef oldSpawnThingOnRemoved = null;
+			try
+			{
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+				DisablePawnWork(pawn);
+				pawn.ClearContamination();
+				pawn.jobs?.StopAll(false, true);
+				pawn.pather?.StopDead();
+
+				var part = pawn.health.hediffSet.GetNotMissingParts()
+					.Where(record => record != null)
+					.FirstOrDefault(record => MedicalRecipesUtility.IsClean(pawn, record) && record.def == BodyPartDefOf.Arm)
+					?? pawn.health.hediffSet.GetNotMissingParts()
+						.FirstOrDefault(record => record != null && MedicalRecipesUtility.IsClean(pawn, record));
+				if (part == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						pawn = DescribePawn(pawn),
+						error = "No clean not-missing body part was available for the natural-part spawn fixture."
+					};
+				}
+
+				partDef = part.def;
+				oldSpawnThingOnRemoved = partDef.spawnThingOnRemoved;
+				partDef.spawnThingOnRemoved = ThingDefOf.ComponentIndustrial;
+
+				const float pawnContamination = 0.64f;
+				pawn.SetContamination(pawnContamination);
+				var pawnBefore = pawn.GetContamination();
+				var existingThings = spawnCell.GetThingList(map).ToHashSet();
+				var cleanAndDroppable = MedicalRecipesUtility.IsCleanAndDroppable(pawn, part);
+
+				spawnedThing = MedicalRecipesUtility.SpawnNaturalPartIfClean(pawn, part, spawnCell, map);
+
+				var spawnedThingAtCell = spawnedThing != null
+					&& spawnedThing.Spawned
+					&& spawnedThing.Position == spawnCell
+					&& existingThings.Contains(spawnedThing) == false;
+				var pawnAfter = pawn.GetContamination();
+				var spawnedContamination = spawnedThing?.GetContamination() ?? -1f;
+				var generalTransfer = ZombieSettings.Values.contamination.generalTransfer;
+				var nominalTransfer = pawnBefore * generalTransfer;
+				var expectedSpawnedContamination = pawnBefore - pawnAfter;
+				var innerThingCount = ThingOwnerUtility.GetAllThingsRecursively(pawn, false).Count;
+				var contaminationTransferred = spawnedThingAtCell
+					&& expectedSpawnedContamination > 0f
+					&& Approximately(spawnedContamination, expectedSpawnedContamination);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& cleanAndDroppable
+						&& spawnedThingAtCell
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.MedicalRecipesUtility::SpawnNaturalPartIfClean(Pawn, BodyPartRecord, IntVec3, Map)",
+					pawn = DescribePawn(pawn),
+					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+					spawnCell = ZombieRuntimeActions.DescribeCell(spawnCell),
+					part = part.def?.defName,
+					temporarySpawnThingOnRemoved = partDef.spawnThingOnRemoved?.defName,
+					pawnBefore,
+					pawnAfter,
+					innerThingCount,
+					generalTransfer,
+					nominalTransfer,
+					expectedSpawnedContamination,
+					spawnedThing = DescribeContaminationThing(spawnedThing),
+					spawnedContamination,
+					cleanAndDroppable,
+					spawnedThingAtCell,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				if (partDef != null)
+					partDef.spawnThingOnRemoved = oldSpawnThingOnRemoved;
+				pawn?.ClearContamination();
+				if (spawnedThing is { Destroyed: false, Spawned: true })
+				{
+					spawnedThing.ClearContamination();
+					spawnedThing.Destroy();
 				}
 				if (pawn is { Destroyed: false, Spawned: true })
 					pawn.Destroy();
@@ -5474,6 +5897,623 @@ namespace ZombieLand
 				if (worker is { Destroyed: false, Spawned: true })
 					worker.Destroy();
 			}
+		}
+
+		[Tool("zombieland/contamination_building_products_contract", Description = "Verify building product handoffs transfer contamination from the producing building into returned products.")]
+		public static object ContaminationBuildingProductsContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var fermentedBarrel = VerifyFermentingBarrelProductTransfer(map, root + new IntVec3(0, 0, 10));
+			var geneAssembler = VerifyGeneAssemblerProductTransfer(map, root + new IntVec3(6, 0, 10));
+			return new
+			{
+				success = ObjectSuccess(fermentedBarrel)
+					&& ObjectSuccess(geneAssembler),
+				fermentedBarrel,
+				geneAssembler
+			};
+		}
+
+		static object VerifyFermentingBarrelProductTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Misc_Building_Patch");
+			var barrelDef = DefDatabase<ThingDef>.GetNamedSilentFail("FermentingBarrel");
+			var beerDef = ThingDefOf.Beer;
+			if (barrelDef == null || beerDef == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					barrelDef = barrelDef?.defName,
+					beerDef = beerDef?.defName,
+					error = "FermentingBarrel or Beer def was unavailable."
+				};
+			}
+
+			if (TryFindClearBuildingFootprint(map, barrelDef, root, 24f, out var barrelCell, out var barrelCellError) == false)
+				return barrelCellError;
+
+			var barrel = (Building_FermentingBarrel)null;
+			var beer = (Thing)null;
+			try
+			{
+				barrel = ThingMaker.MakeThing(barrelDef) as Building_FermentingBarrel;
+				if (barrel == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						barrelDef = barrelDef.defName,
+						error = "FermentingBarrel def did not create Building_FermentingBarrel."
+					};
+				}
+
+				GenSpawn.Spawn(barrel, barrelCell, map, Rot4.South, WipeMode.Vanish, false);
+				var wortField = typeof(Building_FermentingBarrel).GetField("wortCount", BindingFlags.Instance | BindingFlags.NonPublic);
+				var progressField = typeof(Building_FermentingBarrel).GetField("progressInt", BindingFlags.Instance | BindingFlags.NonPublic);
+				if (wortField == null || progressField == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						error = "FermentingBarrel private state fields were not found."
+					};
+				}
+
+				const int wortCount = 17;
+				const float barrelContamination = 0.66f;
+				wortField.SetValue(barrel, wortCount);
+				progressField.SetValue(barrel, 1f);
+				barrel.SetContamination(barrelContamination);
+				var barrelBefore = barrel.GetContamination();
+				var fermentedBefore = barrel.Fermented;
+
+				beer = barrel.TakeOutBeer();
+
+				var barrelAfter = barrel.GetContamination();
+				var beerContamination = beer?.GetContamination() ?? -1f;
+				var beerStackCount = beer?.stackCount ?? 0;
+				var expectedBeerContamination = barrelBefore - barrelAfter;
+				var transferFactor = ZombieSettings.Values.contamination.fermentingBarrelTransfer;
+				var nominalTransfer = barrelBefore * transferFactor;
+				var fermentedAfter = barrel.Fermented;
+				var productCreated = beer != null
+					&& beer.Spawned == false
+					&& beer.def == beerDef
+					&& beerStackCount == wortCount;
+				var contaminationTransferred = productCreated
+					&& expectedBeerContamination > 0f
+					&& Approximately(beerContamination, expectedBeerContamination);
+				var barrelReset = fermentedBefore
+					&& fermentedAfter == false
+					&& (int)wortField.GetValue(barrel) == 0
+					&& Approximately((float)progressField.GetValue(barrel), 0f);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& productCreated
+						&& contaminationTransferred
+						&& barrelReset,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.Building_FermentingBarrel::TakeOutBeer()",
+					barrel = ZombieRuntimeActions.StableThingId(barrel),
+					barrelCell = ZombieRuntimeActions.DescribeCell(barrelCell),
+					barrelDef = barrel.def?.defName,
+					barrelBefore,
+					barrelAfter,
+					transferFactor,
+					nominalTransfer,
+					beer = ZombieRuntimeActions.StableThingId(beer),
+					beerDef = beer?.def?.defName,
+					beerStackCount,
+					beerSpawned = beer?.Spawned,
+					beerContamination,
+					expectedBeerContamination,
+					fermentedBefore,
+					fermentedAfter,
+					productCreated,
+					contaminationTransferred,
+					barrelReset
+				};
+			}
+			finally
+			{
+				barrel?.ClearContamination();
+				beer?.ClearContamination();
+				if (beer is { Destroyed: false, Spawned: true })
+					beer.Destroy();
+				if (barrel is { Destroyed: false, Spawned: true })
+					barrel.Destroy();
+			}
+		}
+
+		static object VerifyGeneAssemblerProductTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Misc_Building_Patch");
+			var assemblerDef = DefDatabase<ThingDef>.GetNamedSilentFail("GeneAssembler");
+			var genepackDef = ThingDefOf.Genepack;
+			var xenogermDef = ThingDefOf.Xenogerm;
+			var geneDef = DefDatabase<GeneDef>.AllDefsListForReading
+				.OrderBy(def => def.defName)
+				.FirstOrDefault();
+			if (assemblerDef == null || genepackDef == null || xenogermDef == null || geneDef == null)
+			{
+				return new
+				{
+					success = true,
+					skipped = true,
+					reason = "GeneAssembler, Genepack, Xenogerm, or GeneDef is unavailable in the active configuration.",
+					targets = CompactPatchTargets(patchTargets),
+					assemblerDef = assemblerDef?.defName,
+					genepackDef = genepackDef?.defName,
+					xenogermDef = xenogermDef?.defName,
+					geneDef = geneDef?.defName
+				};
+			}
+
+			if (TryFindClearBuildingFootprint(map, assemblerDef, root, 24f, out var assemblerCell, out var assemblerCellError) == false)
+				return assemblerCellError;
+
+			var assembler = (Building_GeneAssembler)null;
+			var genepack = (Genepack)null;
+			var xenogerm = (Thing)null;
+			try
+			{
+				assembler = ThingMaker.MakeThing(assemblerDef) as Building_GeneAssembler;
+				genepack = ThingMaker.MakeThing(genepackDef) as Genepack;
+				if (assembler == null || genepack == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						assemblerDef = assemblerDef.defName,
+						genepackDef = genepackDef.defName,
+						assemblerCreated = assembler != null,
+						genepackCreated = genepack != null,
+						error = "Could not create GeneAssembler or Genepack fixture."
+					};
+				}
+
+				GenSpawn.Spawn(assembler, assemblerCell, map, Rot4.South, WipeMode.Vanish, false);
+				genepack.Initialize(new List<GeneDef> { geneDef });
+				assembler.Start(new List<Genepack> { genepack }, 0, "Zombieland bridge xenogerm", XenotypeIconDefOf.Basic);
+
+				const float assemblerContamination = 0.62f;
+				assembler.SetContamination(assemblerContamination);
+				var assemblerBefore = assembler.GetContamination();
+				var existingXenogerms = map.listerThings.ThingsOfDef(xenogermDef).ToHashSet();
+				var workingBefore = assembler.Working;
+
+				assembler.Finish();
+
+				xenogerm = map.listerThings.ThingsOfDef(xenogermDef)
+					.FirstOrDefault(thing => existingXenogerms.Contains(thing) == false);
+				var assemblerAfter = assembler.GetContamination();
+				var productContamination = xenogerm?.GetContamination() ?? -1f;
+				var expectedProductContamination = assemblerBefore - assemblerAfter;
+				var transferFactor = ZombieSettings.Values.contamination.geneAssemblerTransfer;
+				var nominalTransfer = assemblerBefore * transferFactor;
+				var productCreated = xenogerm != null
+					&& xenogerm.Spawned
+					&& xenogerm.def == xenogermDef;
+				var contaminationTransferred = productCreated
+					&& expectedProductContamination > 0f
+					&& Approximately(productContamination, expectedProductContamination);
+				var reset = workingBefore
+					&& assembler.Working == false
+					&& assembler.xenotypeName == null
+					&& assembler.iconDef == XenotypeIconDefOf.Basic;
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& productCreated
+						&& contaminationTransferred
+						&& reset,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.Building_GeneAssembler::Finish()",
+					assembler = ZombieRuntimeActions.StableThingId(assembler),
+					assemblerCell = ZombieRuntimeActions.DescribeCell(assemblerCell),
+					assemblerDef = assembler.def?.defName,
+					assemblerBefore,
+					assemblerAfter,
+					transferFactor,
+					nominalTransfer,
+					genepack = ZombieRuntimeActions.StableThingId(genepack),
+					genepackDef = genepack.def?.defName,
+					geneDef = geneDef.defName,
+					xenogerm = ZombieRuntimeActions.StableThingId(xenogerm),
+					xenogermDef = xenogerm?.def?.defName,
+					xenogermSpawned = xenogerm?.Spawned,
+					xenogermPosition = xenogerm?.Spawned == true ? ZombieRuntimeActions.DescribeCell(xenogerm.Position) : null,
+					productContamination,
+					expectedProductContamination,
+					workingBefore,
+					workingAfter = assembler.Working,
+					productCreated,
+					contaminationTransferred,
+					reset
+				};
+			}
+			finally
+			{
+				assembler?.ClearContamination();
+				genepack?.ClearContamination();
+				xenogerm?.ClearContamination();
+				if (xenogerm is { Destroyed: false, Spawned: true })
+					xenogerm.Destroy();
+				if (assembler is { Destroyed: false, Spawned: true })
+					assembler.Destroy();
+			}
+		}
+
+		[Tool("zombieland/contamination_repair_contract", Description = "Verify real repair jobs transfer contamination through patched repair handoff points.")]
+		public static object ContaminationRepairContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var buildingRepair = VerifyBuildingRepairTransfer(map, root + new IntVec3(0, 0, 14));
+			var mechRepair = VerifyMechRepairTransfer(map, root + new IntVec3(0, 0, 20));
+			return new
+			{
+				success = ObjectSuccess(buildingRepair)
+					&& ObjectSuccess(mechRepair),
+				buildingRepair,
+				mechRepair
+			};
+		}
+
+		static object VerifyBuildingRepairTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("JobDriver_Repair_MakeNewToils_Patch");
+			var repairJobDef = JobDefOf.Repair;
+			var buildingDef = ThingDefOf.Wall;
+			var stuffDef = ThingDefOf.WoodLog;
+			if (repairJobDef == null || buildingDef == null || stuffDef == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "Repair job, Wall, or WoodLog def was unavailable."
+				};
+			}
+
+			if (TryFindClearBuildingFootprint(map, buildingDef, root, 24f, out var buildingCell, out var buildingCellError) == false)
+				return buildingCellError;
+			if (TryFindClearSpawnCell(map, buildingCell + IntVec3.East, 8f, out var workerCell, out var workerCellError) == false)
+				return workerCellError;
+
+			var worker = (Pawn)null;
+			var building = (Building)null;
+			try
+			{
+				worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.West, WipeMode.Vanish);
+				worker.ClearContamination();
+				worker.jobs?.StopAll(false, true);
+				worker.pather?.StopDead();
+				worker.workSettings?.EnableAndInitializeIfNotAlreadyInitialized();
+				worker.skills.GetSkill(SkillDefOf.Construction).Level = 20;
+
+				building = ThingMaker.MakeThing(buildingDef, stuffDef) as Building;
+				if (building == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						error = "Could not create repair building fixture."
+					};
+				}
+
+				building.SetFactionDirect(Faction.OfPlayer);
+				GenSpawn.Spawn(building, buildingCell, map, Rot4.South, WipeMode.Vanish, false);
+				var maxHitPoints = building.MaxHitPoints;
+				building.HitPoints = Mathf.Max(1, maxHitPoints - 1);
+				const float workerContamination = 0.15f;
+				const float buildingContamination = 0.75f;
+				worker.SetContamination(workerContamination);
+				building.SetContamination(buildingContamination);
+
+				var workerBefore = worker.GetContamination(false);
+				var buildingBefore = building.GetContamination();
+				var hitPointsBefore = building.HitPoints;
+				var repairTransfer = ZombieSettings.Values.contamination.repairTransfer;
+				var expectedBuildingAfter = buildingBefore * (1f - repairTransfer) + workerBefore * repairTransfer;
+				var expectedWorkerAfter = workerBefore + (buildingBefore - expectedBuildingAfter);
+				var job = JobMaker.MakeJob(repairJobDef, building);
+				job.playerForced = true;
+				var started = worker.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
+				var tickHit = -1;
+				var samples = new List<object>();
+
+				for (var tick = 1; tick <= 180; tick++)
+				{
+					AdvanceGameTicks(1);
+					var repaired = building.HitPoints == maxHitPoints;
+					if (tick == 1 || tick % 30 == 0 || repaired)
+					{
+						samples.Add(new
+						{
+							tick,
+							workerJob = worker.CurJobDef?.defName,
+							hitPoints = building.HitPoints,
+							workerContamination = worker.GetContamination(false),
+							buildingContamination = building.GetContamination()
+						});
+					}
+					if (repaired)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var workerAfter = worker.GetContamination(false);
+				var buildingAfter = building.GetContamination();
+				var hitPointsAfter = building.HitPoints;
+				var repairedToFull = hitPointsBefore < maxHitPoints && hitPointsAfter == maxHitPoints;
+				var contaminationTransferred = repairedToFull
+					&& Approximately(workerAfter, expectedWorkerAfter)
+					&& Approximately(buildingAfter, expectedBuildingAfter);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& started
+						&& tickHit > 0
+						&& repairedToFull
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.JobDriver_Repair::<MakeNewToils>b__tickAction",
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					building = ZombieRuntimeActions.StableThingId(building),
+					buildingCell = ZombieRuntimeActions.DescribeCell(buildingCell),
+					buildingDef = building.def?.defName,
+					stuffDef = building.Stuff?.defName,
+					started,
+					tickHit,
+					hitPointsBefore,
+					hitPointsAfter,
+					maxHitPoints,
+					repairTransfer,
+					workerBefore,
+					workerAfter,
+					expectedWorkerAfter,
+					buildingBefore,
+					buildingAfter,
+					expectedBuildingAfter,
+					repairedToFull,
+					contaminationTransferred,
+					samples
+				};
+			}
+			finally
+			{
+				worker?.ClearContamination();
+				building?.ClearContamination();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+				if (building is { Destroyed: false, Spawned: true })
+					building.Destroy();
+			}
+		}
+
+		static object VerifyMechRepairTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("JobDriver_RepairMech_MakeNewToils_Patch");
+			var repairJobDef = JobDefOf.RepairMech;
+			var mechKindDef = PawnKindDefOf.Mech_Scyther
+				?? DefDatabase<PawnKindDef>.AllDefs.FirstOrDefault(def => def.race?.race?.IsMechanoid == true);
+			if (ModLister.BiotechInstalled == false || repairJobDef == null || mechKindDef == null)
+			{
+				return new
+				{
+					success = patchTargets.Length > 0,
+					skipped = true,
+					targets = CompactPatchTargets(patchTargets),
+					reason = "Biotech mech repair cannot run in the active configuration.",
+					biotechInstalled = ModLister.BiotechInstalled,
+					repairJobDef = repairJobDef?.defName,
+					mechKindDef = mechKindDef?.defName
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, root, 16f, out var mechCell, out var mechCellError) == false)
+				return mechCellError;
+			if (TryFindClearSpawnCell(map, mechCell + IntVec3.East, 8f, out var workerCell, out var workerCellError) == false)
+				return workerCellError;
+
+			var worker = (Pawn)null;
+			var mech = (Pawn)null;
+			Hediff_Injury wound = null;
+			try
+			{
+				worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.West, WipeMode.Vanish);
+				worker.ClearContamination();
+				worker.jobs?.StopAll(false, true);
+				worker.pather?.StopDead();
+				worker.workSettings?.EnableAndInitializeIfNotAlreadyInitialized();
+				worker.skills.GetSkill(SkillDefOf.Crafting).Level = 20;
+
+				var request = new PawnGenerationRequest(
+					mechKindDef,
+					Faction.OfPlayer,
+					PawnGenerationContext.NonPlayer,
+					forceGenerateNewPawn: true,
+					canGeneratePawnRelations: false,
+					colonistRelationChanceFactor: 0f,
+					forceNoIdeo: true);
+				mech = PawnGenerator.GeneratePawn(request);
+				GenSpawn.Spawn(mech, mechCell, map, Rot4.East, WipeMode.Vanish);
+				mech.ClearContamination();
+				mech.jobs?.StopAll(false, true);
+				mech.pather?.StopDead();
+				if (mech.needs?.energy != null)
+					mech.needs.energy.CurLevel = Mathf.Max(mech.needs.energy.CurLevel, 0.5f);
+
+				wound = CreateMechRepairWound(mech, 1f);
+				if (wound == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						mech = DescribePawn(mech),
+						error = "Could not create a repairable mech wound."
+					};
+				}
+
+				const float workerContamination = 0.15f;
+				const float mechContamination = 0.75f;
+				worker.SetContamination(workerContamination);
+				mech.SetContamination(mechContamination);
+
+				var workerBefore = worker.GetContamination(false);
+				var mechBefore = mech.GetContamination(false);
+				var woundBefore = wound.Severity;
+				var repairTransfer = ZombieSettings.Values.contamination.repairTransfer;
+				var expectedMechAfter = mechBefore * (1f - repairTransfer) + workerBefore * repairTransfer;
+				var expectedWorkerAfter = workerBefore + (mechBefore - expectedMechAfter);
+				var job = JobMaker.MakeJob(repairJobDef, mech);
+				job.playerForced = true;
+				var started = worker.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
+				var tickHit = -1;
+				var samples = new List<object>();
+
+				for (var tick = 1; tick <= 600; tick++)
+				{
+					AdvanceGameTicks(1);
+					var woundPresent = wound != null && mech.health.hediffSet.hediffs.Contains(wound);
+					var woundSeverity = woundPresent ? wound.Severity : 0f;
+					var repaired = woundPresent == false || woundSeverity < woundBefore;
+					if (tick == 1 || tick % 60 == 0 || repaired)
+					{
+						samples.Add(new
+						{
+							tick,
+							workerJob = worker.CurJobDef?.defName,
+							woundPresent,
+							woundSeverity,
+							workerContamination = worker.GetContamination(false),
+							mechContamination = mech.GetContamination(false)
+						});
+					}
+					if (repaired)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var workerAfter = worker.GetContamination(false);
+				var mechAfter = mech.GetContamination(false);
+				var woundStillPresent = wound != null && mech.health.hediffSet.hediffs.Contains(wound);
+				var woundAfter = woundStillPresent ? wound.Severity : 0f;
+				var woundRepaired = woundStillPresent == false || woundAfter < woundBefore;
+				var contaminationTransferred = woundRepaired
+					&& Approximately(workerAfter, expectedWorkerAfter)
+					&& Approximately(mechAfter, expectedMechAfter);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& started
+						&& tickHit > 0
+						&& woundRepaired
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.JobDriver_RepairMech::<MakeNewToils>b__tickIntervalAction",
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					mech = DescribePawn(mech),
+					mechCell = ZombieRuntimeActions.DescribeCell(mechCell),
+					mechKindDef = mechKindDef.defName,
+					started,
+					tickHit,
+					woundBefore,
+					woundAfter,
+					woundPresent = woundStillPresent,
+					repairTransfer,
+					workerBefore,
+					workerAfter,
+					expectedWorkerAfter,
+					mechBefore,
+					mechAfter,
+					expectedMechAfter,
+					woundRepaired,
+					contaminationTransferred,
+					samples
+				};
+			}
+			finally
+			{
+				worker?.ClearContamination();
+				mech?.ClearContamination();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+				if (mech is { Destroyed: false, Spawned: true })
+					mech.Destroy();
+			}
+		}
+
+		static Hediff_Injury CreateMechRepairWound(Pawn mech, float severity)
+		{
+			var part = mech.health?.hediffSet
+				.GetNotMissingParts(BodyPartHeight.Undefined, BodyPartDepth.Outside)
+				.FirstOrDefault(record => record.def.IsSolid(record, mech.health.hediffSet.hediffs) == false)
+				?? mech.health?.hediffSet.GetNotMissingParts().FirstOrDefault(record => record.def.alive)
+				?? mech.health?.hediffSet.GetNotMissingParts().FirstOrDefault();
+			if (part == null)
+				return null;
+
+			var wound = (Hediff_Injury)HediffMaker.MakeHediff(HediffDefOf.Cut, mech, part);
+			wound.Severity = severity;
+			mech.health.AddHediff(wound, part, new DamageInfo(DamageDefOf.Cut, severity));
+			return wound;
 		}
 
 		[Tool("zombieland/contamination_nutrient_paste_contract", Description = "Verify contaminated hopper feed transfers through real Building_NutrientPasteDispenser.TryDispenseFood into the produced meal.")]
@@ -6008,17 +7048,19 @@ namespace ZombieLand
 
 				var floorResult = CompleteTerrainFrame(woodFloor, floorCell, 0.62f);
 				var bridgeResult = CompleteTerrainFrame(bridge, bridgeCell, 0.74f, shallowWater);
+				var affectFloorResult = VerifyAffectFloorTransfer(map, bridgeCell + new IntVec3(4, 0, 0), woodFloor, cleanup);
 				var workerAfter = worker.GetContamination();
 
 				return new
 				{
-					success = floorResult.success && bridgeResult.success && CloseFloat(workerAfter, 0f),
+					success = floorResult.success && bridgeResult.success && ObjectSuccess(affectFloorResult) && CloseFloat(workerAfter, 0f),
 					cleanup,
 					worker = DescribePawn(worker),
 					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
 					workerAfter,
 					floor = floorResult.payload,
-					bridge = bridgeResult.payload
+					bridge = bridgeResult.payload,
+					affectFloor = affectFloorResult
 				};
 			}
 			finally
@@ -6050,6 +7092,151 @@ namespace ZombieLand
 							map.terrainGrid.SetTempTerrain(cell, temp);
 						map.SetContamination(cell, contamination);
 					}
+				}
+			}
+		}
+
+		static object VerifyAffectFloorTransfer(Map map, IntVec3 root, TerrainDef removableFloor, bool cleanup)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("JobDriver_AffectFloor_MakeNewToils_Patch");
+			if (removableFloor == null || removableFloor.Removable == false || JobDefOf.RemoveFloor == null || DesignationDefOf.RemoveFloor == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					removableFloor = removableFloor?.defName,
+					removable = removableFloor?.Removable,
+					jobDef = JobDefOf.RemoveFloor?.defName,
+					designationDef = DesignationDefOf.RemoveFloor?.defName,
+					error = "A removable floor, RemoveFloor job, or RemoveFloor designation was unavailable."
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, root, 16f, out var floorCell, out var floorCellError) == false)
+				return floorCellError;
+			if (TryFindClearSpawnCell(map, floorCell + IntVec3.East, 8f, out var workerCell, out var workerCellError) == false)
+				return workerCellError;
+
+			var oldTerrain = map.terrainGrid.TerrainAt(floorCell);
+			var oldFoundation = map.terrainGrid.FoundationAt(floorCell);
+			var oldTemp = map.terrainGrid.TempTerrainAt(floorCell);
+			var oldContamination = map.GetContamination(floorCell);
+			var worker = (Pawn)null;
+			try
+			{
+				if (oldTemp != null)
+					map.terrainGrid.RemoveTempTerrain(floorCell, doLeavings: false, preventDestroyEffects: true);
+				if (oldFoundation != null)
+					map.terrainGrid.RemoveFoundation(floorCell, doLeavings: false);
+				map.terrainGrid.SetTerrain(floorCell, removableFloor);
+				if (map.terrainGrid.CanRemoveTopLayerAt(floorCell) == false)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						floorCell = ZombieRuntimeActions.DescribeCell(floorCell),
+						terrain = map.terrainGrid.TerrainAt(floorCell)?.defName,
+						error = "Fixture floor cannot be removed by vanilla terrain grid."
+					};
+				}
+
+				const float groundContamination = 0.8f;
+				map.SetContamination(floorCell, groundContamination);
+				worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.West, WipeMode.Vanish);
+				worker.ClearContamination();
+				worker.jobs?.StopAll(false, true);
+				worker.pather?.StopDead();
+				worker.workSettings?.EnableAndInitializeIfNotAlreadyInitialized();
+				worker.skills.GetSkill(SkillDefOf.Construction).Level = 20;
+
+				map.designationManager.DesignationAt(floorCell, DesignationDefOf.RemoveFloor)?.Delete();
+				map.designationManager.AddDesignation(new Designation(floorCell, DesignationDefOf.RemoveFloor));
+				var workerBefore = worker.GetContamination(false);
+				var terrainBefore = map.terrainGrid.TerrainAt(floorCell);
+				var groundBefore = map.GetContamination(floorCell);
+				var floorAdd = ZombieSettings.Values.contamination.floorAdd;
+				var expectedWorkerAfter = workerBefore + groundBefore * floorAdd;
+				var job = JobMaker.MakeJob(JobDefOf.RemoveFloor, floorCell);
+				job.playerForced = true;
+				var started = worker.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
+				var tickHit = -1;
+				var samples = new List<object>();
+
+				for (var tick = 1; tick <= 600; tick++)
+				{
+					AdvanceGameTicks(1);
+					var terrainChanged = map.terrainGrid.TerrainAt(floorCell) != terrainBefore
+						|| map.terrainGrid.CanRemoveTopLayerAt(floorCell) == false;
+					if (tick == 1 || tick % 60 == 0 || terrainChanged)
+					{
+						samples.Add(new
+						{
+							tick,
+							workerJob = worker.CurJobDef?.defName,
+							terrain = map.terrainGrid.TerrainAt(floorCell)?.defName,
+							canRemoveTopLayer = map.terrainGrid.CanRemoveTopLayerAt(floorCell),
+							workerContamination = worker.GetContamination(false)
+						});
+					}
+					if (terrainChanged)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var workerAfter = worker.GetContamination(false);
+				var terrainAfter = map.terrainGrid.TerrainAt(floorCell);
+				var floorRemoved = terrainAfter != terrainBefore || map.terrainGrid.CanRemoveTopLayerAt(floorCell) == false;
+				var contaminationTransferred = floorRemoved && Approximately(workerAfter, expectedWorkerAfter);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& started
+						&& tickHit > 0
+						&& floorRemoved
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.JobDriver_AffectFloor::<MakeNewToils>b__tickIntervalAction",
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					floorCell = ZombieRuntimeActions.DescribeCell(floorCell),
+					started,
+					tickHit,
+					terrainBefore = terrainBefore?.defName,
+					terrainAfter = terrainAfter?.defName,
+					floorRemoved,
+					floorAdd,
+					groundBefore,
+					workerBefore,
+					workerAfter,
+					expectedWorkerAfter,
+					contaminationTransferred,
+					samples
+				};
+			}
+			finally
+			{
+				map.designationManager.DesignationAt(floorCell, DesignationDefOf.RemoveFloor)?.Delete();
+				worker?.ClearContamination();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+				if (cleanup)
+				{
+					if (map.terrainGrid.TempTerrainAt(floorCell) != null)
+						map.terrainGrid.RemoveTempTerrain(floorCell, doLeavings: false, preventDestroyEffects: true);
+					if (map.terrainGrid.FoundationAt(floorCell) != null)
+						map.terrainGrid.RemoveFoundation(floorCell, doLeavings: false);
+					map.terrainGrid.SetTerrain(floorCell, oldTerrain);
+					if (oldFoundation != null)
+						map.terrainGrid.SetFoundation(floorCell, oldFoundation);
+					if (oldTemp != null)
+						map.terrainGrid.SetTempTerrain(floorCell, oldTemp);
+					map.SetContamination(floorCell, oldContamination);
 				}
 			}
 		}

@@ -2727,12 +2727,14 @@ namespace ZombieLand
 					AdvanceGameTicks(1);
 					maintain?.Invoke(actor, target, tick);
 					var actorStance = actor.stances?.curStance?.GetType().Name;
-					var startedAttack = actor.stances?.curStance is Stance_Cooldown;
+					var targetInjury = TotalInjurySeverity(target);
+					var targetDamaged = targetInjury > injuryBefore || target.Dead || target.Downed;
+					var startedAttack = actor.CurJobDef == JobDefOf.AttackMelee || targetDamaged;
 					attacked |= startedAttack;
-					if (tick == 1 || tick == 60 || tick == 180 || tick == maxTicks || TotalInjurySeverity(target) > injuryBefore || target.Dead)
+					if (tick == 1 || tick == 60 || tick == 180 || tick == maxTicks || targetDamaged)
 					{
 						var zombieTarget = target as Zombie;
-						if ((TotalInjurySeverity(target) <= injuryBefore && target.Dead == false) || sampledDamage == false)
+						if (targetDamaged == false || sampledDamage == false)
 						{
 							samples.Add(new
 							{
@@ -2740,17 +2742,17 @@ namespace ZombieLand
 								actorJob = actor.CurJobDef?.defName,
 								actorStance,
 								startedAttack,
-								targetInjury = TotalInjurySeverity(target),
+								targetInjury,
 								targetDead = target.Dead,
 								targetRopedBy = zombieTarget?.ropedBy?.ThingID,
 								targetIsRopedOrConfused = zombieTarget?.IsRopedOrConfused,
 								targetParalyzedUntilDelta = zombieTarget == null ? (int?)null : zombieTarget.paralyzedUntil - GenTicks.TicksAbs
 							});
-							if (TotalInjurySeverity(target) > injuryBefore || target.Dead)
+							if (targetDamaged)
 								sampledDamage = true;
 						}
 					}
-					if (expectDamage && (TotalInjurySeverity(target) > injuryBefore || target.Dead || target.Downed))
+					if (expectDamage && targetDamaged)
 						break;
 					if (expectDamage && requireDamage == false && attacked)
 						break;

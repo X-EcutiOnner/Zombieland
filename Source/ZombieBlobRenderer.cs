@@ -7,7 +7,7 @@ using Verse;
 
 namespace ZombieLand
 {
-	public class ZombieBlobRenderer
+	public class ZombieBlobRenderer : System.IDisposable
 	{
 		public const int MAX_METABALLS = 64;
 
@@ -60,10 +60,18 @@ namespace ZombieLand
 			});
 		}
 
-		~ZombieBlobRenderer()
+		public void Dispose()
 		{
-			Object.Destroy(metaballMaterial);
-			metaballBuffer.Dispose();
+			if (metaballMaterial != null)
+			{
+				Object.Destroy(metaballMaterial);
+				metaballMaterial = null;
+			}
+			if (metaballBuffer != null)
+			{
+				metaballBuffer.Dispose();
+				metaballBuffer = null;
+			}
 		}
 
 		public static List<IntVec3> ValidPosition(Map map, IntVec3 cell)

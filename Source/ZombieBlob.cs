@@ -66,12 +66,35 @@ namespace ZombieLand
 			blob?.AddCell(cell);
 		}
 
-		~ZombieBlob()
+		void ReleaseRenderResources()
 		{
-			Object.Destroy(metaballMaterial);
-			metaballBuffer?.Dispose();
+			if (metaballMaterial != null)
+			{
+				Object.Destroy(metaballMaterial);
+				metaballMaterial = null;
+			}
+			if (metaballBuffer != null)
+			{
+				metaballBuffer.Dispose();
+				metaballBuffer = null;
+			}
+			if (mesh != null)
+			{
+				Object.Destroy(mesh);
+				mesh = null;
+			}
+		}
 
-			Object.Destroy(mesh);
+		public override void DeSpawn(DestroyMode mode = DestroyMode.Vanish)
+		{
+			ReleaseRenderResources();
+			base.DeSpawn(mode);
+		}
+
+		public override void Destroy(DestroyMode mode = DestroyMode.Vanish)
+		{
+			ReleaseRenderResources();
+			base.Destroy(mode);
 		}
 
 		void AddCell(IntVec3 newCell)
