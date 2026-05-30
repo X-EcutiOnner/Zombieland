@@ -521,7 +521,7 @@ namespace ZombieLand
 		}
 
 		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-			=> instructions.ExtraArgumentsTranspiler(typeof(GenSpawn), () => Spawn(default, default, default, default, default), new[] { Ldarg_0 }, 1);
+			=> instructions.ExtraArgumentsTranspiler(typeof(GenSpawn), () => Spawn(default, default, default, default, default), new[] { Ldarg_1 }, 1);
 	}
 
 	[HarmonyPatch(typeof(CompLifespan), nameof(CompLifespan.Expire))]

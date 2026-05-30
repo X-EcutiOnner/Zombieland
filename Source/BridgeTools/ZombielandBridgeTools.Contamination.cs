@@ -4763,6 +4763,441 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_misc_spawn_handoffs_contract", Description = "Verify miscellaneous spawn handoffs that route contamination through GenSpawn/GenPlace replacements.")]
+		public static object ContaminationMiscSpawnHandoffsContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var lifespanContaminated = VerifyLifespanExpirePlantSpawnTransfer(map, root + new IntVec3(0, 0, 6), 0.75f, "contaminated");
+			var lifespanClean = VerifyLifespanExpirePlantSpawnTransfer(map, root + new IntVec3(4, 0, 6), 0f, "clean");
+			var medicalHediffThings = VerifyMedicalHediffSpawnTransfer(map, root + new IntVec3(8, 0, 6));
+			var removedImplant = VerifyRecipeRemoveImplantSpawnTransfer(map, root + new IntVec3(12, 0, 6));
+			return new
+			{
+				success = ObjectSuccess(lifespanContaminated)
+					&& ObjectSuccess(lifespanClean)
+					&& ObjectSuccess(medicalHediffThings)
+					&& ObjectSuccess(removedImplant),
+				lifespanContaminated,
+				lifespanClean,
+				medicalHediffThings,
+				removedImplant
+			};
+		}
+
+		static object VerifyLifespanExpirePlantSpawnTransfer(Map map, IntVec3 root, float parentContamination, string caseName)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("CompLifespan_Expire_Patch");
+			var expireMethod = typeof(CompLifespan).GetMethod("Expire", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (expireMethod == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "CompLifespan.Expire protected method was not found."
+				};
+			}
+
+			var plantDef = DefDatabase<ThingDef>.GetNamedSilentFail("Plant_Grass")
+				?? DefDatabase<ThingDef>.GetNamedSilentFail("Plant_Rice");
+			if (plantDef == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "No plant def was available for the lifespan-expire fixture."
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, root, 24f, out var cell, out var cellError) == false)
+				return cellError;
+
+			var parentDef = ThingDefOf.ComponentIndustrial;
+			var parent = ThingMaker.MakeThing(parentDef) as ThingWithComps;
+			if (parent == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					parentDef = parentDef?.defName,
+					error = "The selected lifespan-expire parent def did not create a ThingWithComps."
+				};
+			}
+
+			var comp = new CompLifespan();
+			var props = new CompProperties_Lifespan
+			{
+				lifespanTicks = 1,
+				plantDefToSpawn = plantDef
+			};
+			Plant spawnedPlant = null;
+			var oldTerrain = cell.GetTerrain(map);
+			try
+			{
+				map.terrainGrid.SetTerrain(cell, TerrainDefOf.Soil);
+				if (plantDef.CanNowPlantAt(cell, map) == false)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						plantDef = plantDef.defName,
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						terrain = cell.GetTerrain(map)?.defName,
+						error = "The lifespan-expire fixture cell was not plantable even after setting temporary soil."
+					};
+				}
+
+				comp.parent = parent;
+				comp.props = props;
+				typeof(ThingWithComps).GetField("comps", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(parent, new List<ThingComp> { comp });
+				GenSpawn.Spawn(parent, cell, map, WipeMode.Vanish);
+				parent.SetContamination(parentContamination);
+				var parentBefore = parent.GetContamination();
+				var existingThings = cell.GetThingList(map).ToHashSet();
+
+				expireMethod.Invoke(comp, Array.Empty<object>());
+
+				spawnedPlant = cell.GetThingList(map)
+					.OfType<Plant>()
+					.FirstOrDefault(plant => existingThings.Contains(plant) == false && plant.def == plantDef);
+				var plantContamination = spawnedPlant?.GetContamination() ?? -1f;
+				var generalTransfer = ZombieSettings.Values.contamination.generalTransfer;
+				var expectedPlantContamination = parentBefore * generalTransfer;
+				var plantSpawned = spawnedPlant != null && spawnedPlant.Spawned;
+				var parentDestroyed = parent.Destroyed;
+				var contaminationTransferred = plantSpawned
+					&& Approximately(plantContamination, expectedPlantContamination);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& parentDestroyed
+						&& plantSpawned
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					caseName,
+					method = $"{expireMethod.DeclaringType?.FullName}::{expireMethod}",
+					parent = ZombieRuntimeActions.StableThingId(parent),
+					parentDef = parent.def?.defName,
+					parentBefore,
+					parentDestroyed,
+					plant = ZombieRuntimeActions.StableThingId(spawnedPlant),
+					plantDef = plantDef.defName,
+					cell = ZombieRuntimeActions.DescribeCell(cell),
+					generalTransfer,
+					plantContamination,
+					expectedPlantContamination,
+					plantSpawned,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				parent?.ClearContamination();
+				spawnedPlant?.ClearContamination();
+				if (spawnedPlant is { Destroyed: false, Spawned: true })
+					spawnedPlant.Destroy();
+				if (parent is { Destroyed: false, Spawned: true })
+					parent.Destroy();
+				if (oldTerrain != null && cell.InBounds(map))
+					map.terrainGrid.SetTerrain(cell, oldTerrain);
+			}
+		}
+
+		static object VerifyMedicalHediffSpawnTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("MedicalRecipesUtility_GenSpawn_Spawn_Patches");
+			if (TryFindClearSpawnCell(map, root, 24f, out var pawnCell, out var pawnCellError) == false)
+				return pawnCellError;
+			if (TryFindClearSpawnCell(map, pawnCell + IntVec3.East, 8f, out var spawnCell, out var spawnCellError) == false)
+				return spawnCellError;
+
+			var hediffDef = DefDatabase<HediffDef>.AllDefsListForReading
+				.Where(def => def?.spawnThingOnRemoved != null)
+				.OrderBy(def => def.defName)
+				.FirstOrDefault();
+			if (hediffDef == null)
+			{
+				return new
+				{
+					success = true,
+					skipped = true,
+					reason = "No HediffDef with spawnThingOnRemoved is available in the active configuration.",
+					targets = CompactPatchTargets(patchTargets)
+				};
+			}
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+				DisablePawnWork(pawn);
+				pawn.ClearContamination();
+				pawn.jobs?.StopAll(false, true);
+				pawn.pather?.StopDead();
+
+				var part = pawn.health.hediffSet.GetNotMissingParts()
+					.Where(record => record != null)
+					.FirstOrDefault(record => record.def == BodyPartDefOf.Arm)
+					?? pawn.health.hediffSet.GetNotMissingParts().FirstOrDefault();
+				if (part == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						pawn = DescribePawn(pawn),
+						error = "No not-missing body part was available for the medical hediff spawn fixture."
+					};
+				}
+
+				const float pawnContamination = 0.69f;
+				pawn.SetContamination(pawnContamination);
+				var pawnBefore = pawn.GetContamination();
+				var hediff = HediffMaker.MakeHediff(hediffDef, pawn, part);
+				pawn.health.AddHediff(hediff, part);
+				var hediffAdded = pawn.health.hediffSet.hediffs.Contains(hediff);
+				var existingThings = spawnCell.GetThingList(map).ToHashSet();
+
+				MedicalRecipesUtility.SpawnThingsFromHediffs(pawn, part, spawnCell, map);
+
+				spawnedThings = spawnCell.GetThingList(map)
+					.Where(thing => existingThings.Contains(thing) == false && thing.def == hediffDef.spawnThingOnRemoved)
+					.ToList();
+				var pawnAfter = pawn.GetContamination();
+				var spawnedContaminations = spawnedThings.Select(thing => thing.GetContamination()).ToArray();
+				var totalSpawnedContamination = spawnedContaminations.Sum();
+				var generalTransfer = ZombieSettings.Values.contamination.generalTransfer;
+				var nominalTransfer = pawnBefore * generalTransfer;
+				var expectedSpawnedContamination = pawnBefore - pawnAfter;
+				var innerThingCount = ThingOwnerUtility.GetAllThingsRecursively(pawn, false).Count;
+				var thingSpawned = spawnedThings.Count > 0 && spawnedThings.All(thing => thing.Spawned);
+				var contaminationTransferred = thingSpawned
+					&& expectedSpawnedContamination > 0f
+					&& Approximately(totalSpawnedContamination, expectedSpawnedContamination);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& hediffAdded
+						&& thingSpawned
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.MedicalRecipesUtility::SpawnThingsFromHediffs(Pawn, BodyPartRecord, IntVec3, Map)",
+					pawn = DescribePawn(pawn),
+					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+					spawnCell = ZombieRuntimeActions.DescribeCell(spawnCell),
+					part = part.def?.defName,
+					hediffDef = hediffDef.defName,
+					spawnThingOnRemoved = hediffDef.spawnThingOnRemoved?.defName,
+					pawnBefore,
+					pawnAfter,
+					innerThingCount,
+					generalTransfer,
+					nominalTransfer,
+					spawnedThings = spawnedThings.Select(thing => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(thing),
+						contamination = thing.GetContamination()
+					}).ToArray(),
+					spawnedThingCount = spawnedThings.Count,
+					spawnedContaminations,
+					totalSpawnedContamination,
+					expectedSpawnedContamination,
+					hediffAdded,
+					thingSpawned,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				pawn?.ClearContamination();
+				foreach (var thing in spawnedThings.Where(thing => thing is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					thing.ClearContamination();
+					thing.Destroy();
+				}
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+			}
+		}
+
+		static object VerifyRecipeRemoveImplantSpawnTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Recipe_RemoveImplant_ApplyOnPawn_Patches");
+			var applyMethod = typeof(Recipe_RemoveImplant).GetMethod(nameof(Recipe_RemoveImplant.ApplyOnPawn), BindingFlags.Instance | BindingFlags.Public);
+			if (applyMethod == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "Recipe_RemoveImplant.ApplyOnPawn public method was not found."
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, root, 24f, out var patientCell, out var patientCellError) == false)
+				return patientCellError;
+			if (TryFindClearSpawnCell(map, patientCell + IntVec3.East, 8f, out var doctorCell, out var doctorCellError) == false)
+				return doctorCellError;
+
+			var hediffDef = DefDatabase<HediffDef>.AllDefsListForReading
+				.Where(def => def?.spawnThingOnRemoved != null)
+				.OrderBy(def => def.defName)
+				.FirstOrDefault();
+			if (hediffDef == null)
+			{
+				return new
+				{
+					success = true,
+					skipped = true,
+					reason = "No HediffDef with spawnThingOnRemoved is available in the active configuration.",
+					targets = CompactPatchTargets(patchTargets)
+				};
+			}
+
+			var patient = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var doctor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				GenSpawn.Spawn(patient, patientCell, map, Rot4.South);
+				GenSpawn.Spawn(doctor, doctorCell, map, Rot4.South);
+				DisablePawnWork(patient);
+				DisablePawnWork(doctor);
+				patient.ClearContamination();
+				doctor.ClearContamination();
+				patient.jobs?.StopAll(false, true);
+				doctor.jobs?.StopAll(false, true);
+				patient.pather?.StopDead();
+				doctor.pather?.StopDead();
+
+				var part = patient.health.hediffSet.GetNotMissingParts()
+					.Where(record => record != null)
+					.FirstOrDefault(record => record.def == BodyPartDefOf.Arm)
+					?? patient.health.hediffSet.GetNotMissingParts().FirstOrDefault();
+				if (part == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						patient = DescribePawn(patient),
+						error = "No not-missing body part was available for the remove-implant fixture."
+					};
+				}
+
+				const float patientContamination = 0.67f;
+				patient.SetContamination(patientContamination);
+				var patientBefore = patient.GetContamination();
+				var hediff = HediffMaker.MakeHediff(hediffDef, patient, part);
+				patient.health.AddHediff(hediff, part);
+				var hediffAdded = patient.health.hediffSet.hediffs.Contains(hediff);
+				var existingThings = doctorCell.GetThingList(map).ToHashSet();
+				var worker = new Recipe_RemoveImplant
+				{
+					recipe = new RecipeDef
+					{
+						defName = "ZombielandBridgeRemoveImplantFixture",
+						label = "Zombieland bridge remove implant fixture",
+						removesHediff = hediffDef,
+						isViolation = false,
+						surgeryOutcomeEffect = null
+					}
+				};
+
+				worker.ApplyOnPawn(patient, part, doctor, new List<Thing>(), null);
+
+				spawnedThings = doctorCell.GetThingList(map)
+					.Where(thing => existingThings.Contains(thing) == false && thing.def == hediffDef.spawnThingOnRemoved)
+					.ToList();
+				var patientAfter = patient.GetContamination();
+				var hediffStillPresent = patient.health.hediffSet.hediffs.Contains(hediff);
+				var spawnedContaminations = spawnedThings.Select(thing => thing.GetContamination()).ToArray();
+				var totalSpawnedContamination = spawnedContaminations.Sum();
+				var generalTransfer = ZombieSettings.Values.contamination.generalTransfer;
+				var nominalTransfer = patientBefore * generalTransfer;
+				var expectedSpawnedContamination = patientBefore - patientAfter;
+				var innerThingCount = ThingOwnerUtility.GetAllThingsRecursively(patient, false).Count;
+				var thingSpawned = spawnedThings.Count > 0 && spawnedThings.All(thing => thing.Spawned);
+				var contaminationTransferred = thingSpawned
+					&& expectedSpawnedContamination > 0f
+					&& Approximately(totalSpawnedContamination, expectedSpawnedContamination);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& hediffAdded
+						&& hediffStillPresent == false
+						&& thingSpawned
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					method = $"{applyMethod.DeclaringType?.FullName}::{applyMethod}",
+					patient = DescribePawn(patient),
+					doctor = DescribePawn(doctor),
+					patientCell = ZombieRuntimeActions.DescribeCell(patientCell),
+					doctorCell = ZombieRuntimeActions.DescribeCell(doctorCell),
+					part = part.def?.defName,
+					hediffDef = hediffDef.defName,
+					spawnThingOnRemoved = hediffDef.spawnThingOnRemoved?.defName,
+					patientBefore,
+					patientAfter,
+					innerThingCount,
+					generalTransfer,
+					nominalTransfer,
+					spawnedThings = spawnedThings.Select(thing => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(thing),
+						contamination = thing.GetContamination()
+					}).ToArray(),
+					spawnedThingCount = spawnedThings.Count,
+					spawnedContaminations,
+					totalSpawnedContamination,
+					expectedSpawnedContamination,
+					hediffAdded,
+					hediffStillPresent,
+					thingSpawned,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				patient?.ClearContamination();
+				doctor?.ClearContamination();
+				foreach (var thing in spawnedThings.Where(thing => thing is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					thing.ClearContamination();
+					thing.Destroy();
+				}
+				if (patient is { Destroyed: false, Spawned: true })
+					patient.Destroy();
+				if (doctor is { Destroyed: false, Spawned: true })
+					doctor.Destroy();
+			}
+		}
+
 			[Tool("zombieland/contamination_clear_pollution_contract", Description = "Verify real JobDriver_ClearPollution transfers contaminated polluted ground into the worker and spawned wastepack.")]
 		public static object ContaminationClearPollutionContract(
 			[ToolParameter(Description = "Destroy the worker/wastepack and restore pollution/cell contamination before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
