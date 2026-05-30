@@ -135,8 +135,8 @@ namespace ZombieLand
 	{
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static void Prefix(Thing victim) => Filth_MakeThing_Patch.filthSource = victim;
-		static void Postfix() => Filth_MakeThing_Patch.filthSource = null;
+		static void Prefix(Thing victim) => Filth_MakeThing_Patch.SetFilthSource(victim, snapshotContamination: true);
+		static void Postfix() => Filth_MakeThing_Patch.ClearFilthSource();
 	}
 
 	[HarmonyPatch(typeof(Verse.Explosion), nameof(Verse.Explosion.TrySpawnExplosionThing))]
@@ -220,8 +220,29 @@ namespace ZombieLand
 	{
 		public static TargetInfo filthCell = null;
 		public static Thing filthSource = null;
+		public static float? filthSourceContamination = null;
+		public static sbyte? filthSourceMapIndex = null;
 
 		static bool Prepare() => Constants.CONTAMINATION;
+
+		public static void SetFilthSource(Thing source, bool snapshotContamination = false)
+		{
+			filthSource = source;
+			filthSourceContamination = null;
+			filthSourceMapIndex = null;
+			if (snapshotContamination && source != null)
+			{
+				filthSourceContamination = source.GetContamination(includeHoldings: true);
+				filthSourceMapIndex = source.mapIndexOrState;
+			}
+		}
+
+		public static void ClearFilthSource()
+		{
+			filthSource = null;
+			filthSourceContamination = null;
+			filthSourceMapIndex = null;
+		}
 
 		static IEnumerable<MethodBase> TargetMethods()
 		{
@@ -245,10 +266,12 @@ namespace ZombieLand
 					ZombieSettings.Values.contamination.filthEqualize.Equalize((LocalTargetInfo)filthCell, newThing);
 					newThing.mapIndexOrState = savedMapIndex;
 				}
-				if (filthSource != null)
+				if (filthSource != null || filthSourceContamination.HasValue)
 				{
-					var factor = nastyFilths.Contains(filthSource.def) ? ZombieSettings.Values.contamination.bloodEqualize : ZombieSettings.Values.contamination.filthEqualize;
-					newThing.AddContamination(filthSource.GetContamination(includeHoldings: true), filthSource.mapIndexOrState, factor);
+					var factor = filthSource != null && nastyFilths.Contains(filthSource.def) ? ZombieSettings.Values.contamination.bloodEqualize : ZombieSettings.Values.contamination.filthEqualize;
+					var sourceContamination = filthSourceContamination ?? filthSource.GetContamination(includeHoldings: true);
+					var sourceMapIndex = filthSourceMapIndex ?? filthSource?.mapIndexOrState;
+					newThing.AddContamination(sourceContamination, sourceMapIndex, factor);
 				}
 			}
 			return newThing;

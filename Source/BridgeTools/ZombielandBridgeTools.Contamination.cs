@@ -1712,7 +1712,7 @@ namespace ZombieLand
 			}
 		}
 
-		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns create contaminated blood filth, butcher products, and real GenLeaving outputs.")]
+		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns/things create contaminated blood, vomit, birth, comp-spawned, damage, butcher, and leavings products.")]
 		public static object ContaminationFilthLeavingsContract(
 			[ToolParameter(Description = "Destroy generated filth and leavings before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
 		{
@@ -1778,6 +1778,11 @@ namespace ZombieLand
 
 				GenLeaving.DoLeavingsFor(shipChunk, map, DestroyMode.KillFinalize, leavings);
 				var butcherProducts = VerifyCorpseButcherProductsTransfer(map, shipChunkCell + new IntVec3(6, 0, 0));
+				var vomitFilth = VerifyVomitJobFilthTransfer(map, shipChunkCell + new IntVec3(12, 0, 0));
+				var compSpawnerFilth = VerifyCompSpawnerFilthTransfer(map, shipChunkCell + new IntVec3(18, 0, 0));
+				var damageFilth = VerifyThingTakeDamageFilthTransfer(map, shipChunkCell + new IntVec3(24, 0, 0));
+				var birthFilth = VerifyBirthFilthTransfer(map, shipChunkCell + new IntVec3(30, 0, 0));
+				var flameAsh = VerifyFlameDamageAshTransfer(map, shipChunkCell + new IntVec3(36, 0, 0));
 
 				var shipChunkAfter = shipChunk.GetContamination();
 				var leavingsContamination = leavings.Select(thing => thing.GetContamination()).ToArray();
@@ -1797,7 +1802,12 @@ namespace ZombieLand
 				{
 					success = bloodContaminated
 						&& leavingsContaminated
-						&& ObjectSuccess(butcherProducts),
+						&& ObjectSuccess(butcherProducts)
+						&& ObjectSuccess(vomitFilth)
+						&& ObjectSuccess(compSpawnerFilth)
+						&& ObjectSuccess(damageFilth)
+						&& ObjectSuccess(birthFilth)
+						&& ObjectSuccess(flameAsh),
 					cleanup,
 					pawn = DescribePawn(pawn),
 					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
@@ -1824,7 +1834,12 @@ namespace ZombieLand
 					totalLeavingsContamination,
 					expectedTotalLeavingsContamination,
 					leavingsContaminated,
-					butcherProducts
+					butcherProducts,
+					vomitFilth,
+					compSpawnerFilth,
+					damageFilth,
+					birthFilth,
+					flameAsh
 				};
 			}
 			finally
@@ -1845,6 +1860,493 @@ namespace ZombieLand
 					shipChunk?.ClearContamination();
 				if (cleanup && shipChunk is { Destroyed: false, Spawned: true })
 					shipChunk.Destroy();
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+			}
+		}
+
+		static object VerifyFlameDamageAshTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("DamageWorker_Flame_Apply_Patch");
+			var thumperDef = CustomDefs.Thumper;
+			if (thumperDef == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "CustomDefs.Thumper was unavailable for the flame-ash probe."
+				};
+			}
+			if (TryFindClearBuildingFootprint(map, thumperDef, root, 18f, out var thumperCell, out var thumperCellError) == false)
+				return thumperCellError;
+
+			var thumper = ThingMaker.MakeThing(thumperDef);
+			var ashFilths = new List<Filth>();
+			try
+			{
+				foreach (var cell in GenRadial.RadialCellsAround(thumperCell, 5f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+
+				thumper.SetFactionDirect(Faction.OfPlayer);
+				GenSpawn.Spawn(thumper, thumperCell, map, Rot4.North, WipeMode.Vanish, false);
+				const float thumperContamination = 0.73f;
+				thumper.SetContamination(thumperContamination);
+				var thumperBefore = thumper.GetContamination();
+				var hitPointsBefore = thumper.HitPoints;
+				const float damageAmount = 5000f;
+				var damageInfo = new DamageInfo(DamageDefOf.Flame, damageAmount, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, thumper, true, true);
+				DamageWorker.DamageResult damageResult;
+				Rand.PushState(11);
+				try
+				{
+					damageResult = DamageDefOf.Flame.Worker.Apply(damageInfo, thumper);
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				ashFilths = GenRadial.RadialCellsAround(thumperCell, 5f, true)
+					.Where(cell => cell.InBounds(map))
+					.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+					.Where(filth => filth.def == ThingDefOf.Filth_Ash)
+					.OrderByDescending(filth => filth.GetContamination())
+					.ToList();
+				var contaminations = ashFilths.Select(filth => filth.GetContamination()).ToArray();
+				var expectedAshContamination = thumperBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var ashContaminated = ashFilths.Count > 0
+					&& contaminations.All(value => Approximately(value, expectedAshContamination, 0.0001f));
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& thumper.Destroyed
+						&& damageResult.totalDamageDealt > 0f
+						&& ashContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					thumper = DescribeContaminationThing(thumper),
+					thumperCell = ZombieRuntimeActions.DescribeCell(thumperCell),
+					thumperBefore,
+					hitPointsBefore,
+					hitPointsAfter = thumper.HitPoints,
+					thumperDestroyed = thumper.Destroyed,
+					damageDef = damageInfo.Def?.defName,
+					damageAmount,
+					damageDealt = damageResult.totalDamageDealt,
+					filthDef = ThingDefOf.Filth_Ash.defName,
+					filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+					expectedAshContamination,
+					ashFilths = ashFilths.Select(filth => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(filth),
+						cell = filth.Spawned ? ZombieRuntimeActions.DescribeCell(filth.Position) : null,
+						contamination = filth.GetContamination()
+					}).ToArray(),
+					ashFilthCount = ashFilths.Count,
+					ashContaminated
+				};
+			}
+			finally
+			{
+				foreach (var filth in ashFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					filth.ClearContamination();
+					filth.Destroy();
+				}
+				thumper?.ClearContamination();
+				if (thumper is { Destroyed: false, Spawned: true })
+					thumper.Destroy();
+			}
+		}
+
+		static object VerifyBirthFilthTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("PregnancyUtility_SpawnBirthFilth_Patch");
+			var spawnBirthFilth = typeof(PregnancyUtility).GetMethod("SpawnBirthFilth", BindingFlags.Static | BindingFlags.NonPublic);
+			if (spawnBirthFilth == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "PregnancyUtility.SpawnBirthFilth private helper was not found."
+				};
+			}
+			if (TryFindClearSpawnCell(map, root, 16f, out var motherCell, out var motherCellError) == false)
+				return motherCellError;
+
+			var mother = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var birthFilths = new List<Filth>();
+			try
+			{
+				foreach (var cell in GenRadial.RadialCellsAround(motherCell, 4f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+				GenSpawn.Spawn(mother, motherCell, map, Rot4.South);
+				DisablePawnWork(mother);
+				mother.ClearContamination();
+
+				const float motherContamination = 0.52f;
+				mother.SetContamination(motherContamination);
+				var motherBefore = mother.GetContamination();
+				const int radius = 2;
+				Rand.PushState(7);
+				try
+				{
+					spawnBirthFilth.Invoke(null, new object[] { mother, motherCell, ThingDefOf.Filth_AmnioticFluid, radius });
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				birthFilths = GenRadial.RadialCellsAround(motherCell, radius + 2f, true)
+					.Where(cell => cell.InBounds(map))
+					.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+					.Where(filth => filth.def == ThingDefOf.Filth_AmnioticFluid)
+					.OrderByDescending(filth => filth.GetContamination())
+					.ToList();
+				var contaminations = birthFilths.Select(filth => filth.GetContamination()).ToArray();
+				var expectedFilthContamination = motherBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var filthsContaminated = birthFilths.Count > 0
+					&& contaminations.All(value => Approximately(value, expectedFilthContamination, 0.0001f));
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& filthsContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					method = $"{spawnBirthFilth.DeclaringType?.FullName}::{spawnBirthFilth}",
+					mother = DescribePawn(mother),
+					motherCell = ZombieRuntimeActions.DescribeCell(motherCell),
+					motherBefore,
+					filthDef = ThingDefOf.Filth_AmnioticFluid.defName,
+					filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+					expectedFilthContamination,
+					radius,
+					filths = birthFilths.Select(filth => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(filth),
+						cell = filth.Spawned ? ZombieRuntimeActions.DescribeCell(filth.Position) : null,
+						contamination = filth.GetContamination()
+					}).ToArray(),
+					filthCount = birthFilths.Count,
+					filthsContaminated
+				};
+			}
+			finally
+			{
+				foreach (var filth in birthFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					filth.ClearContamination();
+					filth.Destroy();
+				}
+				mother?.ClearContamination();
+				if (mother is { Destroyed: false, Spawned: true })
+					mother.Destroy();
+			}
+		}
+
+		static object VerifyThingTakeDamageFilthTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Thing_TakeDamage_Patch");
+			var thumperDef = CustomDefs.Thumper;
+			if (thumperDef == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "CustomDefs.Thumper was unavailable for the damage-filth probe."
+				};
+			}
+			if (thumperDef.useHitPoints == false || thumperDef.filthLeaving == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					def = thumperDef.defName,
+					useHitPoints = thumperDef.useHitPoints,
+					filthLeaving = thumperDef.filthLeaving?.defName,
+					error = "The selected damage-filth probe def does not satisfy GenLeaving.DropFilthDueToDamage prerequisites."
+				};
+			}
+
+			if (TryFindClearBuildingFootprint(map, thumperDef, root, 18f, out var thumperCell, out var thumperCellError) == false)
+				return thumperCellError;
+
+			var thumper = ThingMaker.MakeThing(thumperDef);
+			var spawnedFilths = new List<Filth>();
+			try
+			{
+				foreach (var cell in GenRadial.RadialCellsAround(thumperCell, 5f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+
+				thumper.SetFactionDirect(Faction.OfPlayer);
+				GenSpawn.Spawn(thumper, thumperCell, map, Rot4.North, WipeMode.Vanish, false);
+				const float thumperContamination = 0.64f;
+				thumper.SetContamination(thumperContamination);
+				var thumperBefore = thumper.GetContamination();
+				var hitPointsBefore = thumper.HitPoints;
+				const float damageAmount = 240f;
+				var damageInfo = new DamageInfo(DamageDefOf.Crush, damageAmount, 0f, -1f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, thumper, true, true);
+				DamageWorker.DamageResult damageResult;
+				Rand.PushState(5);
+				try
+				{
+					damageResult = thumper.TakeDamage(damageInfo);
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				var filthDef = thumperDef.filthLeaving;
+				spawnedFilths = GenRadial.RadialCellsAround(thumperCell, 5f, true)
+					.Where(cell => cell.InBounds(map))
+					.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+					.Where(filth => filth.def == filthDef)
+					.OrderByDescending(filth => filth.GetContamination())
+					.ToList();
+				var filth = spawnedFilths.FirstOrDefault();
+				var filthContamination = filth?.GetContamination() ?? -1f;
+				var expectedFilthContamination = thumperBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var filthProduced = filth != null;
+				var filthContaminated = filthProduced
+					&& Approximately(filthContamination, expectedFilthContamination, 0.0001f);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& damageResult.totalDamageDealt > 0f
+						&& filthContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					thumper = DescribeContaminationThing(thumper),
+					thumperCell = ZombieRuntimeActions.DescribeCell(thumperCell),
+					thumperBefore,
+					hitPointsBefore,
+					hitPointsAfter = thumper.HitPoints,
+					damageDef = damageInfo.Def?.defName,
+					damageAmount,
+					damageDealt = damageResult.totalDamageDealt,
+					filthDef = filthDef.defName,
+					filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+					expectedFilthContamination,
+					filth = ZombieRuntimeActions.StableThingId(filth),
+					filthCell = filth?.Spawned == true ? ZombieRuntimeActions.DescribeCell(filth.Position) : null,
+					filthContamination,
+					filthProduced,
+					filthContaminated,
+					spawnedFilthCount = spawnedFilths.Count
+				};
+			}
+			finally
+			{
+				foreach (var filth in spawnedFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					filth.ClearContamination();
+					filth.Destroy();
+				}
+				thumper?.ClearContamination();
+				if (thumper is { Destroyed: false, Spawned: true })
+					thumper.Destroy();
+			}
+		}
+
+		static object VerifyCompSpawnerFilthTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("CompSpawnerFilth_TrySpawnFilth_Patch");
+			var filthDef = DefDatabase<ThingDef>.GetNamedSilentFail("Filth_Dirt") ?? ThingDefOf.Filth_Blood;
+			if (filthDef == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "No filth def was available for the comp-spawner-filth probe."
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, root, 16f, out var parentCell, out var parentCellError) == false)
+				return parentCellError;
+
+			var parent = ThingMaker.MakeThing(ThingDefOf.Steel);
+			var spawnedFilths = new List<Filth>();
+			try
+			{
+				foreach (var cell in GenRadial.RadialCellsAround(parentCell, 3f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+				parent.stackCount = 1;
+				GenSpawn.Spawn(parent, parentCell, map, WipeMode.Vanish);
+				const float parentContamination = 0.62f;
+				parent.SetContamination(parentContamination);
+				var parentBefore = parent.GetContamination();
+				var props = new CompProperties_SpawnerFilth
+				{
+					filthDef = filthDef,
+					spawnRadius = 2f,
+					spawnCountOnSpawn = 0,
+					spawnMtbHours = 0f,
+					spawnEveryDays = -1f
+				};
+				var comp = new CompSpawnerFilth
+				{
+					parent = parent as ThingWithComps,
+					props = props
+				};
+				if (comp.parent == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						parent = DescribeContaminationThing(parent),
+						error = "The selected parent thing is not ThingWithComps and cannot host CompSpawnerFilth."
+					};
+				}
+
+				Rand.PushState(3);
+				try
+				{
+					comp.TrySpawnFilth();
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				spawnedFilths = GenRadial.RadialCellsAround(parentCell, 3f, true)
+					.Where(cell => cell.InBounds(map))
+					.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+					.Where(filth => filth.def == filthDef)
+					.OrderByDescending(filth => filth.GetContamination())
+					.ToList();
+				var filth = spawnedFilths.FirstOrDefault();
+				var filthContamination = filth?.GetContamination() ?? -1f;
+				var expectedFilthContamination = parentBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var filthProduced = filth != null;
+				var filthContaminated = filthProduced
+					&& Approximately(filthContamination, expectedFilthContamination, 0.0001f);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& filthContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					parent = DescribeContaminationThing(parent),
+					parentCell = ZombieRuntimeActions.DescribeCell(parentCell),
+					parentBefore,
+					filthDef = filthDef.defName,
+					filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+					expectedFilthContamination,
+					spawnRadius = props.spawnRadius,
+					filth = ZombieRuntimeActions.StableThingId(filth),
+					filthCell = filth?.Spawned == true ? ZombieRuntimeActions.DescribeCell(filth.Position) : null,
+					filthContamination,
+					filthProduced,
+					filthContaminated,
+					spawnedFilthCount = spawnedFilths.Count
+				};
+			}
+			finally
+			{
+				foreach (var filth in spawnedFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					filth.ClearContamination();
+					filth.Destroy();
+				}
+				parent?.ClearContamination();
+				if (parent is { Destroyed: false, Spawned: true })
+					parent.Destroy();
+			}
+		}
+
+		static object VerifyVomitJobFilthTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("JobDriver_Vomit_MakeNewToils_Patch");
+			if (TryFindClearSpawnCell(map, root, 16f, out var pawnCell, out var pawnCellError) == false)
+				return pawnCellError;
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var vomitFilths = new List<Filth>();
+			try
+			{
+				foreach (var cell in GenRadial.RadialCellsAround(pawnCell, 2f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+				DisablePawnWork(pawn);
+				pawn.ClearContamination();
+				pawn.jobs?.StopAll(false, true);
+				pawn.pather?.StopDead();
+
+				const float pawnContamination = 0.58f;
+				pawn.SetContamination(pawnContamination);
+				var pawnBefore = pawn.GetContamination();
+				var foodNeedBefore = pawn.needs?.food?.CurLevel ?? -1f;
+				var job = JobMaker.MakeJob(JobDefOf.Vomit);
+				pawn.jobs.StartJob(job, JobCondition.InterruptForced, null, false, true);
+				var targetCell = pawn.CurJob?.targetA.Cell ?? IntVec3.Invalid;
+				if (targetCell.IsValid)
+					ClearFilthAt(map, targetCell);
+
+				var ticksRun = 0;
+				const int maxTicks = 180;
+				while (ticksRun < maxTicks)
+				{
+					AdvanceGameTicks(1);
+					ticksRun++;
+					var cells = targetCell.IsValid
+						? new[] { targetCell }
+						: GenRadial.RadialCellsAround(pawnCell, 2f, true).Where(cell => cell.InBounds(map)).ToArray();
+					vomitFilths = cells
+						.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+						.Where(filth => filth.def == ThingDefOf.Filth_Vomit)
+						.OrderByDescending(filth => filth.GetContamination())
+						.ToList();
+					if (vomitFilths.Count > 0)
+						break;
+				}
+
+				var vomit = vomitFilths.FirstOrDefault();
+				var vomitContamination = vomit?.GetContamination() ?? -1f;
+				var expectedVomitContamination = pawnBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var foodNeedAfter = pawn.needs?.food?.CurLevel ?? -1f;
+				var targetValid = targetCell.IsValid && targetCell.InBounds(map);
+				var vomitProduced = vomit != null;
+				var vomitContaminated = vomitProduced
+					&& Approximately(vomitContamination, expectedVomitContamination, 0.0001f);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& targetValid
+						&& vomitContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					pawn = DescribePawn(pawn),
+					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+					targetCell = targetValid ? ZombieRuntimeActions.DescribeCell(targetCell) : null,
+					pawnBefore,
+					filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+					expectedVomitContamination,
+					vomitFilth = ZombieRuntimeActions.StableThingId(vomit),
+					vomitContamination,
+					vomitProduced,
+					vomitContaminated,
+					ticksRun,
+					currentJob = pawn.CurJobDef?.defName,
+					foodNeedBefore,
+					foodNeedAfter
+				};
+			}
+			finally
+			{
+				foreach (var filth in vomitFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					filth.ClearContamination();
+					filth.Destroy();
+				}
+				pawn?.ClearContamination();
 				if (pawn is { Destroyed: false, Spawned: true })
 					pawn.Destroy();
 			}
@@ -5222,7 +5724,7 @@ namespace ZombieLand
 			}
 		}
 
-		[Tool("zombieland/contamination_roof_collapse_contract", Description = "Verify contaminated ground transfers into collapsed roof rock through real RoofCollapserImmediate.DropRoofInCellPhaseOne.")]
+		[Tool("zombieland/contamination_roof_collapse_contract", Description = "Verify contaminated ground transfers into collapsed roof rock and phase-two roof filth through real RoofCollapserImmediate helpers.")]
 		public static object ContaminationRoofCollapseContract(
 			[ToolParameter(Description = "Destroy generated collapsed roof rock before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
 		{
@@ -5255,13 +5757,16 @@ namespace ZombieLand
 				};
 			}
 
-			var method = typeof(RoofCollapserImmediate).GetMethod("DropRoofInCellPhaseOne", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
-			if (method == null)
+			var phaseOneMethod = typeof(RoofCollapserImmediate).GetMethod("DropRoofInCellPhaseOne", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+			var phaseTwoMethod = typeof(RoofCollapserImmediate).GetMethod("DropRoofInCellPhaseTwo", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+			if (phaseOneMethod == null || phaseTwoMethod == null)
 			{
 				return new
 				{
 					success = false,
-					error = "Could not reflect RoofCollapserImmediate.DropRoofInCellPhaseOne."
+					error = "Could not reflect one or both RoofCollapserImmediate phase helpers.",
+					phaseOneFound = phaseOneMethod != null,
+					phaseTwoFound = phaseTwoMethod != null
 				};
 			}
 
@@ -5301,10 +5806,15 @@ namespace ZombieLand
 			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
 			if (TryFindRoofCell(root, 24f, out var roofCell, out var roofCellError) == false)
 				return roofCellError;
+			if (TryFindRoofCell(roofCell + new IntVec3(6, 0, 0), 24f, out var phaseTwoCell, out var phaseTwoCellError) == false)
+				return phaseTwoCellError;
 
 			var oldRoof = map.roofGrid.RoofAt(roofCell);
+			var oldPhaseTwoRoof = map.roofGrid.RoofAt(phaseTwoCell);
 			var oldGroundContamination = map.GetContamination(roofCell);
+			var oldPhaseTwoGroundContamination = map.GetContamination(phaseTwoCell);
 			var collapsedRock = (Thing)null;
+			var phaseTwoFilths = new List<Filth>();
 			try
 			{
 				const float groundContamination = 0.67f;
@@ -5314,7 +5824,7 @@ namespace ZombieLand
 				var existingRocks = map.listerThings.ThingsOfDef(leavingDef).ToHashSet();
 				var crushedThings = new List<Thing>();
 
-				method.Invoke(null, new object[] { roofCell, map, crushedThings });
+				phaseOneMethod.Invoke(null, new object[] { roofCell, map, crushedThings });
 
 				collapsedRock = map.listerThings.ThingsOfDef(leavingDef)
 					.FirstOrDefault(thing => existingRocks.Contains(thing) == false && thing.Position == roofCell);
@@ -5330,25 +5840,96 @@ namespace ZombieLand
 					&& CloseFloat(groundBefore, groundContamination)
 					&& CloseFloat(rockContamination, groundContamination);
 
+				var phaseTwoPatchTargets = PatchedMethodsForPatchClass("RoofCollapserImmediate_DropRoofInCellPhaseTwo_Patch");
+				var phaseTwoRoofDef = roofDef.filthLeaving != null
+					? roofDef
+					: DefDatabase<RoofDef>.AllDefsListForReading.FirstOrDefault(candidate => candidate.filthLeaving != null);
+				if (phaseTwoRoofDef == null)
+				{
+					return new
+					{
+						success = false,
+						phaseOne = new
+						{
+							success = spawnedRock && contaminationTransferred,
+							cell = ZombieRuntimeActions.DescribeCell(roofCell),
+							roofDef = roofDef.defName,
+							leavingDef = leavingDef.defName,
+							rock = ZombieRuntimeActions.StableThingId(collapsedRock),
+							rockContamination,
+							expectedRockContamination = groundContamination
+						},
+						phaseTwo = new
+						{
+							success = false,
+							targets = CompactPatchTargets(phaseTwoPatchTargets),
+							error = "No loaded RoofDef with filthLeaving was available for the phase-two probe."
+						}
+					};
+				}
+
+				const float phaseTwoGroundContamination = 0.61f;
+				foreach (var cell in GenRadial.RadialCellsAround(phaseTwoCell, 2f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+				map.roofGrid.SetRoof(phaseTwoCell, phaseTwoRoofDef);
+				map.SetContamination(phaseTwoCell, phaseTwoGroundContamination);
+				var phaseTwoGroundBefore = map.GetContamination(phaseTwoCell);
+				var phaseTwoFilthDef = phaseTwoRoofDef.filthLeaving;
+				phaseTwoMethod.Invoke(null, new object[] { phaseTwoCell, map });
+				var phaseTwoGroundAfter = map.GetContamination(phaseTwoCell);
+				phaseTwoFilths = GenRadial.RadialCellsAround(phaseTwoCell, 1f, true)
+					.Where(cell => cell.InBounds(map))
+					.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+					.Where(filth => filth.def == phaseTwoFilthDef)
+					.OrderByDescending(filth => filth.GetContamination())
+					.ToList();
+				var phaseTwoFilth = phaseTwoFilths.FirstOrDefault();
+				var phaseTwoFilthContamination = phaseTwoFilth?.GetContamination() ?? -1f;
+				var expectedPhaseTwoFilthContamination = phaseTwoGroundBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var phaseTwoContaminated = phaseTwoPatchTargets.Length > 0
+					&& phaseTwoFilth != null
+					&& CloseFloat(phaseTwoFilthContamination, expectedPhaseTwoFilthContamination);
+
 				return new
 				{
-					success = spawnedRock && contaminationTransferred,
+					success = spawnedRock && contaminationTransferred && phaseTwoContaminated,
 					cleanup,
-					cell = ZombieRuntimeActions.DescribeCell(roofCell),
-					roofDef = roofDef.defName,
-					oldRoof = oldRoof?.defName,
-					leavingDef = leavingDef.defName,
-					crushedThings = crushedThings.Select(ZombieRuntimeActions.StableThingId).ToArray(),
-					rock = ZombieRuntimeActions.StableThingId(collapsedRock),
-					rockSpawned = collapsedRock?.Spawned,
-					rockDef = collapsedRock?.def?.defName,
-					rockIsMineable = collapsedRock is Mineable,
-					groundBefore,
-					groundAfterCollapse,
-					rockContamination,
-					expectedRockContamination = groundContamination,
-					spawnedRock,
-					contaminationTransferred
+					phaseOne = new
+					{
+						success = spawnedRock && contaminationTransferred,
+						cell = ZombieRuntimeActions.DescribeCell(roofCell),
+						roofDef = roofDef.defName,
+						oldRoof = oldRoof?.defName,
+						leavingDef = leavingDef.defName,
+						crushedThings = crushedThings.Select(ZombieRuntimeActions.StableThingId).ToArray(),
+						rock = ZombieRuntimeActions.StableThingId(collapsedRock),
+						rockSpawned = collapsedRock?.Spawned,
+						rockDef = collapsedRock?.def?.defName,
+						rockIsMineable = collapsedRock is Mineable,
+						groundBefore,
+						groundAfterCollapse,
+						rockContamination,
+						expectedRockContamination = groundContamination,
+						spawnedRock,
+						contaminationTransferred
+					},
+					phaseTwo = new
+					{
+						success = phaseTwoContaminated,
+						targets = CompactPatchTargets(phaseTwoPatchTargets),
+						cell = ZombieRuntimeActions.DescribeCell(phaseTwoCell),
+						roofDef = phaseTwoRoofDef.defName,
+						oldRoof = oldPhaseTwoRoof?.defName,
+						filthDef = phaseTwoFilthDef.defName,
+						filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+						filth = ZombieRuntimeActions.StableThingId(phaseTwoFilth),
+						filthContamination = phaseTwoFilthContamination,
+						expectedFilthContamination = expectedPhaseTwoFilthContamination,
+						groundBefore = phaseTwoGroundBefore,
+						groundAfter = phaseTwoGroundAfter,
+						filthCount = phaseTwoFilths.Count,
+						contaminationTransferred = phaseTwoContaminated
+					}
 				};
 			}
 			finally
@@ -5359,10 +5940,23 @@ namespace ZombieLand
 					if (collapsedRock is { Destroyed: false, Spawned: true })
 						collapsedRock.Destroy();
 				}
+				if (cleanup)
+				{
+					foreach (var filth in phaseTwoFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+					{
+						filth.ClearContamination();
+						filth.Destroy();
+					}
+				}
 				if (cleanup && roofCell.IsValid && roofCell.InBounds(map))
 				{
 					map.roofGrid.SetRoof(roofCell, oldRoof);
 					map.SetContamination(roofCell, oldGroundContamination);
+				}
+				if (cleanup && phaseTwoCell.IsValid && phaseTwoCell.InBounds(map))
+				{
+					map.roofGrid.SetRoof(phaseTwoCell, oldPhaseTwoRoof);
+					map.SetContamination(phaseTwoCell, oldPhaseTwoGroundContamination);
 				}
 			}
 		}
