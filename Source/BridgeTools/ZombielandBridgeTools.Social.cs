@@ -408,6 +408,19 @@ namespace ZombieLand
 			var formerZombieCorpseHasExtractJob = extractWorkGiver.HasJobOnThing(worker, formerZombieCorpse, true);
 			var normalZombieCorpseHasDoubleTapJob = doubleTapWorkGiver.HasJobOnThing(worker, normalZombieCorpse, true);
 			var formerZombieCorpseHasDoubleTapJob = doubleTapWorkGiver.HasJobOnThing(worker, formerZombieCorpse, true);
+			if (TryProbeThingMakerZombieCorpseDefs(out var thingMakerCorpseSuccess, out var thingMakerCorpseProbe, out var thingMakerCorpseError) == false)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					worker = DescribePawn(worker),
+					normalZombieCorpse = DescribeCorpse(normalZombieCorpse),
+					formerZombieCorpse = DescribeCorpse(formerZombieCorpse),
+					error = thingMakerCorpseError
+				};
+			}
 
 			return new
 			{
@@ -420,7 +433,8 @@ namespace ZombieLand
 					&& normalZombieCorpseHasExtractJob
 					&& formerZombieCorpseHasExtractJob
 					&& normalZombieCorpseHasDoubleTapJob == false
-					&& formerZombieCorpseHasDoubleTapJob == false,
+					&& formerZombieCorpseHasDoubleTapJob == false
+					&& thingMakerCorpseSuccess,
 				destroyedZombies,
 				destroyedZombieCorpses,
 				worker = DescribePawn(worker),
@@ -440,8 +454,83 @@ namespace ZombieLand
 				normalZombieCorpseHasExtractJob,
 				formerZombieCorpseHasExtractJob,
 				normalZombieCorpseHasDoubleTapJob,
-				formerZombieCorpseHasDoubleTapJob
+				formerZombieCorpseHasDoubleTapJob,
+				thingMakerCorpseProbe
 			};
+		}
+
+		static bool TryProbeThingMakerZombieCorpseDefs(out bool success, out object evidence, out string error)
+		{
+			success = false;
+			evidence = null;
+			error = null;
+			var normalCorpseDef = CustomDefs.Corpse_Zombie;
+			var spitterCorpseDef = DefDatabase<ThingDef>.AllDefs.FirstOrDefault(def => def.IsCorpse && def.ingestible?.sourceDef == CustomDefs.ZombieSpitter);
+			if (normalCorpseDef == null || spitterCorpseDef == null)
+			{
+				error = $"Could not resolve zombie corpse defs. normal={normalCorpseDef?.defName ?? "null"}, spitter={spitterCorpseDef?.defName ?? "null"}.";
+				return false;
+			}
+
+			var normalThing = ThingMaker.MakeThing(normalCorpseDef);
+			var spitterThing = ThingMaker.MakeThing(spitterCorpseDef);
+			var normalProps = DescribeThingMakerCorpseDef(normalCorpseDef, normalThing, typeof(ZombieCorpse));
+			var spitterProps = DescribeThingMakerCorpseDef(spitterCorpseDef, spitterThing, typeof(ZombieSpitterCorpse));
+			var normalOk = normalThing is ZombieCorpse && ThingMakerCorpseDefFixed(normalCorpseDef);
+			var spitterOk = spitterThing is ZombieSpitterCorpse && ThingMakerCorpseDefFixed(spitterCorpseDef);
+			success = normalOk && spitterOk;
+			evidence = new
+			{
+				success,
+				normal = normalProps,
+				spitter = spitterProps
+			};
+			return true;
+		}
+
+		static object DescribeThingMakerCorpseDef(ThingDef def, Thing thing, Type expectedThingClass)
+		{
+			return new
+			{
+				defName = def.defName,
+				sourceDef = def.ingestible?.sourceDef?.defName,
+				thingClass = def.thingClass?.FullName,
+				expectedThingClass = expectedThingClass.FullName,
+				madeThingType = thing?.GetType().FullName,
+				smeltable = def.smeltable,
+				mineable = def.mineable,
+				stealable = def.stealable,
+				burnableByRecipe = def.burnableByRecipe,
+				canLoadIntoCaravan = def.canLoadIntoCaravan,
+				neverMultiSelect = def.neverMultiSelect,
+				butcherProductsNull = def.butcherProducts == null,
+				smeltProductsNull = def.smeltProducts == null,
+				drawGUIOverlay = def.drawGUIOverlay,
+				hasTooltip = def.hasTooltip,
+				inspectorTabCount = def.inspectorTabs?.Count ?? -1,
+				passability = def.passability.ToString(),
+				stackLimit = def.stackLimit,
+				selectable = def.selectable
+			};
+		}
+
+		static bool ThingMakerCorpseDefFixed(ThingDef def)
+		{
+			return def.smeltable == false
+				&& def.mineable == false
+				&& def.stealable == false
+				&& def.burnableByRecipe == false
+				&& def.canLoadIntoCaravan == false
+				&& def.neverMultiSelect
+				&& def.butcherProducts == null
+				&& def.smeltProducts == null
+				&& def.drawGUIOverlay == false
+				&& def.hasTooltip == false
+				&& def.inspectorTabs != null
+				&& def.inspectorTabs.Count == 0
+				&& def.passability == Traversability.Standable
+				&& def.stackLimit == 1
+				&& def.selectable;
 		}
 
 		[Tool("zombieland/zombie_death_thought_suppression", Description = "Verify RimWorld death-thought delivery gives colonist death memories but suppresses adult zombie death memories.")]
