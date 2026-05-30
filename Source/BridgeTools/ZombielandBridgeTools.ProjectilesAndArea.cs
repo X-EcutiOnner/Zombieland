@@ -1159,6 +1159,7 @@ namespace ZombieLand
 				var waitAutoAttack = VerifyAreaWorkflowWaitAutoAttack(map, shooterCell, spawnedThings);
 				var turretTargeting = VerifyAreaWorkflowTurretTargeting(map, shooterCell, player, spawnedThings);
 				var tarSmokeMeleeTargeting = VerifyAreaWorkflowTarSmokeMeleeTargeting(map, shooterCell, spawnedThings);
+				var downedCombat = VerifyAreaWorkflowDownedCombat(map, shooterCell, spawnedThings);
 
 				var success = playerTargetIds.Contains(StableId(normal))
 					&& playerTargetIds.Contains(StableId(roped)) == false
@@ -1191,7 +1192,8 @@ namespace ZombieLand
 					&& ObjectSuccess(availableBranches)
 					&& ObjectSuccess(waitAutoAttack)
 					&& ObjectSuccess(turretTargeting)
-					&& ObjectSuccess(tarSmokeMeleeTargeting);
+					&& ObjectSuccess(tarSmokeMeleeTargeting)
+					&& ObjectSuccess(downedCombat);
 
 				return new
 				{
@@ -1265,7 +1267,8 @@ namespace ZombieLand
 					availableBranches,
 					waitAutoAttack,
 					turretTargeting,
-					tarSmokeMeleeTargeting
+					tarSmokeMeleeTargeting,
+					downedCombat
 				};
 			}
 			finally
@@ -2226,6 +2229,238 @@ namespace ZombieLand
 			};
 		}
 
+		static object VerifyAreaWorkflowDownedCombat(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var settingsSnapshot = SnapshotZombieSettings();
+			try
+			{
+				ApplyZombieSettingsOverride(settings => settings.doubleTapRequired = false);
+				var killIncappedTargets = PatchedMethodsForPatchClass("Toils_Combat_FollowAndMeleeAttack_KillIncappedTarget_Patch");
+				var downedReplacementTargets = PatchedMethodsForPatchClass("JobDriver_AttackStatic_TickAction_Patch");
+				var meleeCase = VerifyDownedMeleeAttack(map, root + new IntVec3(0, 0, 13), spawnedThings);
+				var attackStaticCase = VerifyDownedAttackStatic(map, root + new IntVec3(12, 0, 13), spawnedThings);
+
+				return new
+				{
+					success = killIncappedTargets.Length > 0
+						&& downedReplacementTargets.Length > 0
+						&& ObjectSuccess(meleeCase)
+						&& ObjectSuccess(attackStaticCase),
+					doubleTapRequired = ZombieSettings.Values.doubleTapRequired,
+					patchTargets = new
+					{
+						killIncapped = killIncappedTargets,
+						downedReplacement = downedReplacementTargets
+					},
+					meleeCase,
+					attackStaticCase
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+			}
+		}
+
+		static object VerifyDownedMeleeAttack(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			if (TryFindAdjacentPawnPairCells(map, root, out var actorCell, out var targetCell, out var cellError) == false)
+				return cellError;
+
+			var actor = SpawnMeleeAreaWorkflowPawn(map, "ZL_Area_DownedMeleeActor", actorCell, Faction.OfPlayer, spawnedThings);
+			EquipAreaWorkflowMeleeWeapon(actor);
+			var zombie = SpawnTargetZombie(map, targetCell, ZombieType.Normal, "ZL_Area_DownedMeleeZombie", spawnedThings);
+			if (actor == null || zombie == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					error = "Could not create the downed melee fixture."
+				};
+			}
+
+			if (TryMakeDownedForCombat(zombie, out var downedError) == false)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					error = downedError
+				};
+			}
+
+			var healthDownedBefore = zombie.health.Downed;
+			var publicDownedBefore = zombie.Downed;
+			var injuryBefore = TotalInjurySeverity(zombie);
+			var job = JobMaker.MakeJob(JobDefOf.AttackMelee, zombie);
+			job.killIncappedTarget = false;
+			job.playerForced = false;
+			actor.drafter.Drafted = true;
+			actor.jobs.StartJob(job, JobCondition.InterruptForced, null, false, true);
+			var startedJob = actor.CurJobDef?.defName;
+			var samples = new List<object>();
+			var attacked = false;
+			for (var tick = 1; tick <= 900 && actor.Destroyed == false && zombie.Destroyed == false; tick++)
+			{
+				AdvanceGameTicks(1);
+				var actorStance = actor.stances?.curStance?.GetType().Name;
+				attacked |= actor.stances?.curStance is Stance_Cooldown;
+				var injuryNow = TotalInjurySeverity(zombie);
+				if (tick == 1 || tick == 60 || tick == 180 || tick == 900 || attacked || injuryNow > injuryBefore || zombie.Dead)
+				{
+					samples.Add(new
+					{
+						tick,
+						actorJob = actor.CurJobDef?.defName,
+						actorStance,
+						attacked,
+						zombieHealthDowned = zombie.health.Downed,
+						zombiePublicDowned = zombie.Downed,
+						zombieInjury = injuryNow,
+						zombieDead = zombie.Dead
+					});
+					if (attacked || injuryNow > injuryBefore || zombie.Dead)
+						break;
+				}
+			}
+
+			var injuryAfter = TotalInjurySeverity(zombie);
+			var damaged = injuryAfter > injuryBefore || zombie.Dead;
+			return new
+			{
+				success = healthDownedBefore
+					&& publicDownedBefore
+					&& startedJob == JobDefOf.AttackMelee.defName
+					&& (attacked || damaged),
+				startedJob,
+				jobKillIncappedTarget = job.killIncappedTarget,
+				actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+				targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+				healthDownedBefore,
+				publicDownedBefore,
+				injuryBefore,
+				injuryAfter,
+				injuryDelta = injuryAfter - injuryBefore,
+				damaged,
+				attacked,
+				actor = DescribePawn(actor),
+				zombie = DescribeZombie(zombie),
+				samples = samples.ToArray()
+			};
+		}
+
+		static object VerifyDownedAttackStatic(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			if (TryFindClearSpawnCell(map, root, 16f, out var shooterCell, out var shooterError) == false)
+				return shooterError;
+			var targetCell = GenRadial.RadialCellsAround(shooterCell, 12f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.DistanceTo(shooterCell) >= 6f)
+				.Where(cell => GenSight.LineOfSight(shooterCell, cell, map, true))
+				.OrderBy(cell => cell.DistanceToSquared(shooterCell))
+				.FirstOrDefault();
+			if (targetCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
+					error = "No line-of-sight target cell was found for the downed AttackStatic fixture."
+				};
+			}
+
+			var shooter = SpawnArmedAreaWorkflowPawn(map, "ZL_Area_DownedStaticShooter", shooterCell, Faction.OfPlayer, spawnedThings);
+			var zombie = SpawnTargetZombie(map, targetCell, ZombieType.Normal, "ZL_Area_DownedStaticZombie", spawnedThings);
+			if (shooter == null || zombie == null)
+			{
+				return new
+				{
+					success = false,
+					shooter = DescribePawn(shooter),
+					zombie = DescribeZombie(zombie),
+					error = "Could not create the downed AttackStatic fixture."
+				};
+			}
+			if (TryMakeDownedForCombat(zombie, out var downedError) == false)
+			{
+				return new
+				{
+					success = false,
+					shooter = DescribePawn(shooter),
+					zombie = DescribeZombie(zombie),
+					error = downedError
+				};
+			}
+
+			RefreshZombieTargetCache(map);
+			var healthDownedBefore = zombie.health.Downed;
+			var publicDownedBefore = zombie.Downed;
+			var injuryBefore = TotalInjurySeverity(zombie);
+			var job = JobMaker.MakeJob(JobDefOf.AttackStatic, zombie);
+			job.killIncappedTarget = false;
+			job.playerForced = false;
+			shooter.drafter.Drafted = true;
+			shooter.jobs.StartJob(job, JobCondition.InterruptForced, null, false, true);
+			var startedJob = shooter.CurJobDef?.defName;
+			var verb = shooter.equipment?.PrimaryEq?.PrimaryVerb;
+			var samples = new List<object>();
+			var attacked = false;
+			for (var tick = 1; tick <= 1200 && shooter.Destroyed == false && zombie.Destroyed == false; tick++)
+			{
+				AdvanceGameTicks(1);
+				var shooterStance = shooter.stances?.curStance?.GetType().Name;
+				attacked |= shooter.stances?.curStance is Stance_Cooldown;
+				var injuryNow = TotalInjurySeverity(zombie);
+				if (tick == 1 || tick == 60 || tick == 180 || tick == 600 || tick == 1200 || attacked || injuryNow > injuryBefore || zombie.Dead)
+				{
+					samples.Add(new
+					{
+						tick,
+						shooterJob = shooter.CurJobDef?.defName,
+						shooterStance,
+						attacked,
+						zombieHealthDowned = zombie.health.Downed,
+						zombiePublicDowned = zombie.Downed,
+						zombieInjury = injuryNow,
+						zombieDead = zombie.Dead
+					});
+					if (attacked || injuryNow > injuryBefore || zombie.Dead)
+						break;
+				}
+			}
+
+			var injuryAfter = TotalInjurySeverity(zombie);
+			var damaged = injuryAfter > injuryBefore || zombie.Dead;
+			return new
+			{
+				success = healthDownedBefore
+					&& publicDownedBefore
+					&& startedJob == JobDefOf.AttackStatic.defName
+					&& (attacked || damaged),
+				startedJob,
+				jobKillIncappedTarget = job.killIncappedTarget,
+				shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
+				targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+				healthDownedBefore,
+				publicDownedBefore,
+				injuryBefore,
+				injuryAfter,
+				injuryDelta = injuryAfter - injuryBefore,
+				damaged,
+				attacked,
+				shooter = DescribePawn(shooter),
+				zombie = DescribeZombie(zombie),
+				verb = DescribeVerb(verb),
+				samples = samples.ToArray()
+			};
+		}
+
 		static float InvokeFriendlyFireOffset(string methodName, IAttackTarget target, IAttackTargetSearcher searcher, Verb verb)
 		{
 			var method = typeof(AttackTargetFinder).GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic);
@@ -2256,6 +2491,67 @@ namespace ZombieLand
 				.Distinct()
 				.OrderBy(owner => owner)
 				.ToArray() ?? Array.Empty<string>();
+		}
+
+		static object[] PatchedMethodsForPatchClass(string nestedClassName)
+		{
+			return Harmony.GetAllPatchedMethods()
+				.Select(method => new
+				{
+					method,
+					patchInfo = Harmony.GetPatchInfo(method)
+				})
+				.Select(entry => new
+				{
+					entry.method,
+					patches = (entry.patchInfo?.Prefixes ?? Enumerable.Empty<Patch>())
+						.Concat(entry.patchInfo?.Postfixes ?? Enumerable.Empty<Patch>())
+						.Concat(entry.patchInfo?.Transpilers ?? Enumerable.Empty<Patch>())
+						.Where(patch => patch.PatchMethod?.DeclaringType?.Name == nestedClassName)
+						.ToArray()
+				})
+				.Where(entry => entry.patches.Length > 0)
+				.Select(entry => new
+				{
+					method = entry.method.FullDescription(),
+					owners = entry.patches.Select(patch => patch.owner).Distinct().OrderBy(owner => owner).ToArray(),
+					patchMethods = entry.patches.Select(patch => patch.PatchMethod?.FullDescription()).Distinct().OrderBy(text => text).ToArray()
+				})
+				.Cast<object>()
+				.ToArray();
+		}
+
+		static bool TryMakeDownedForCombat(Pawn pawn, out string error)
+		{
+			error = null;
+			if (pawn == null)
+			{
+				error = "Pawn was null.";
+				return false;
+			}
+			if (pawn.RaceProps.IsFlesh)
+			{
+				var bloodLoss = HediffMaker.MakeHediff(HediffDefOf.BloodLoss, pawn);
+				bloodLoss.Severity = 0.45f;
+				pawn.health.hediffSet.AddDirect(bloodLoss);
+			}
+			var anesthetic = HediffMaker.MakeHediff(HediffDefOf.Anesthetic, pawn);
+			anesthetic.Severity = 1f;
+			pawn.health.hediffSet.AddDirect(anesthetic);
+
+			var makeDowned = AccessTools.Method(typeof(Pawn_HealthTracker), nameof(Pawn_HealthTracker.MakeDowned));
+			if (makeDowned == null)
+			{
+				error = "Could not reflect Pawn_HealthTracker.MakeDowned.";
+				return false;
+			}
+			makeDowned.Invoke(pawn.health, new object[makeDowned.GetParameters().Length]);
+			if (pawn.health.Downed == false)
+			{
+				error = "Pawn_HealthTracker.MakeDowned did not leave the pawn health-downed.";
+				return false;
+			}
+			return true;
 		}
 
 		static Pawn SpawnMeleeAreaWorkflowPawn(Map map, string name, IntVec3 cell, Faction faction, List<Thing> spawnedThings)
