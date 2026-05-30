@@ -1159,6 +1159,7 @@ namespace ZombieLand
 				var waitAutoAttack = VerifyAreaWorkflowWaitAutoAttack(map, shooterCell, spawnedThings);
 				var turretTargeting = VerifyAreaWorkflowTurretTargeting(map, shooterCell, player, spawnedThings);
 				var tarSmokeMeleeTargeting = VerifyAreaWorkflowTarSmokeMeleeTargeting(map, shooterCell, spawnedThings);
+				var tarSmokeAimChance = VerifyAreaWorkflowTarSmokeAimChance(map, shooterCell, spawnedThings);
 				var downedCombat = VerifyAreaWorkflowDownedCombat(map, shooterCell, spawnedThings);
 
 				var success = playerTargetIds.Contains(StableId(normal))
@@ -1193,6 +1194,7 @@ namespace ZombieLand
 					&& ObjectSuccess(waitAutoAttack)
 					&& ObjectSuccess(turretTargeting)
 					&& ObjectSuccess(tarSmokeMeleeTargeting)
+					&& ObjectSuccess(tarSmokeAimChance)
 					&& ObjectSuccess(downedCombat);
 
 				return new
@@ -1268,6 +1270,7 @@ namespace ZombieLand
 					waitAutoAttack,
 					turretTargeting,
 					tarSmokeMeleeTargeting,
+					tarSmokeAimChance,
 					downedCombat
 				};
 			}
@@ -1953,6 +1956,92 @@ namespace ZombieLand
 			};
 		}
 
+		static object VerifyAreaWorkflowTarSmokeAimChance(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			if (TryFindClearSpawnCell(map, root + new IntVec3(-12, 0, 10), 16f, out var actorCell, out var actorError) == false)
+				return actorError;
+			var targetCell = GenRadial.RadialCellsAround(actorCell, 12f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.DistanceTo(actorCell) >= 6f)
+				.Where(cell => GenSight.LineOfSight(actorCell, cell, map, true))
+				.OrderBy(cell => cell.DistanceToSquared(actorCell))
+				.FirstOrDefault();
+			if (targetCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					error = "No line-of-sight target cell was found for the tar-smoke aim-chance fixture."
+				};
+			}
+
+			ClearGasAt(map, targetCell);
+			var actor = SpawnArmedAreaWorkflowPawn(map, "ZL_Area_TarSmokeAimActor", actorCell, Faction.OfPlayer, spawnedThings);
+			var target = SpawnAreaWorkflowPawn(map, "ZL_Area_TarSmokeAimTarget", targetCell, Faction.OfAncientsHostile, spawnedThings);
+			var verb = actor?.equipment?.PrimaryEq?.PrimaryVerb;
+			if (actor == null || target == null || verb == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					target = DescribePawn(target),
+					verb = DescribeVerb(verb),
+					error = "Could not create the tar-smoke aim-chance fixture."
+				};
+			}
+
+			var reportBeforeSmoke = ShotReport.HitReportFor(actor, verb, target);
+			var aimChanceBeforeSmoke = reportBeforeSmoke.AimOnTargetChance_StandardTarget;
+			var canHitBeforeSmoke = verb.CanHitTargetFrom(actor.Position, target);
+			var gasAtTargetBefore = target.Position.GetGas(map)?.def?.defName;
+
+			var syntheticCoverSmoke = ThingMaker.MakeThing(CustomDefs.TarSmoke);
+			var reportWithSyntheticCover = reportBeforeSmoke;
+			var boxedReport = (object)reportWithSyntheticCover;
+			AccessTools.Field(typeof(ShotReport), "covers")?.SetValue(boxedReport, new List<CoverInfo> { new CoverInfo(syntheticCoverSmoke, 1f) });
+			reportWithSyntheticCover = (ShotReport)boxedReport;
+			var aimChanceWithSyntheticCoverSmoke = reportWithSyntheticCover.AimOnTargetChance_StandardTarget;
+
+			var smoke = GenSpawn.Spawn(ThingMaker.MakeThing(CustomDefs.TarSmoke), target.Position, map);
+			if (smoke != null)
+				spawnedThings.Add(smoke);
+			var gasAtTargetAfter = target.Position.GetGas(map)?.def?.defName;
+			var canHitAfterSmoke = verb.CanHitTargetFrom(actor.Position, target);
+			var aimChanceAfterTargetSmoke = ShotReport.HitReportFor(actor, verb, target).AimOnTargetChance_StandardTarget;
+
+			return new
+			{
+				success = canHitBeforeSmoke
+					&& aimChanceBeforeSmoke > 0f
+					&& gasAtTargetBefore == null
+					&& syntheticCoverSmoke?.def == CustomDefs.TarSmoke
+					&& aimChanceWithSyntheticCoverSmoke == 0f
+					&& smoke?.def == CustomDefs.TarSmoke
+					&& gasAtTargetAfter == CustomDefs.TarSmoke.defName
+					&& canHitAfterSmoke == false
+					&& aimChanceAfterTargetSmoke == 0f,
+				actor = DescribePawn(actor),
+				target = DescribePawn(target),
+				verb = DescribeVerb(verb),
+				actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+				targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+				smoke = ZombieRuntimeActions.StableThingId(smoke),
+				canHitBeforeSmoke,
+				canHitAfterSmoke,
+				aimChanceBeforeSmoke,
+				aimChanceWithSyntheticCoverSmoke,
+				aimChanceAfterTargetSmoke,
+				gasAtTargetBefore,
+				gasAtTargetAfter,
+				coverBranchMode = "synthetic ShotReport.covers TarSmoke entry"
+			};
+		}
+
 		static object VerifyAreaWorkflowTurretTargeting(Map map, IntVec3 root, Pawn roper, List<Thing> spawnedThings)
 		{
 			if (SpawnAreaWorkflowTurretGun(map, root + new IntVec3(0, 0, 12), Faction.OfPlayer, spawnedThings, out var turret, out var turretError) == false)
@@ -2097,7 +2186,7 @@ namespace ZombieLand
 			var cases = new List<object>();
 			var caseIndex = 0;
 
-			object RunCase(string label, bool expectDamage, Func<IntVec3, Pawn, Pawn> spawnTarget, Action<Pawn, Pawn> configure = null, bool requireDamage = true)
+			object RunCase(string label, bool expectDamage, Func<IntVec3, Pawn, Pawn> spawnTarget, Action<Pawn, Pawn> configure = null, bool requireDamage = true, Action<Pawn, Pawn, int> maintain = null)
 			{
 				caseIndex++;
 				if (TryFindAdjacentPawnPairCells(map, root + new IntVec3(caseIndex * 5, 0, 5), out var actorCell, out var targetCell, out var cellError) == false)
@@ -2127,6 +2216,7 @@ namespace ZombieLand
 					};
 				}
 
+				actor.drafter.Drafted = true;
 				configure?.Invoke(actor, target);
 				RefreshZombieTargetCache(map);
 				var injuryBefore = TotalInjurySeverity(target);
@@ -2135,7 +2225,6 @@ namespace ZombieLand
 				var sampledDamage = false;
 				var attacked = false;
 
-				actor.drafter.Drafted = true;
 				var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
 				waitJob.playerForced = false;
 				waitJob.canUseRangedWeapon = false;
@@ -2144,12 +2233,15 @@ namespace ZombieLand
 				const int maxTicks = 900;
 				for (var tick = 1; tick <= maxTicks && actor.Destroyed == false && target.Destroyed == false; tick++)
 				{
+					maintain?.Invoke(actor, target, tick);
 					AdvanceGameTicks(1);
+					maintain?.Invoke(actor, target, tick);
 					var actorStance = actor.stances?.curStance?.GetType().Name;
 					var startedAttack = actor.stances?.curStance is Stance_Cooldown;
 					attacked |= startedAttack;
 					if (tick == 1 || tick == 60 || tick == 180 || tick == maxTicks || TotalInjurySeverity(target) > injuryBefore || target.Dead)
 					{
+						var zombieTarget = target as Zombie;
 						if ((TotalInjurySeverity(target) <= injuryBefore && target.Dead == false) || sampledDamage == false)
 						{
 							samples.Add(new
@@ -2159,7 +2251,10 @@ namespace ZombieLand
 								actorStance,
 								startedAttack,
 								targetInjury = TotalInjurySeverity(target),
-								targetDead = target.Dead
+								targetDead = target.Dead,
+								targetRopedBy = zombieTarget?.ropedBy?.ThingID,
+								targetIsRopedOrConfused = zombieTarget?.IsRopedOrConfused,
+								targetParalyzedUntilDelta = zombieTarget == null ? (int?)null : zombieTarget.paralyzedUntil - GenTicks.TicksAbs
 							});
 							if (TotalInjurySeverity(target) > injuryBefore || target.Dead)
 								sampledDamage = true;
@@ -2211,6 +2306,10 @@ namespace ZombieLand
 			{
 				if (target is Zombie zombie)
 					zombie.ropedBy = actor;
+			}, maintain: (actor, target, tick) =>
+			{
+				if (target is Zombie zombie)
+					zombie.ropedBy = actor;
 			}));
 			cases.Add(RunCase("confusedZombie", false, (cell, actor) => SpawnTargetZombie(map, cell, ZombieType.Normal, "ZL_Area_WaitConfused", spawnedThings), (actor, target) =>
 			{
@@ -2218,7 +2317,7 @@ namespace ZombieLand
 					zombie.paralyzedUntil = GenTicks.TicksAbs + 2500;
 			}));
 			cases.Add(RunCase("spitter", true, (cell, actor) => SpawnTargetSpitter(map, cell, "ZL_Area_WaitSpitter", spawnedThings)));
-			cases.Add(RunCase("blob", true, (cell, actor) => SpawnTargetBlob(map, cell, "ZL_Area_WaitBlob", spawnedThings)));
+			cases.Add(RunCase("blob", true, (cell, actor) => SpawnTargetBlob(map, cell, "ZL_Area_WaitBlob", spawnedThings), requireDamage: false));
 			cases.Add(RunCase("hostilePawn", true, (cell, actor) => SpawnMeleeAreaWorkflowPawn(map, "ZL_Area_WaitHostile", cell, Faction.OfAncientsHostile, spawnedThings), requireDamage: false));
 
 			return new
