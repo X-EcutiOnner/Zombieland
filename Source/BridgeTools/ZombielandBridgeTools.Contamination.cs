@@ -1712,7 +1712,7 @@ namespace ZombieLand
 			}
 		}
 
-		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns/things create contaminated blood, vomit, birth, comp-spawned, damage, butcher, and leavings products.")]
+		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns/things create contaminated blood, vomit, birth, dissolve-gear, liquid projectile, tunnel-hive, comp-spawned, damage, butcher, and leavings products.")]
 		public static object ContaminationFilthLeavingsContract(
 			[ToolParameter(Description = "Destroy generated filth and leavings before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
 		{
@@ -1783,6 +1783,9 @@ namespace ZombieLand
 				var damageFilth = VerifyThingTakeDamageFilthTransfer(map, shipChunkCell + new IntVec3(24, 0, 0));
 				var birthFilth = VerifyBirthFilthTransfer(map, shipChunkCell + new IntVec3(30, 0, 0));
 				var flameAsh = VerifyFlameDamageAshTransfer(map, shipChunkCell + new IntVec3(36, 0, 0));
+				var dissolveGearFilth = VerifyDissolveGearOnDeathFilthTransfer(map, shipChunkCell + new IntVec3(42, 0, 0));
+				var liquidProjectileFilth = VerifyLiquidProjectileFilthTransfer(map, shipChunkCell + new IntVec3(48, 0, 0));
+				var tunnelHiveFilth = VerifyTunnelHiveSpawnerTickFilthTransfer(map, shipChunkCell + new IntVec3(54, 0, 0));
 
 				var shipChunkAfter = shipChunk.GetContamination();
 				var leavingsContamination = leavings.Select(thing => thing.GetContamination()).ToArray();
@@ -1807,7 +1810,10 @@ namespace ZombieLand
 						&& ObjectSuccess(compSpawnerFilth)
 						&& ObjectSuccess(damageFilth)
 						&& ObjectSuccess(birthFilth)
-						&& ObjectSuccess(flameAsh),
+						&& ObjectSuccess(flameAsh)
+						&& ObjectSuccess(dissolveGearFilth)
+						&& ObjectSuccess(liquidProjectileFilth)
+						&& ObjectSuccess(tunnelHiveFilth),
 					cleanup,
 					pawn = DescribePawn(pawn),
 					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
@@ -1839,7 +1845,10 @@ namespace ZombieLand
 					compSpawnerFilth,
 					damageFilth,
 					birthFilth,
-					flameAsh
+					flameAsh,
+					dissolveGearFilth,
+					liquidProjectileFilth,
+					tunnelHiveFilth
 				};
 			}
 			finally
@@ -1860,6 +1869,363 @@ namespace ZombieLand
 					shipChunk?.ClearContamination();
 				if (cleanup && shipChunk is { Destroyed: false, Spawned: true })
 					shipChunk.Destroy();
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+			}
+		}
+
+		static object VerifyTunnelHiveSpawnerTickFilthTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("TunnelHiveSpawner_Tick_Patch");
+			var spawnerDef = ThingDefOf.TunnelHiveSpawner;
+			if (spawnerDef == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "ThingDefOf.TunnelHiveSpawner was unavailable for the tunnel-hive filth probe."
+				};
+			}
+			if (TryFindClearSpawnCell(map, root, 16f, out var spawnerCell, out var spawnerCellError) == false)
+				return spawnerCellError;
+
+			var filthSpawnMtbField = typeof(GroundSpawner).GetField("filthSpawnMTB", BindingFlags.Instance | BindingFlags.NonPublic);
+			var filthSpawnRadiusField = typeof(GroundSpawner).GetField("filthSpawnRadius", BindingFlags.Instance | BindingFlags.NonPublic);
+			var secondarySpawnTickField = typeof(GroundSpawner).GetField("secondarySpawnTick", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (filthSpawnMtbField == null || filthSpawnRadiusField == null || secondarySpawnTickField == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "GroundSpawner private tick-control fields were not found."
+				};
+			}
+
+			var spawner = ThingMaker.MakeThing(spawnerDef) as TunnelHiveSpawner;
+			var spawnedFilths = new List<Filth>();
+			var oldGroundContamination = map.GetContamination(spawnerCell);
+			try
+			{
+				if (spawner == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						spawnerDef = spawnerDef.defName,
+						error = "Selected tunnel hive spawner def did not create a TunnelHiveSpawner instance."
+					};
+				}
+
+				foreach (var cell in GenRadial.RadialCellsAround(spawnerCell, 4f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+				GenSpawn.Spawn(spawner, spawnerCell, map, WipeMode.Vanish);
+				spawner.spawnHive = false;
+				spawner.insectsPoints = 0f;
+				spawner.ClearContamination();
+				const float groundContamination = 0.63f;
+				map.SetContamination(spawnerCell, groundContamination);
+				var groundBefore = map.GetContamination(spawnerCell);
+				var spawnerBefore = spawner.GetContamination();
+				filthSpawnMtbField.SetValue(spawner, 0.0001f);
+				filthSpawnRadiusField.SetValue(spawner, 3f);
+				secondarySpawnTickField.SetValue(spawner, Find.TickManager.TicksGame + 5000);
+
+				var ticksRun = 0;
+				const int maxTicks = 120;
+				Rand.PushState(23);
+				try
+				{
+					while (ticksRun < maxTicks && spawnedFilths.Count == 0)
+					{
+						AdvanceGameTicks(1);
+						ticksRun++;
+						spawnedFilths = GenRadial.RadialCellsAround(spawnerCell, 4f, true)
+							.Where(cell => cell.InBounds(map))
+							.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+							.Where(filth => filth.def == ThingDefOf.Filth_Dirt || filth.def == ThingDefOf.Filth_RubbleRock)
+							.OrderByDescending(filth => filth.GetContamination())
+							.ToList();
+					}
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				var contaminations = spawnedFilths.Select(filth => filth.GetContamination()).ToArray();
+				var expectedFilthContamination = groundBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var filthsContaminated = spawnedFilths.Count > 0
+					&& contaminations.All(value => Approximately(value, expectedFilthContamination, 0.0001f));
+				var groundAfter = map.GetContamination(spawnerCell);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& filthsContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.GroundSpawner::Tick() filtered to TunnelHiveSpawner",
+					spawner = DescribeContaminationThing(spawner),
+					spawnerCell = ZombieRuntimeActions.DescribeCell(spawnerCell),
+					groundBefore,
+					groundAfter,
+					spawnerBefore,
+					filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+					expectedFilthContamination,
+					ticksRun,
+					filths = spawnedFilths.Select(filth => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(filth),
+						def = filth.def?.defName,
+						cell = filth.Spawned ? ZombieRuntimeActions.DescribeCell(filth.Position) : null,
+						contamination = filth.GetContamination()
+					}).ToArray(),
+					filthCount = spawnedFilths.Count,
+					filthsContaminated
+				};
+			}
+			finally
+			{
+				foreach (var filth in spawnedFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					filth.ClearContamination();
+					filth.Destroy();
+				}
+				map.SetContamination(spawnerCell, oldGroundContamination);
+				spawner?.ClearContamination();
+				if (spawner is { Destroyed: false, Spawned: true })
+					spawner.Destroy();
+			}
+		}
+
+		static object VerifyLiquidProjectileFilthTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Projectile_Liquid_DoImpact_Patch");
+			var doImpact = typeof(Projectile_Liquid).GetMethod("DoImpact", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (doImpact == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "Projectile_Liquid.DoImpact private helper was not found."
+				};
+			}
+			var liquidDef = DefDatabase<ThingDef>.AllDefs
+				.Where(def => typeof(Projectile_Liquid).IsAssignableFrom(def.thingClass))
+				.Where(def => def.projectile?.filth != null && def.projectile.filthCount.TrueMax > 0)
+				.OrderBy(def => def.defName)
+				.FirstOrDefault();
+			if (liquidDef == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "No Projectile_Liquid def with configured filth was available."
+				};
+			}
+			if (TryFindClearSpawnCell(map, root, 16f, out var sourceCell, out var sourceCellError) == false)
+				return sourceCellError;
+			if (TryFindClearSpawnCell(map, sourceCell + IntVec3.East, 8f, out var projectileCell, out var projectileCellError) == false)
+				return projectileCellError;
+			if (TryFindClearSpawnCell(map, projectileCell + IntVec3.East, 8f, out var targetCell, out var targetCellError) == false)
+				return targetCellError;
+
+			var source = ThingMaker.MakeThing(ThingDefOf.Steel);
+			var projectile = ThingMaker.MakeThing(liquidDef) as Projectile_Liquid;
+			var spawnedFilths = new List<Filth>();
+			var oldFilthChance = liquidDef.projectile.filthChance;
+			try
+			{
+				if (projectile == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						projectileDef = liquidDef.defName,
+						error = "Selected liquid projectile def did not create a Projectile_Liquid instance."
+					};
+				}
+
+				foreach (var cell in GenRadial.RadialCellsAround(targetCell, 2f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+				source.stackCount = 1;
+				GenSpawn.Spawn(source, sourceCell, map, WipeMode.Vanish);
+				GenSpawn.Spawn(projectile, projectileCell, map, WipeMode.Vanish);
+
+				const float sourceContamination = 0.57f;
+				source.SetContamination(sourceContamination);
+				var sourceBefore = source.GetContamination();
+				var filthDef = liquidDef.projectile.filth;
+				liquidDef.projectile.filthChance = 1f;
+				Rand.PushState(17);
+				try
+				{
+					doImpact.Invoke(projectile, new object[] { source, targetCell });
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				spawnedFilths = GenRadial.RadialCellsAround(targetCell, 2f, true)
+					.Where(cell => cell.InBounds(map))
+					.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+					.Where(filth => filth.def == filthDef)
+					.OrderByDescending(filth => filth.GetContamination())
+					.ToList();
+				var contaminations = spawnedFilths.Select(filth => filth.GetContamination()).ToArray();
+				var expectedFilthContamination = sourceBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var filthsContaminated = spawnedFilths.Count > 0
+					&& contaminations.All(value => Approximately(value, expectedFilthContamination, 0.0001f));
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& filthsContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					method = $"{doImpact.DeclaringType?.FullName}::{doImpact}",
+					projectile = ZombieRuntimeActions.StableThingId(projectile),
+					projectileDef = liquidDef.defName,
+					projectileCell = ZombieRuntimeActions.DescribeCell(projectileCell),
+					source = ZombieRuntimeActions.StableThingId(source),
+					sourceCell = ZombieRuntimeActions.DescribeCell(sourceCell),
+					sourceBefore,
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					filthDef = filthDef.defName,
+					filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+					expectedFilthContamination,
+					filths = spawnedFilths.Select(filth => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(filth),
+						cell = filth.Spawned ? ZombieRuntimeActions.DescribeCell(filth.Position) : null,
+						contamination = filth.GetContamination()
+					}).ToArray(),
+					filthCount = spawnedFilths.Count,
+					filthsContaminated
+				};
+			}
+			finally
+			{
+				liquidDef.projectile.filthChance = oldFilthChance;
+				foreach (var filth in spawnedFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					filth.ClearContamination();
+					filth.Destroy();
+				}
+				source?.ClearContamination();
+				if (source is { Destroyed: false, Spawned: true })
+					source.Destroy();
+				if (projectile is { Destroyed: false, Spawned: true })
+					projectile.Destroy();
+			}
+		}
+
+		static object VerifyDissolveGearOnDeathFilthTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("HediffComp_DissolveGearOnDeath_Notify_PawnKilled_Patch");
+			var filthDef = ThingDefOf.Filth_Slime ?? ThingDefOf.Filth_Blood;
+			if (filthDef == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "No filth def was available for the dissolve-gear-on-death probe."
+				};
+			}
+			if (TryFindClearSpawnCell(map, root, 16f, out var pawnCell, out var pawnCellError) == false)
+				return pawnCellError;
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var spawnedFilths = new List<Filth>();
+			try
+			{
+				foreach (var cell in GenRadial.RadialCellsAround(pawnCell, 3f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+				DisablePawnWork(pawn);
+				pawn.ClearContamination();
+
+				const float pawnContamination = 0.49f;
+				pawn.SetContamination(pawnContamination);
+				var pawnBefore = pawn.GetContamination();
+				var props = new HediffCompProperties_DissolveGearOnDeath
+				{
+					filth = filthDef,
+					filthCount = 3,
+					fleck = null,
+					mote = null,
+					sound = null
+				};
+				var parent = new HediffWithComps
+				{
+					pawn = pawn,
+					def = DefDatabase<HediffDef>.AllDefs.FirstOrDefault(def => def?.comps?.Contains(props) == true)
+				};
+				var comp = new HediffComp_DissolveGearOnDeath
+				{
+					parent = parent,
+					props = props
+				};
+				parent.comps = new List<HediffComp> { comp };
+
+				Rand.PushState(13);
+				try
+				{
+					comp.Notify_PawnKilled();
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				spawnedFilths = GenRadial.RadialCellsAround(pawnCell, 3f, true)
+					.Where(cell => cell.InBounds(map))
+					.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+					.Where(filth => filth.def == filthDef)
+					.OrderByDescending(filth => filth.GetContamination())
+					.ToList();
+				var contaminations = spawnedFilths.Select(filth => filth.GetContamination()).ToArray();
+				var expectedFilthContamination = pawnBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var filthsContaminated = spawnedFilths.Count > 0
+					&& contaminations.All(value => Approximately(value, expectedFilthContamination, 0.0001f));
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& filthsContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.HediffComp_DissolveGearOnDeath::Notify_PawnKilled()",
+					pawn = DescribePawn(pawn),
+					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
+					pawnBefore,
+					filthDef = filthDef.defName,
+					filthCountRequested = props.filthCount,
+					filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+					expectedFilthContamination,
+					filths = spawnedFilths.Select(filth => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(filth),
+						cell = filth.Spawned ? ZombieRuntimeActions.DescribeCell(filth.Position) : null,
+						contamination = filth.GetContamination()
+					}).ToArray(),
+					filthCount = spawnedFilths.Count,
+					filthsContaminated
+				};
+			}
+			finally
+			{
+				foreach (var filth in spawnedFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					filth.ClearContamination();
+					filth.Destroy();
+				}
+				pawn?.ClearContamination();
 				if (pawn is { Destroyed: false, Spawned: true })
 					pawn.Destroy();
 			}
