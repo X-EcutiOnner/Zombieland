@@ -288,6 +288,8 @@ namespace ZombieLand
 
 			var remaining = __instance.Spawned == false ? 0 : __instance.stackCount;
 			var factor = __state == 0 ? 1f : 1f - remaining / (float)__state;
+			// Thing.SplitOff's generic postfix already copied the source contamination.
+			__result.ClearContamination();
 			__instance.TransferContamination(factor, __result);
 		}
 	}

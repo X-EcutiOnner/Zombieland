@@ -7,6 +7,7 @@ using System.Reflection;
 using UnityEngine;
 using Verse;
 using Verse.AI;
+using Verse.AI.Group;
 
 namespace ZombieLand
 {
@@ -759,6 +760,7 @@ namespace ZombieLand
 				var groundRepair = VerifyGroundRepair(map);
 				var destroyCleanup = VerifyDestroyCleanup(map, itemCell + new IntVec3(3, 0, 0));
 				var thingCompMakeThing = VerifyThingCompMakeThingFanout(map, itemCell + new IntVec3(6, 0, 0));
+				var minifiedSplit = VerifyMinifiedThingSplit(map, itemCell + new IntVec3(9, 0, 0));
 
 			static bool Close(float? value, float expected) => value.HasValue && Mathf.Abs(value.Value - expected) < 0.0001f;
 			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
@@ -880,6 +882,118 @@ namespace ZombieLand
 				}
 			}
 
+			static object VerifyMinifiedThingSplit(Map map, IntVec3 root)
+			{
+				var patchTargets = PatchedMethodsForPatchClass("MinifiedThing_SplitOff_Patch");
+				var buildingDef = DefDatabase<ThingDef>.GetNamed("Stool", false);
+				var stuffDef = ThingDefOf.WoodLog;
+				if (buildingDef?.Minifiable != true || buildingDef.minifiedDef == null || stuffDef == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						error = "The Stool building def is not available as a minifiable split fixture."
+					};
+				}
+				if (TryFindClearSpawnCell(map, root, 12f, out var splitCell, out var splitCellError) == false)
+					return splitCellError;
+
+				Building sourceBuilding = null;
+				MinifiedThing minified = null;
+				MinifiedThing split = null;
+				try
+				{
+					sourceBuilding = GenSpawn.Spawn(ThingMaker.MakeThing(buildingDef, stuffDef), splitCell, map, Rot4.South) as Building;
+					if (sourceBuilding == null)
+					{
+						return new
+						{
+							success = false,
+							targets = CompactPatchTargets(patchTargets),
+							error = "Could not spawn the Stool split fixture."
+						};
+					}
+					minified = MinifyUtility.MakeMinified(sourceBuilding);
+					if (minified == null)
+					{
+						return new
+						{
+							success = false,
+							targets = CompactPatchTargets(patchTargets),
+							error = "MinifyUtility.MakeMinified returned null."
+						};
+					}
+					if (minified.Spawned == false)
+						GenSpawn.Spawn(minified, splitCell, map, Rot4.South, WipeMode.Vanish, false);
+
+					const int startCount = 5;
+					const int splitOffCount = 2;
+					const float inputContamination = 0.5f;
+					minified.stackCount = startCount;
+					minified.SetContamination(inputContamination);
+					var beforeCount = minified.stackCount;
+					var beforeContamination = minified.GetContamination();
+					split = minified.SplitOff(splitOffCount) as MinifiedThing;
+					var remainingCount = minified.stackCount;
+					var splitCount = split?.stackCount ?? 0;
+					var remainingContamination = minified.GetContamination();
+					var splitContamination = split?.GetContamination() ?? 0f;
+					var expectedSplitContamination = inputContamination * splitOffCount / startCount;
+					var expectedRemainingContamination = inputContamination - expectedSplitContamination;
+					var splitInnerDef = split?.InnerThing?.def?.defName;
+
+					return new
+					{
+						success = patchTargets.Length > 0
+							&& split != null
+							&& split != minified
+							&& beforeCount == startCount
+							&& remainingCount == startCount - splitOffCount
+							&& splitCount == splitOffCount
+							&& CloseFloat(beforeContamination, inputContamination)
+							&& CloseFloat(remainingContamination, expectedRemainingContamination)
+							&& CloseFloat(splitContamination, expectedSplitContamination)
+							&& splitInnerDef == buildingDef.defName,
+						targets = CompactPatchTargets(patchTargets),
+						method = "RimWorld.MinifiedThing.SplitOff(Int32)",
+						cell = ZombieRuntimeActions.DescribeCell(splitCell),
+						minified = ZombieRuntimeActions.StableThingId(minified),
+						split = ZombieRuntimeActions.StableThingId(split),
+						innerDef = minified.InnerThing?.def?.defName,
+						splitInnerDef,
+						beforeCount,
+						remainingCount,
+						splitCount,
+						beforeContamination,
+						remainingContamination,
+						splitContamination,
+						expectedRemainingContamination,
+						expectedSplitContamination
+					};
+				}
+				finally
+				{
+					if (split is { Destroyed: false })
+					{
+						split.ClearContamination();
+						if (split.Spawned)
+							split.Destroy(DestroyMode.Vanish);
+					}
+					if (minified is { Destroyed: false })
+					{
+						minified.ClearContamination();
+						if (minified.Spawned)
+							minified.Destroy(DestroyMode.Vanish);
+					}
+					if (sourceBuilding is { Destroyed: false, Spawned: true })
+					{
+						sourceBuilding.ClearContamination();
+						sourceBuilding.Destroy(DestroyMode.Vanish);
+					}
+				}
+			}
+
 			var expectedEffectivenessAfterAdd = Mathf.Max(0.05f, 1f - addValue * ZombieSettings.Values.contamination.contaminationEffectivenessPercentage);
 			var expectedEffectivenessAfterSet = Mathf.Max(0.05f, 1f - setValue * ZombieSettings.Values.contamination.contaminationEffectivenessPercentage);
 
@@ -927,7 +1041,8 @@ namespace ZombieLand
 						&& ObjectSuccess(needGate)
 						&& ObjectSuccess(groundRepair)
 						&& ObjectSuccess(destroyCleanup)
-						&& ObjectSuccess(thingCompMakeThing),
+						&& ObjectSuccess(thingCompMakeThing)
+						&& ObjectSuccess(minifiedSplit),
 				human = DescribePawn(human),
 				humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
 				itemCell = ZombieRuntimeActions.DescribeCell(itemCell),
@@ -952,6 +1067,7 @@ namespace ZombieLand
 				splitContamination,
 				groundRepair,
 				destroyCleanup,
+				minifiedSplit,
 				initialClean,
 				addSynced,
 				setSynced,
@@ -1195,6 +1311,259 @@ namespace ZombieLand
 					target.Destroy();
 				if (source is { Destroyed: false, Spawned: true })
 					source.Destroy();
+			}
+		}
+
+		[Tool("zombieland/contamination_generation_handoffs_contract", Description = "Verify generated reward/trade/mech-cluster things receive contamination through generic generation handoff patches.")]
+		public static object ContaminationGenerationHandoffsContract(
+			[ToolParameter(Description = "Destroy generated/spawned test things before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2) + new IntVec3(72, 0, 0);
+			var oldRandomThingCreateChance = ZombieSettings.Values.contamination.randomThingCreateChance;
+			var oldMechClusterChance = ZombieSettings.Values.contamination.mechClusterChance;
+			try
+			{
+				ZombieSettings.Values.contamination.randomThingCreateChance = 1f;
+				ZombieSettings.Values.contamination.mechClusterChance = 1f;
+
+				var thingSetMaker = VerifyThingSetMakerGenerateHandoff(cleanup);
+				var tradeDeal = VerifyTradeDealHandoff(cleanup);
+				var mechCluster = VerifyMechClusterHandoff(map, root, cleanup);
+
+				return new
+				{
+					success = ObjectSuccess(thingSetMaker)
+						&& ObjectSuccess(tradeDeal)
+						&& ObjectSuccess(mechCluster),
+					cleanup,
+					randomThingCreateChance = ZombieSettings.Values.contamination.randomThingCreateChance,
+					mechClusterChance = ZombieSettings.Values.contamination.mechClusterChance,
+					thingSetMaker,
+					tradeDeal,
+					mechCluster
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.contamination.randomThingCreateChance = oldRandomThingCreateChance;
+				ZombieSettings.Values.contamination.mechClusterChance = oldMechClusterChance;
+			}
+		}
+
+		static object VerifyThingSetMakerGenerateHandoff(bool cleanup)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("ThingSetMaker_Generate_Patch");
+			var generated = new List<Thing>();
+			try
+			{
+				var maker = new BridgeThingSetMaker();
+				Rand.PushState(7101);
+				try
+				{
+					generated = maker.Generate(default(ThingSetMakerParams));
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				var contaminations = generated.Select(thing => thing.GetContamination()).ToArray();
+				var generatedContaminated = generated.Count > 0
+					&& contaminations.All(value => value > 0f && value <= 1f);
+				return new
+				{
+					success = patchTargets.Length > 0 && generatedContaminated,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.ThingSetMaker.Generate(ThingSetMakerParams)",
+					generated = generated.Select(thing => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(thing),
+						def = thing.def.defName,
+						stackCount = thing.stackCount,
+						contamination = thing.GetContamination()
+					}).ToArray(),
+					generatedCount = generated.Count,
+					generatedContaminated
+				};
+			}
+			finally
+			{
+				if (cleanup)
+				{
+					foreach (var thing in generated.Where(thing => thing is { Destroyed: false }).ToArray())
+					{
+						thing.ClearContamination();
+						thing.Destroy(DestroyMode.Vanish);
+					}
+				}
+			}
+		}
+
+		static object VerifyTradeDealHandoff(bool cleanup)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("TradeDeal_AddAllTradeables_Patch");
+			var oldTrader = TradeSession.trader;
+			var oldPlayerNegotiator = TradeSession.playerNegotiator;
+			var oldDeal = TradeSession.deal;
+			var oldGiftMode = TradeSession.giftMode;
+			var goods = new List<Thing>();
+			try
+			{
+				var component = ThingMaker.MakeThing(ThingDefOf.ComponentIndustrial);
+				component.stackCount = 3;
+				var steel = ThingMaker.MakeThing(ThingDefOf.Steel);
+				steel.stackCount = 25;
+				goods.Add(component);
+				goods.Add(steel);
+
+				var trader = new BridgeTrader(goods);
+				Rand.PushState(7102);
+				try
+				{
+					TradeSession.SetupWith(trader, null, giftMode: false);
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				var tradeables = TradeSession.deal?.AllTradeables?.ToArray() ?? Array.Empty<Tradeable>();
+				var traderThings = tradeables.SelectMany(tradeable => tradeable.thingsTrader).ToArray();
+				var goodContaminations = goods.Select(thing => thing.GetContamination()).ToArray();
+				var goodsContaminated = goods.Count > 0
+					&& goodContaminations.All(value => value > 0f && value <= 1f);
+				var tradeableGoodsVisible = goods.All(good => traderThings.Contains(good));
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& goodsContaminated
+						&& tradeableGoodsVisible,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.TradeDeal.AddAllTradeables()",
+					tradeableCount = tradeables.Length,
+					traderThingCount = traderThings.Length,
+					tradeableGoodsVisible,
+					goods = goods.Select(thing => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(thing),
+						def = thing.def.defName,
+						stackCount = thing.stackCount,
+						contamination = thing.GetContamination()
+					}).ToArray(),
+					goodsContaminated
+				};
+			}
+			finally
+			{
+				TradeSession.trader = oldTrader;
+				TradeSession.playerNegotiator = oldPlayerNegotiator;
+				TradeSession.deal = oldDeal;
+				TradeSession.giftMode = oldGiftMode;
+				if (cleanup)
+				{
+					foreach (var thing in goods.Where(thing => thing is { Destroyed: false }).ToArray())
+					{
+						thing.ClearContamination();
+						thing.Destroy(DestroyMode.Vanish);
+					}
+				}
+			}
+		}
+
+		static object VerifyMechClusterHandoff(Map map, IntVec3 root, bool cleanup)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("MechClusterUtility_SpawnCluster_Patch");
+			if (Faction.OfMechanoids == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "No mechanoid faction exists in the loaded world."
+				};
+			}
+			if (TryFindClearSpawnCell(map, root, 24f, out var center, out var spawnError) == false)
+				return spawnError;
+
+			var spawned = new List<Thing>();
+			var createdLords = new List<Lord>();
+			try
+			{
+				var barricadeDef = ThingDefOf.Barricade;
+				var sketch = new Sketch();
+				sketch.AddThing(barricadeDef, IntVec3.Zero, Rot4.North, ThingDefOf.Steel);
+				var mechSketch = new MechClusterSketch(sketch, new List<MechClusterSketch.Mech>(), startDormant: true);
+				var lordsBefore = map.lordManager.lords.ToHashSet();
+
+				Rand.PushState(7103);
+				try
+				{
+					spawned = MechClusterUtility.SpawnCluster(center, map, mechSketch, dropInPods: false, canAssaultColony: false, questTag: "ZL_ContaminationGenerationTest");
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+				createdLords = map.lordManager.lords.Where(lord => lordsBefore.Contains(lord) == false).ToList();
+
+				var contaminations = spawned.Select(thing => thing.GetContamination()).ToArray();
+				var spawnedContaminated = spawned.Count > 0
+					&& contaminations.All(value => value > 0f && value <= 1f);
+				var uniformContamination = contaminations.Length == 0
+					|| contaminations.All(value => Approximately(value, contaminations[0], 0.0001f));
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& spawnedContaminated
+						&& uniformContamination,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.MechClusterUtility.SpawnCluster(IntVec3, Map, MechClusterSketch, Boolean, Boolean, String)",
+					center = ZombieRuntimeActions.DescribeCell(center),
+					spawned = spawned.Select(thing => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(thing),
+						def = thing.def.defName,
+						cell = thing.Spawned ? ZombieRuntimeActions.DescribeCell(thing.Position) : null,
+						contamination = thing.GetContamination()
+					}).ToArray(),
+					spawnedCount = spawned.Count,
+					createdLordCount = createdLords.Count,
+					spawnedContaminated,
+					uniformContamination
+				};
+			}
+			finally
+			{
+				if (cleanup)
+				{
+					foreach (var thing in spawned.Where(thing => thing is { Destroyed: false, Spawned: true }).ToArray())
+					{
+						thing.ClearContamination();
+						thing.Destroy(DestroyMode.Vanish);
+					}
+					foreach (var lord in createdLords.Where(lord => map.lordManager.lords.Contains(lord)).ToArray())
+						map.lordManager.RemoveLord(lord);
+				}
 			}
 		}
 
@@ -1712,7 +2081,7 @@ namespace ZombieLand
 			}
 		}
 
-		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns/things create contaminated blood, vomit, birth, dissolve-gear, liquid projectile, tunnel-hive, comp-spawned, damage, butcher, and leavings products.")]
+		[Tool("zombieland/contamination_filth_leavings_contract", Description = "Verify contaminated pawns/things create contaminated blood, vomit, birth, dissolve-gear, liquid projectile, tunnel-hive, explosion, comp-spawned, damage, butcher, and leavings products.")]
 		public static object ContaminationFilthLeavingsContract(
 			[ToolParameter(Description = "Destroy generated filth and leavings before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
 		{
@@ -1786,6 +2155,7 @@ namespace ZombieLand
 				var dissolveGearFilth = VerifyDissolveGearOnDeathFilthTransfer(map, shipChunkCell + new IntVec3(42, 0, 0));
 				var liquidProjectileFilth = VerifyLiquidProjectileFilthTransfer(map, shipChunkCell + new IntVec3(48, 0, 0));
 				var tunnelHiveFilth = VerifyTunnelHiveSpawnerTickFilthTransfer(map, shipChunkCell + new IntVec3(54, 0, 0));
+				var explosionFilth = VerifyExplosionSpawnedFilthTransfer(map, shipChunkCell + new IntVec3(60, 0, 0));
 
 				var shipChunkAfter = shipChunk.GetContamination();
 				var leavingsContamination = leavings.Select(thing => thing.GetContamination()).ToArray();
@@ -1813,7 +2183,8 @@ namespace ZombieLand
 						&& ObjectSuccess(flameAsh)
 						&& ObjectSuccess(dissolveGearFilth)
 						&& ObjectSuccess(liquidProjectileFilth)
-						&& ObjectSuccess(tunnelHiveFilth),
+						&& ObjectSuccess(tunnelHiveFilth)
+						&& ObjectSuccess(explosionFilth),
 					cleanup,
 					pawn = DescribePawn(pawn),
 					pawnCell = ZombieRuntimeActions.DescribeCell(pawnCell),
@@ -1848,7 +2219,8 @@ namespace ZombieLand
 					flameAsh,
 					dissolveGearFilth,
 					liquidProjectileFilth,
-					tunnelHiveFilth
+					tunnelHiveFilth,
+					explosionFilth
 				};
 			}
 			finally
@@ -1871,6 +2243,151 @@ namespace ZombieLand
 					shipChunk.Destroy();
 				if (pawn is { Destroyed: false, Spawned: true })
 					pawn.Destroy();
+			}
+		}
+
+		static object VerifyExplosionSpawnedFilthTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Verse_Explosion_TrySpawnExplosionThing_Patch");
+			var trySpawnExplosionThing = typeof(Verse.Explosion).GetMethod("TrySpawnExplosionThing", BindingFlags.Instance | BindingFlags.NonPublic);
+			var damagedThingsField = typeof(Verse.Explosion).GetField("damagedThings", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (trySpawnExplosionThing == null || damagedThingsField == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "Explosion private spawn helper or damagedThings field was not found."
+				};
+			}
+			if (TryFindClearSpawnCell(map, root, 16f, out var lowSourceCell, out var lowSourceCellError) == false)
+				return lowSourceCellError;
+			if (TryFindClearSpawnCell(map, lowSourceCell + IntVec3.East, 8f, out var highSourceCell, out var highSourceCellError) == false)
+				return highSourceCellError;
+			if (TryFindClearSpawnCell(map, highSourceCell + IntVec3.East, 8f, out var explosionCell, out var explosionCellError) == false)
+				return explosionCellError;
+			if (TryFindClearSpawnCell(map, explosionCell + IntVec3.East, 8f, out var targetCell, out var targetCellError) == false)
+				return targetCellError;
+
+			var lowSource = ThingMaker.MakeThing(ThingDefOf.Steel);
+			var highSource = ThingMaker.MakeThing(ThingDefOf.Steel);
+			var explosion = ThingMaker.MakeThing(ThingDefOf.Explosion) as Verse.Explosion;
+			var spawnedFilths = new List<Filth>();
+			try
+			{
+				if (explosion == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						error = "ThingDefOf.Explosion did not create a Verse.Explosion instance."
+					};
+				}
+
+				foreach (var cell in GenRadial.RadialCellsAround(targetCell, 2f, true).Where(cell => cell.InBounds(map)))
+					ClearFilthAt(map, cell);
+				lowSource.stackCount = 1;
+				highSource.stackCount = 1;
+				GenSpawn.Spawn(lowSource, lowSourceCell, map, WipeMode.Vanish);
+				GenSpawn.Spawn(highSource, highSourceCell, map, WipeMode.Vanish);
+				GenSpawn.Spawn(explosion, explosionCell, map, WipeMode.Vanish);
+
+				const float lowSourceContamination = 0.22f;
+				const float highSourceContamination = 0.74f;
+				lowSource.SetContamination(lowSourceContamination);
+				highSource.SetContamination(highSourceContamination);
+				var lowSourceBefore = lowSource.GetContamination();
+				var highSourceBefore = highSource.GetContamination();
+				var damagedThings = damagedThingsField.GetValue(explosion) as List<Thing>;
+				if (damagedThings == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						explosion = ZombieRuntimeActions.StableThingId(explosion),
+						error = "Explosion.damagedThings was not initialized after spawning."
+					};
+				}
+				damagedThings.Clear();
+				damagedThings.Add(lowSource);
+				damagedThings.Add(highSource);
+
+				var filthDef = ThingDefOf.Filth_Dirt;
+				const int filthCount = 1;
+				Rand.PushState(29);
+				try
+				{
+					trySpawnExplosionThing.Invoke(explosion, new object[] { filthDef, targetCell, filthCount });
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				spawnedFilths = GenRadial.RadialCellsAround(targetCell, 2f, true)
+					.Where(cell => cell.InBounds(map))
+					.SelectMany(cell => cell.GetThingList(map).OfType<Filth>())
+					.Where(filth => filth.def == filthDef)
+					.OrderByDescending(filth => filth.GetContamination())
+					.ToList();
+				var contaminations = spawnedFilths.Select(filth => filth.GetContamination()).ToArray();
+				var expectedFilthContamination = highSourceBefore * ZombieSettings.Values.contamination.filthEqualize;
+				var ignoredLowerSource = spawnedFilths.Count > 0
+					&& contaminations.All(value => Mathf.Abs(value - lowSourceBefore * ZombieSettings.Values.contamination.filthEqualize) > 0.0001f);
+				var filthsContaminated = spawnedFilths.Count > 0
+					&& contaminations.All(value => Approximately(value, expectedFilthContamination, 0.0001f));
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& filthsContaminated
+						&& ignoredLowerSource,
+					targets = CompactPatchTargets(patchTargets),
+					method = $"{trySpawnExplosionThing.DeclaringType?.FullName}::{trySpawnExplosionThing}",
+					explosion = ZombieRuntimeActions.StableThingId(explosion),
+					explosionCell = ZombieRuntimeActions.DescribeCell(explosionCell),
+					lowSource = ZombieRuntimeActions.StableThingId(lowSource),
+					lowSourceCell = ZombieRuntimeActions.DescribeCell(lowSourceCell),
+					lowSourceBefore,
+					highSource = ZombieRuntimeActions.StableThingId(highSource),
+					highSourceCell = ZombieRuntimeActions.DescribeCell(highSourceCell),
+					highSourceBefore,
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					damagedThingCount = damagedThings.Count,
+					selectedSourceContamination = highSourceBefore,
+					filthDef = filthDef.defName,
+					filthCountRequested = filthCount,
+					filthEqualize = ZombieSettings.Values.contamination.filthEqualize,
+					expectedFilthContamination,
+					lowerSourceWouldHaveProduced = lowSourceBefore * ZombieSettings.Values.contamination.filthEqualize,
+					ignoredLowerSource,
+					filths = spawnedFilths.Select(filth => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(filth),
+						cell = filth.Spawned ? ZombieRuntimeActions.DescribeCell(filth.Position) : null,
+						contamination = filth.GetContamination()
+					}).ToArray(),
+					filthCount = spawnedFilths.Count,
+					filthsContaminated
+				};
+			}
+			finally
+			{
+				foreach (var filth in spawnedFilths.Where(filth => filth is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					filth.ClearContamination();
+					filth.Destroy();
+				}
+				lowSource?.ClearContamination();
+				highSource?.ClearContamination();
+				if (lowSource is { Destroyed: false, Spawned: true })
+					lowSource.Destroy();
+				if (highSource is { Destroyed: false, Spawned: true })
+					highSource.Destroy();
+				if (explosion is { Destroyed: false, Spawned: true })
+					explosion.Destroy();
 			}
 		}
 
@@ -8069,6 +8586,54 @@ namespace ZombieLand
 				|| string.Equals(thing.ThingID, query, StringComparison.OrdinalIgnoreCase)
 				|| string.Equals(thing.LabelCap.ToString(), query, StringComparison.OrdinalIgnoreCase)
 				|| string.Equals(thing.LabelShort, query, StringComparison.OrdinalIgnoreCase));
+		}
+
+		sealed class BridgeThingSetMaker : ThingSetMaker
+		{
+			public override void Generate(ThingSetMakerParams parms, List<Thing> outThings)
+			{
+				var component = ThingMaker.MakeThing(ThingDefOf.ComponentIndustrial);
+				component.stackCount = 3;
+				outThings.Add(component);
+
+				var steel = ThingMaker.MakeThing(ThingDefOf.Steel);
+				steel.stackCount = 25;
+				outThings.Add(steel);
+			}
+
+			public override IEnumerable<ThingDef> AllGeneratableThingsDebugSub(ThingSetMakerParams parms)
+			{
+				yield return ThingDefOf.ComponentIndustrial;
+				yield return ThingDefOf.Steel;
+			}
+		}
+
+		sealed class BridgeTrader : ITrader
+		{
+			readonly List<Thing> goods;
+
+			public BridgeTrader(IEnumerable<Thing> goods)
+				=> this.goods = goods.ToList();
+
+			public TraderKindDef TraderKind => DefDatabase<TraderKindDef>.AllDefsListForReading.FirstOrDefault();
+			public IEnumerable<Thing> Goods => goods;
+			public int RandomPriceFactorSeed => 7102;
+			public string TraderName => "Zombieland contamination bridge trader";
+			public bool CanTradeNow => true;
+			public float TradePriceImprovementOffsetForPlayer => 0f;
+			public Faction Faction => Faction.OfMechanoids ?? Faction.OfAncients;
+			public TradeCurrency TradeCurrency => TradeCurrency.Silver;
+
+			public IEnumerable<Thing> ColonyThingsWillingToBuy(Pawn playerNegotiator)
+				=> Enumerable.Empty<Thing>();
+
+			public void GiveSoldThingToTrader(Thing toGive, int countToGive, Pawn playerNegotiator)
+			{
+			}
+
+			public void GiveSoldThingToPlayer(Thing toGive, int countToGive, Pawn playerNegotiator)
+			{
+			}
 		}
 
 	}
