@@ -5096,6 +5096,7 @@ namespace ZombieLand
 				def.drawGUIOverlay = false;
 				def.hasTooltip = false;
 				def.inspectorTabs = new List<Type>();
+				def.inspectorTabsResolved = new List<InspectTabBase>();
 				def.passability = Traversability.Standable;
 				def.stackLimit = 1;
 			}

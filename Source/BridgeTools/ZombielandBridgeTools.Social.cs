@@ -15,6 +15,7 @@ namespace ZombieLand
 		[Tool("zombieland/zombie_selection_respects_former_colonist", Description = "Verify map-click and selector behavior distinguishes ordinary zombies from former-colonist zombies and corpses.")]
 		public static object ZombieSelectionRespectsFormerColonist()
 		{
+			var inspectTabTargets = PatchedMethodsForPatchClass("MainTabWindow_Inspect_CurTabs_Patch");
 			var map = CurrentMap;
 			if (map == null)
 			{
@@ -111,6 +112,7 @@ namespace ZombieLand
 			var formerCorpseSelectableByMapClick = ThingSelectionUtility.SelectableByMapClick(formerCorpse);
 			var normalCorpseSelectedBySelector = SelectsThroughSelector(normalCorpse);
 			var formerCorpseSelectedBySelector = SelectsThroughSelector(formerCorpse);
+			var inspectTabs = VerifyZombieCorpseInspectTabs(normalCorpse, formerCorpse, out var inspectTabsSuccess);
 			Find.Selector.ClearSelection();
 
 			return new
@@ -122,7 +124,9 @@ namespace ZombieLand
 					&& normalCorpseSelectedBySelector == false
 					&& formerCorpseSelectedBySelector
 					&& normalLiveHasFormerColor == false
-					&& formerLiveHasFormerColor,
+					&& formerLiveHasFormerColor
+					&& inspectTabTargets.Length > 0
+					&& inspectTabsSuccess,
 				destroyedZombies,
 				destroyedZombieCorpses,
 				normalZombie = DescribeZombie(normalZombie),
@@ -139,13 +143,94 @@ namespace ZombieLand
 				normalLiveLabelColor = DescribeColor(normalLiveLabelColor),
 				formerLiveLabelColor = DescribeColor(formerLiveLabelColor),
 				normalLiveHasFormerColor,
-				formerLiveHasFormerColor
+				formerLiveHasFormerColor,
+				patchTargets = new
+				{
+					inspectTabs = inspectTabTargets
+				},
+				inspectTabs
+			};
+		}
+
+		static object VerifyZombieCorpseInspectTabs(ZombieCorpse normalCorpse, ZombieCorpse formerCorpse, out bool success)
+		{
+			var postfix = FindNestedPatchMethod("MainTabWindow_Inspect_CurTabs_Patch", "Postfix");
+			var nullArgs = new object[] { null };
+			postfix?.Invoke(null, nullArgs);
+			var nullAfterPostfix = nullArgs[0] as IEnumerable<InspectTabBase>;
+
+			var normalSelection = ReadInspectTabsForSelection(normalCorpse);
+			var formerSelection = ReadInspectTabsForSelection(formerCorpse);
+			success = postfix != null
+				&& nullAfterPostfix != null
+				&& normalSelection.selected == false
+				&& formerSelection.selected
+				&& formerSelection.tabsNull == false
+				&& formerSelection.tabCount == 0;
+
+			return new
+			{
+				success,
+				postfixFound = postfix != null,
+				nullPostfix = new
+				{
+					returnedNull = nullAfterPostfix == null,
+					count = nullAfterPostfix?.Count() ?? -1
+				},
+				normalSelection,
+				formerSelection
+			};
+		}
+
+		sealed class InspectTabSelectionProbe
+		{
+			public string selectedId;
+			public bool isZombieCorpse;
+			public bool isFormerMapPawnCorpse;
+			public string defName;
+			public bool selected;
+			public bool tabsNull;
+			public int tabCount;
+			public string[] tabTypes;
+			public bool directTabsNull;
+			public int directTabCount;
+			public int defInspectorTabTypeCount;
+			public int defInspectorTabResolvedCount;
+		}
+
+		static InspectTabSelectionProbe ReadInspectTabsForSelection(object selected)
+		{
+			Find.Selector.ClearSelection();
+			Find.Selector.Select(selected, false, false);
+			var isSelected = Find.Selector.IsSelected(selected);
+			var tabs = new MainTabWindow_Inspect().CurTabs;
+			var tabArray = tabs?.ToArray();
+			Find.Selector.ClearSelection();
+
+			var thing = selected as Thing;
+			var directTabs = thing?.GetInspectTabs();
+			var directTabArray = directTabs?.ToArray();
+			return new InspectTabSelectionProbe
+			{
+				selectedId = StableId(selected),
+				isZombieCorpse = selected is ZombieCorpse,
+				isFormerMapPawnCorpse = selected is ZombieCorpse corpse && corpse.InnerPawn is Zombie zombie && zombie.wasMapPawnBefore,
+				defName = thing?.def?.defName,
+				selected = isSelected,
+				tabsNull = tabArray == null,
+				tabCount = tabArray?.Length ?? -1,
+				tabTypes = tabArray?.Select(tab => tab?.GetType().Name ?? "<null>").ToArray() ?? Array.Empty<string>(),
+				directTabsNull = directTabArray == null,
+				directTabCount = directTabArray?.Length ?? -1,
+				defInspectorTabTypeCount = thing?.def?.inspectorTabs?.Count ?? -1,
+				defInspectorTabResolvedCount = thing?.def?.inspectorTabsResolved?.Count ?? -1
 			};
 		}
 
 		[Tool("zombieland/zombie_social_thought_suppression", Description = "Verify zombie pawns and zombie corpses are ignored by RimWorld social-memory, interaction, and observed-corpse thought APIs.")]
 		public static object ZombieSocialThoughtSuppression()
 		{
+			var situationalThoughtTargets = PatchedMethodsForPatchClass("SituationalThoughtHandler_AppendSocialThoughts_Patch");
 			var map = CurrentMap;
 			if (map == null)
 			{
@@ -169,10 +254,15 @@ namespace ZombieLand
 				return actorSpawnError;
 			if (TryFindClearSpawnCell(map, actorCell + new IntVec3(4, 0, 0), 10f, out var zombieCell, out var zombieSpawnError) == false)
 				return zombieSpawnError;
+			if (TryFindClearSpawnCell(map, actorCell + new IntVec3(-4, 0, 0), 10f, out var humanOtherCell, out var humanOtherSpawnError) == false)
+				return humanOtherSpawnError;
 
 			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var humanOther = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+			GenSpawn.Spawn(humanOther, humanOtherCell, map, Rot4.South);
 			DisablePawnWork(actor);
+			DisablePawnWork(humanOther);
 			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
 			if (zombie == null)
 			{
@@ -182,6 +272,7 @@ namespace ZombieLand
 					destroyedZombies,
 					destroyedZombieCorpses,
 					actor = DescribePawn(actor),
+					humanOther = DescribePawn(humanOther),
 					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
 					error = "ZombieGenerator.SpawnZombie returned no social/thought test zombie."
 				};
@@ -195,6 +286,7 @@ namespace ZombieLand
 					destroyedZombies,
 					destroyedZombieCorpses,
 					actor = DescribePawn(actor),
+					humanOther = DescribePawn(humanOther),
 					zombie = DescribeZombie(zombie),
 					error = socialMemoryError
 				};
@@ -209,6 +301,19 @@ namespace ZombieLand
 			var zombieOpinionOfActor = zombie.relations?.OpinionOf(actor) ?? int.MinValue;
 			var socialThoughtsAboutZombie = new List<ISocialThought>();
 			actor.needs?.mood?.thoughts?.GetSocialThoughts(zombie, socialThoughtsAboutZombie);
+			if (TryProbeSituationalSocialThoughtPrefix(actor, humanOther, zombie, out var situationalThoughtSuppressed, out var situationalThoughtProbe, out var situationalThoughtError) == false)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					actor = DescribePawn(actor),
+					humanOther = DescribePawn(humanOther),
+					zombie = DescribeZombie(zombie),
+					error = situationalThoughtError
+				};
+			}
 			var actorInteractWithZombie = actor.interactions?.TryInteractWith(zombie, InteractionDefOf.Chitchat) ?? false;
 			var zombieInteractWithActor = zombie.interactions?.TryInteractWith(actor, InteractionDefOf.Chitchat) ?? false;
 			if (TryProbeInteractionTickSuppression(actor, zombie, out var interactionTickSuppressed, out var interactionTickProbe, out var interactionTickError) == false)
@@ -219,6 +324,7 @@ namespace ZombieLand
 					destroyedZombies,
 					destroyedZombieCorpses,
 					actor = DescribePawn(actor),
+					humanOther = DescribePawn(humanOther),
 					zombie = DescribeZombie(zombie),
 					error = interactionTickError
 				};
@@ -235,6 +341,7 @@ namespace ZombieLand
 					destroyedZombies,
 					destroyedZombieCorpses,
 					actor = DescribePawn(actor),
+					humanOther = DescribePawn(humanOther),
 					zombie = DescribeZombie(zombie),
 					error = "Killing the social/thought test zombie did not leave a ZombieCorpse."
 				};
@@ -254,6 +361,8 @@ namespace ZombieLand
 					&& actorOpinionOfZombie == 0
 					&& zombieOpinionOfActor == 0
 					&& socialThoughtsAboutZombie.Count == 0
+					&& situationalThoughtTargets.Length > 0
+					&& situationalThoughtSuppressed
 					&& actorInteractWithZombie == false
 					&& zombieInteractWithActor == false
 					&& interactionTickSuppressed
@@ -262,8 +371,13 @@ namespace ZombieLand
 				destroyedZombies,
 				destroyedZombieCorpses,
 				actor = DescribePawn(actor),
+				humanOther = DescribePawn(humanOther),
 				zombie = DescribeZombie(zombie),
 				zombieCorpse = DescribeCorpse(zombieCorpse),
+				patchTargets = new
+				{
+					situationalThoughts = situationalThoughtTargets
+				},
 				thoughtDef = thoughtDef?.defName,
 				actorCanGetDebugThought,
 				zombieCanGetDebugThought,
@@ -273,12 +387,49 @@ namespace ZombieLand
 				actorOpinionOfZombie,
 				zombieOpinionOfActor,
 				socialThoughtCountAboutZombie = socialThoughtsAboutZombie.Count,
+				situationalThoughtProbe,
 				actorInteractWithZombie,
 				zombieInteractWithActor,
 				interactionTickProbe,
 				observedZombieCorpseThoughtDef = observedZombieCorpseThought?.def?.defName,
 				observedZombieCorpseHistoryEventDef = observedZombieCorpseHistoryEvent?.defName
 			};
+		}
+
+		static bool TryProbeSituationalSocialThoughtPrefix(Pawn actor, Pawn humanOther, Pawn zombie, out bool suppressed, out object evidence, out string error)
+		{
+			suppressed = false;
+			evidence = null;
+			error = null;
+			var prefix = typeof(Patches)
+				.GetNestedType("SituationalThoughtHandler_AppendSocialThoughts_Patch", BindingFlags.NonPublic)
+				?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+			var situational = actor?.needs?.mood?.thoughts?.situational;
+			if (prefix == null || situational == null || humanOther == null || zombie == null)
+			{
+				error = "Could not reflect SituationalThoughtHandler_AppendSocialThoughts_Patch.Prefix or build a situational thought fixture.";
+				evidence = new
+				{
+					prefix = prefix != null,
+					situational = situational != null,
+					humanOther = humanOther != null,
+					zombie = zombie != null
+				};
+				return false;
+			}
+
+			var humanOtherResult = (bool)prefix.Invoke(null, new object[] { situational, humanOther });
+			var zombieOtherResult = (bool)prefix.Invoke(null, new object[] { situational, zombie });
+			suppressed = humanOtherResult && zombieOtherResult == false;
+			evidence = new
+			{
+				success = suppressed,
+				humanOtherResult,
+				zombieOtherResult,
+				humanOther = DescribePawn(humanOther),
+				zombie = DescribeZombie(zombie)
+			};
+			return true;
 		}
 
 		[Tool("zombieland/zombie_corpse_alert_forbid_contract", Description = "Verify normal and former-colonist zombie corpses stay out of vanilla colonist-corpse alerts and outside-home forbidding.")]
@@ -1075,6 +1226,7 @@ namespace ZombieLand
 		[Tool("zombieland/zombie_damage_memory_suppression", Description = "Verify normal pawn damage can create harm memories while zombie-instigated damage does not create social memories about zombies.")]
 		public static object ZombieDamageMemorySuppression()
 		{
+			var patchTargets = PatchedMethodsForPatchClass("Pawn_HealthTracker_PreApplyDamage_Patch");
 			var map = CurrentMap;
 			if (map == null)
 			{
@@ -1088,76 +1240,93 @@ namespace ZombieLand
 			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
 			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
 				corpse.Destroy();
+			var spawnedThings = new List<Thing>();
 
-			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
-			if (TryFindClearSpawnCell(map, root, 16f, out var humanAttackerCell, out var humanAttackerSpawnError) == false)
-				return humanAttackerSpawnError;
-			if (TryFindClearSpawnCell(map, humanAttackerCell + new IntVec3(3, 0, 0), 10f, out var humanVictimCell, out var humanVictimSpawnError) == false)
-				return humanVictimSpawnError;
-			if (TryFindClearSpawnCell(map, humanAttackerCell + new IntVec3(6, 0, 0), 12f, out var zombieAttackerCell, out var zombieAttackerSpawnError) == false)
-				return zombieAttackerSpawnError;
-			if (TryFindClearSpawnCell(map, humanAttackerCell + new IntVec3(9, 0, 0), 14f, out var zombieVictimCell, out var zombieVictimSpawnError) == false)
-				return zombieVictimSpawnError;
-
-			var humanAttacker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			var humanVictim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			var zombieVictim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			GenSpawn.Spawn(humanAttacker, humanAttackerCell, map, Rot4.South);
-			GenSpawn.Spawn(humanVictim, humanVictimCell, map, Rot4.South);
-			GenSpawn.Spawn(zombieVictim, zombieVictimCell, map, Rot4.South);
-			DisablePawnWork(humanAttacker);
-			DisablePawnWork(humanVictim);
-			DisablePawnWork(zombieVictim);
-			var zombieAttacker = ZombieRuntimeActions.SpawnZombie(zombieAttackerCell, map, ZombieType.Normal, true);
-			if (zombieAttacker == null)
+			try
 			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var humanAttackerCell, out var humanAttackerSpawnError) == false)
+					return humanAttackerSpawnError;
+				if (TryFindClearSpawnCell(map, humanAttackerCell + new IntVec3(3, 0, 0), 10f, out var humanVictimCell, out var humanVictimSpawnError) == false)
+					return humanVictimSpawnError;
+				if (TryFindClearSpawnCell(map, humanAttackerCell + new IntVec3(6, 0, 0), 12f, out var zombieAttackerCell, out var zombieAttackerSpawnError) == false)
+					return zombieAttackerSpawnError;
+				if (TryFindClearSpawnCell(map, humanAttackerCell + new IntVec3(9, 0, 0), 14f, out var zombieVictimCell, out var zombieVictimSpawnError) == false)
+					return zombieVictimSpawnError;
+
+				var humanAttacker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				var humanVictim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				var zombieVictim = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(humanAttacker, humanAttackerCell, map, Rot4.South);
+				GenSpawn.Spawn(humanVictim, humanVictimCell, map, Rot4.South);
+				GenSpawn.Spawn(zombieVictim, zombieVictimCell, map, Rot4.South);
+				spawnedThings.Add(humanAttacker);
+				spawnedThings.Add(humanVictim);
+				spawnedThings.Add(zombieVictim);
+				DisablePawnWork(humanAttacker);
+				DisablePawnWork(humanVictim);
+				DisablePawnWork(zombieVictim);
+				var zombieAttacker = ZombieRuntimeActions.SpawnZombie(zombieAttackerCell, map, ZombieType.Normal, true);
+				if (zombieAttacker != null)
+					spawnedThings.Add(zombieAttacker);
+				if (zombieAttacker == null)
+				{
+					return new
+					{
+						success = false,
+						destroyedZombies,
+						patchTargets,
+						humanAttacker = DescribePawn(humanAttacker),
+						humanVictim = DescribePawn(humanVictim),
+						zombieVictim = DescribePawn(zombieVictim),
+						error = "ZombieGenerator.SpawnZombie returned no damage-memory test zombie."
+					};
+				}
+
+				var humanVictimMemoriesBefore = TotalMemoryCount(humanVictim);
+				var humanVictimDefsBefore = MemoryDefCounts(humanVictim);
+				var humanDamage = humanVictim.TakeDamage(new DamageInfo(DamageDefOf.Blunt, 2f, 0f, -1f, humanAttacker, null, null, DamageInfo.SourceCategory.ThingOrUnknown, humanVictim, true, true));
+				var humanVictimMemoriesAfter = TotalMemoryCount(humanVictim);
+				var humanVictimDefsAfter = MemoryDefCounts(humanVictim);
+				var humanDamageMemoryDelta = humanVictimMemoriesAfter - humanVictimMemoriesBefore;
+
+				var zombieVictimMemoriesBefore = TotalMemoryCount(zombieVictim);
+				var zombieVictimDefsBefore = MemoryDefCounts(zombieVictim);
+				var zombieDamage = zombieVictim.TakeDamage(new DamageInfo(DamageDefOf.Blunt, 2f, 0f, -1f, zombieAttacker, null, null, DamageInfo.SourceCategory.ThingOrUnknown, zombieVictim, true, true));
+				var zombieVictimMemoriesAfter = TotalMemoryCount(zombieVictim);
+				var zombieVictimDefsAfter = MemoryDefCounts(zombieVictim);
+				var zombieDamageMemoryDelta = zombieVictimMemoriesAfter - zombieVictimMemoriesBefore;
+
 				return new
 				{
-					success = false,
+					success = patchTargets.Length > 0
+						&& humanDamageMemoryDelta > 0
+						&& zombieDamageMemoryDelta == 0,
 					destroyedZombies,
+					patchTargets,
 					humanAttacker = DescribePawn(humanAttacker),
 					humanVictim = DescribePawn(humanVictim),
+					zombieAttacker = DescribeZombie(zombieAttacker),
 					zombieVictim = DescribePawn(zombieVictim),
-					error = "ZombieGenerator.SpawnZombie returned no damage-memory test zombie."
+					humanDamageTotal = humanDamage.totalDamageDealt,
+					zombieDamageTotal = zombieDamage.totalDamageDealt,
+					humanVictimMemoriesBefore,
+					humanVictimMemoriesAfter,
+					humanDamageMemoryDelta,
+					zombieVictimMemoriesBefore,
+					zombieVictimMemoriesAfter,
+					zombieDamageMemoryDelta,
+					humanVictimDefsBefore,
+					humanVictimDefsAfter,
+					zombieVictimDefsBefore,
+					zombieVictimDefsAfter
 				};
 			}
-
-			var humanVictimMemoriesBefore = TotalMemoryCount(humanVictim);
-			var humanVictimDefsBefore = MemoryDefCounts(humanVictim);
-			var humanDamage = humanVictim.TakeDamage(new DamageInfo(DamageDefOf.Blunt, 2f, 0f, -1f, humanAttacker, null, null, DamageInfo.SourceCategory.ThingOrUnknown, humanVictim, true, true));
-			var humanVictimMemoriesAfter = TotalMemoryCount(humanVictim);
-			var humanVictimDefsAfter = MemoryDefCounts(humanVictim);
-			var humanDamageMemoryDelta = humanVictimMemoriesAfter - humanVictimMemoriesBefore;
-
-			var zombieVictimMemoriesBefore = TotalMemoryCount(zombieVictim);
-			var zombieVictimDefsBefore = MemoryDefCounts(zombieVictim);
-			var zombieDamage = zombieVictim.TakeDamage(new DamageInfo(DamageDefOf.Blunt, 2f, 0f, -1f, zombieAttacker, null, null, DamageInfo.SourceCategory.ThingOrUnknown, zombieVictim, true, true));
-			var zombieVictimMemoriesAfter = TotalMemoryCount(zombieVictim);
-			var zombieVictimDefsAfter = MemoryDefCounts(zombieVictim);
-			var zombieDamageMemoryDelta = zombieVictimMemoriesAfter - zombieVictimMemoriesBefore;
-
-			return new
+			finally
 			{
-				success = humanDamageMemoryDelta > 0
-					&& zombieDamageMemoryDelta == 0,
-				destroyedZombies,
-				humanAttacker = DescribePawn(humanAttacker),
-				humanVictim = DescribePawn(humanVictim),
-				zombieAttacker = DescribeZombie(zombieAttacker),
-				zombieVictim = DescribePawn(zombieVictim),
-				humanDamageTotal = humanDamage.totalDamageDealt,
-				zombieDamageTotal = zombieDamage.totalDamageDealt,
-				humanVictimMemoriesBefore,
-				humanVictimMemoriesAfter,
-				humanDamageMemoryDelta,
-				zombieVictimMemoriesBefore,
-				zombieVictimMemoriesAfter,
-				zombieDamageMemoryDelta,
-				humanVictimDefsBefore,
-				humanVictimDefsAfter,
-				zombieVictimDefsBefore,
-				zombieVictimDefsAfter
-			};
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
 		}
 
 		[Tool("zombieland/zombie_health_needs_upkeep_suppression", Description = "Verify zombie needs/upkeep suppression and alert-tracked infected-colonist health overrides while normal pawns keep vanilla behavior.")]

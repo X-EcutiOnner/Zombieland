@@ -81,11 +81,14 @@ namespace ZombieLand
 				var mainMenuInitTargets = PatchedMethodsForPatchClass("MainMenuDrawer_Init_Patch");
 				var timeControlTargets = PatchedMethodsForPatchClass(nameof(TimeControlService));
 				var clearMapsTargets = PatchedMethodsForPatchClass(nameof(ClearMapsService));
+				var rootUpdateTargets = PatchedMethodsForPatchClass("Root_Update_Patch");
+				var rootShutdownTargets = PatchedMethodsForPatchClass("Root_Shutdown_Patch");
 				var assetProbe = VerifyStartupAssets();
 				var legacyParseProbe = VerifyLegacyAreaRiskModeParsing();
 				var mainMenuProbe = VerifyMainMenuStartupErrors();
 				var timeControlProbe = VerifyTimeControlService();
 				var clearMapsProbe = VerifyClearMapsService();
+				var rootLifecycleProbe = VerifyRootLifecycleHooks();
 
 				return new
 				{
@@ -94,24 +97,30 @@ namespace ZombieLand
 						&& mainMenuInitTargets.Length > 0
 						&& timeControlTargets.Length > 0
 						&& clearMapsTargets.Length > 0
+						&& rootUpdateTargets.Length > 0
+						&& rootShutdownTargets.Length > 0
 						&& ObjectSuccess(assetProbe)
 						&& ObjectSuccess(legacyParseProbe)
 						&& ObjectSuccess(mainMenuProbe)
 						&& ObjectSuccess(timeControlProbe)
-						&& ObjectSuccess(clearMapsProbe),
+						&& ObjectSuccess(clearMapsProbe)
+						&& ObjectSuccess(rootLifecycleProbe),
 					patchTargets = new
 					{
 						assets = assetTargets,
 						legacyParse = legacyParseTargets,
 						mainMenuInit = mainMenuInitTargets,
 						timeControl = timeControlTargets,
-						clearMaps = clearMapsTargets
+						clearMaps = clearMapsTargets,
+						rootUpdate = rootUpdateTargets,
+						rootShutdown = rootShutdownTargets
 					},
 					assets = assetProbe,
 					legacyParse = legacyParseProbe,
 					mainMenuInit = mainMenuProbe,
 					timeControl = timeControlProbe,
-					clearMaps = clearMapsProbe
+					clearMaps = clearMapsProbe,
+					rootLifecycle = rootLifecycleProbe
 				};
 			}
 
@@ -298,6 +307,76 @@ namespace ZombieLand
 					callbackCount,
 					note = "Invoked the Zombieland prefix directly to avoid clearing the live game."
 				};
+			}
+
+			static object VerifyRootLifecycleHooks()
+			{
+				var rootUpdatePrefix = typeof(Patches)
+					.GetNestedType("Root_Update_Patch", BindingFlags.NonPublic)
+					?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+				var rootShutdownPrefix = typeof(Patches)
+					.GetNestedType("Root_Shutdown_Patch", BindingFlags.NonPublic)
+					?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+				if (rootUpdatePrefix == null || rootShutdownPrefix == null)
+				{
+					return new
+					{
+						success = false,
+						reflection = new
+						{
+							rootUpdatePrefix = rootUpdatePrefix != null,
+							rootShutdownPrefix = rootShutdownPrefix != null
+						}
+					};
+				}
+
+				var originalAvoiderRunning = Tools.avoider.running;
+				var frameWatch = ZombielandMod.frameWatch;
+				var wasRunningBeforeReset = frameWatch.IsRunning;
+				try
+				{
+					frameWatch.Reset();
+					var runningAfterReset = frameWatch.IsRunning;
+					var elapsedAfterReset = frameWatch.ElapsedTicks;
+					rootUpdatePrefix.Invoke(null, Array.Empty<object>());
+					var runningAfterUpdatePrefix = frameWatch.IsRunning;
+					var elapsedAfterUpdatePrefix = frameWatch.ElapsedTicks;
+
+					Tools.avoider.running = true;
+					rootShutdownPrefix.Invoke(null, Array.Empty<object>());
+					var avoiderRunningAfterShutdownPrefix = Tools.avoider.running;
+
+					return new
+					{
+						success = runningAfterReset == false
+							&& elapsedAfterReset == 0
+							&& runningAfterUpdatePrefix
+							&& avoiderRunningAfterShutdownPrefix == false,
+						frameWatch = new
+						{
+							wasRunningBeforeReset,
+							runningAfterReset,
+							elapsedAfterReset,
+							runningAfterUpdatePrefix,
+							elapsedAfterUpdatePrefix
+						},
+						avoider = new
+						{
+							originalRunning = originalAvoiderRunning,
+							runningBeforeShutdownPrefix = true,
+							runningAfterShutdownPrefix = avoiderRunningAfterShutdownPrefix
+						},
+						note = "Invoked only Zombieland root prefixes; vanilla Root.Shutdown was not called."
+					};
+				}
+				finally
+				{
+					Tools.avoider.running = originalAvoiderRunning;
+					if (wasRunningBeforeReset)
+						frameWatch.Restart();
+					else
+						frameWatch.Stop();
+				}
 			}
 
 			static object DescribeZombieGrid(Map map, Pawn[] zombies)
