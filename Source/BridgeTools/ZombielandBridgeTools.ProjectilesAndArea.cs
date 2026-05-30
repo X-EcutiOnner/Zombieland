@@ -8,6 +8,7 @@ using System.Reflection;
 using UnityEngine;
 using Verse;
 using Verse.AI;
+using Verse.Sound;
 
 namespace ZombieLand
 {
@@ -69,13 +70,21 @@ namespace ZombieLand
 				action = RunAreaWorkflowElectrifierMeleeDamage(map);
 			else if (normalizedActionMode == "animal-response")
 				action = RunAreaWorkflowAnimalResponse(map);
+			else if (normalizedActionMode == "ui-state")
+				action = RunAreaWorkflowUiState(map);
+			else if (normalizedActionMode == "downed-crawler-visuals")
+				action = RunAreaWorkflowDownedCrawlerVisuals(map);
+			else if (normalizedActionMode == "root-play-hooks")
+				action = RunAreaWorkflowRootPlayHooks(map);
+			else if (normalizedActionMode == "render-node-graphics")
+				action = RunAreaWorkflowRenderNodeGraphics(map);
 			else if (normalizedActionMode != "read")
 			{
 				return new
 				{
 					success = false,
 					actionMode,
-					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, electrifier-melee-damage, or animal-response."
+					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, or render-node-graphics."
 				};
 			}
 			var actionSucceeded = normalizedActionMode == "read"
@@ -1393,6 +1402,63 @@ namespace ZombieLand
 			try
 			{
 				return VerifyAreaWorkflowAnimalResponse(map, new IntVec3(80, 0, 142), spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowUiState(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowUiState(map, new IntVec3(104, 0, 156), spawnedThings);
+			}
+			finally
+			{
+				Find.Selector?.ClearSelection();
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowDownedCrawlerVisuals(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowDownedCrawlerVisuals(map, new IntVec3(124, 0, 156), spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowRootPlayHooks(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowRootPlayHooks(map, new IntVec3(144, 0, 156), spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowRenderNodeGraphics(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowRenderNodeGraphics(map, new IntVec3(164, 0, 156), spawnedThings);
 			}
 			finally
 			{
@@ -3320,6 +3386,845 @@ namespace ZombieLand
 		static bool SpecialVerbCaseHidesBite(object value)
 		{
 			return value is SpecialMeleeVerbCase meleeCase && meleeCase.success && meleeCase.hasZombieBite == false;
+		}
+
+		static object VerifyAreaWorkflowUiState(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var settingsSnapshot = SnapshotZombieSettings();
+			var labelPatchTargets = PatchedMethodsForPatchClass("GenMapUI_DrawPawnLabel_Patch");
+			var inspectPatchTargets = PatchedMethodsForPatchClass("MainTabWindow_Inspect_CurTabs_Patch");
+			var downedPatchTargets = PatchedMethodsForPatchClass("Pawn_Downed_Patch");
+			try
+			{
+				if (FindUiStateCells(map, root, out var cells, out var cellError) == false)
+					return cellError;
+
+				var ordinaryZombie = SpawnTargetZombie(map, cells[0], ZombieType.Normal, "ZL_Area_UiStateOrdinaryZombie", spawnedThings);
+				var formerZombie = SpawnTargetZombie(map, cells[1], ZombieType.Normal, "ZL_Area_UiStateFormerZombie", spawnedThings);
+				var inspectHuman = SpawnAreaWorkflowPawn(map, "ZL_Area_UiStateInspectHuman", cells[2], Faction.OfPlayer, spawnedThings);
+				var downedZombie = SpawnTargetZombie(map, cells[3], ZombieType.Normal, "ZL_Area_UiStateDownedZombie", spawnedThings);
+				var downedHuman = SpawnAreaWorkflowPawn(map, "ZL_Area_UiStateDownedHuman", cells[4], Faction.OfPlayer, spawnedThings);
+				if (ordinaryZombie == null || formerZombie == null || inspectHuman == null || downedZombie == null || downedHuman == null)
+				{
+					return new
+					{
+						success = false,
+						ordinaryZombie = DescribeZombie(ordinaryZombie),
+						formerZombie = DescribeZombie(formerZombie),
+						inspectHuman = DescribePawn(inspectHuman),
+						downedZombie = DescribeZombie(downedZombie),
+						downedHuman = DescribePawn(downedHuman),
+						error = "Could not create all UI-state fixtures."
+					};
+				}
+
+				formerZombie.wasMapPawnBefore = true;
+				var labels = VerifyUiStateLabels(ordinaryZombie, formerZombie, inspectHuman);
+				var inspectTabs = VerifyUiStateInspectTabs(ordinaryZombie, inspectHuman);
+				var downedState = VerifyUiStateDownedFacade(downedZombie, downedHuman);
+
+				return new
+				{
+					success = labelPatchTargets.Length > 0
+						&& inspectPatchTargets.Length > 0
+						&& downedPatchTargets.Length > 0
+						&& ObjectSuccess(labels)
+						&& ObjectSuccess(inspectTabs)
+						&& ObjectSuccess(downedState),
+					patchTargets = new
+					{
+						labels = labelPatchTargets,
+						inspectTabs = inspectPatchTargets,
+						downed = downedPatchTargets
+					},
+					fixtures = new
+					{
+						ordinaryZombie = DescribeZombie(ordinaryZombie),
+						formerZombie = DescribeZombie(formerZombie),
+						inspectHuman = DescribePawn(inspectHuman),
+						downedZombie = DescribeZombie(downedZombie),
+						downedHuman = DescribePawn(downedHuman)
+					},
+					labels,
+					inspectTabs,
+					downedState
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+			}
+		}
+
+		static bool FindUiStateCells(Map map, IntVec3 root, out IntVec3[] cells, out object error)
+		{
+			cells = GenRadial.RadialCellsAround(root, 18f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.OrderBy(cell => cell.DistanceToSquared(root))
+				.Take(5)
+				.ToArray();
+			if (cells.Length >= 5)
+			{
+				error = null;
+				return true;
+			}
+
+			error = new
+			{
+				success = false,
+				root = ZombieRuntimeActions.DescribeCell(root),
+				foundCells = cells.Length,
+				error = "Could not find enough cells for the UI-state fixture."
+			};
+			return false;
+		}
+
+		static object VerifyUiStateLabels(Zombie ordinaryZombie, Zombie formerZombie, Pawn ordinaryPawn)
+		{
+			var prefix = FindNestedPatchMethod("GenMapUI_DrawPawnLabel_Patch", "Prefix");
+			if (prefix == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find GenMapUI_DrawPawnLabel_Patch.Prefix."
+				};
+			}
+
+			var ordinaryZombieContinues = (bool)prefix.Invoke(null, new object[] { ordinaryZombie });
+			var formerZombieContinues = (bool)prefix.Invoke(null, new object[] { formerZombie });
+			var ordinaryPawnContinues = (bool)prefix.Invoke(null, new object[] { ordinaryPawn });
+			return new
+			{
+				success = ordinaryZombie.wasMapPawnBefore == false
+					&& ordinaryZombieContinues == false
+					&& formerZombie.wasMapPawnBefore
+					&& formerZombieContinues
+					&& ordinaryPawnContinues,
+				ordinaryZombie = new
+				{
+					wasMapPawnBefore = ordinaryZombie.wasMapPawnBefore,
+					continueDraw = ordinaryZombieContinues
+				},
+				formerZombie = new
+				{
+					wasMapPawnBefore = formerZombie.wasMapPawnBefore,
+					continueDraw = formerZombieContinues
+				},
+				ordinaryPawn = new
+				{
+					def = ordinaryPawn?.def?.defName,
+					continueDraw = ordinaryPawnContinues
+				}
+			};
+		}
+
+		static object VerifyUiStateInspectTabs(Zombie zombie, Pawn ordinaryPawn)
+		{
+			IEnumerable<InspectTabBase> SelectAndReadTabs(object selected)
+			{
+				Find.Selector.ClearSelection();
+				Find.Selector.Select(selected);
+				return new MainTabWindow_Inspect().CurTabs;
+			}
+
+			var postfix = FindNestedPatchMethod("MainTabWindow_Inspect_CurTabs_Patch", "Postfix");
+			var nullArgs = new object[] { null };
+			postfix?.Invoke(null, nullArgs);
+			var nullAfterPostfix = nullArgs[0] as IEnumerable<InspectTabBase>;
+			var sentinel = new List<InspectTabBase>();
+			var sentinelArgs = new object[] { sentinel };
+			postfix?.Invoke(null, sentinelArgs);
+			var sentinelAfterPostfix = sentinelArgs[0] as IEnumerable<InspectTabBase>;
+
+			var zombieTabs = SelectAndReadTabs(zombie);
+			var ordinaryTabs = SelectAndReadTabs(ordinaryPawn);
+			var zombieTabsArray = zombieTabs?.ToArray();
+			var ordinaryTabsArray = ordinaryTabs?.ToArray();
+
+			return new
+			{
+				success = postfix != null
+					&& nullAfterPostfix != null
+					&& ReferenceEquals(sentinel, sentinelAfterPostfix)
+					&& zombieTabsArray != null
+					&& ordinaryTabsArray != null,
+				postfixFound = postfix != null,
+				nullPostfix = new
+				{
+					returnedNull = nullAfterPostfix == null,
+					count = nullAfterPostfix?.Count() ?? -1
+				},
+				nonNullPostfixPreservesReference = ReferenceEquals(sentinel, sentinelAfterPostfix),
+				zombieSelection = new
+				{
+					selected = StableId(zombie),
+					tabsNull = zombieTabsArray == null,
+					tabCount = zombieTabsArray?.Length ?? -1,
+					tabTypes = zombieTabsArray?.Select(tab => tab?.GetType().Name ?? "<null>").ToArray() ?? Array.Empty<string>()
+				},
+				ordinarySelection = new
+				{
+					selected = StableId(ordinaryPawn),
+					tabsNull = ordinaryTabsArray == null,
+					tabCount = ordinaryTabsArray?.Length ?? -1,
+					tabTypes = ordinaryTabsArray?.Select(tab => tab?.GetType().Name ?? "<null>").ToArray() ?? Array.Empty<string>()
+				}
+			};
+		}
+
+		static object VerifyUiStateDownedFacade(Zombie zombie, Pawn ordinaryPawn)
+		{
+			if (TryMakeDownedForCombat(zombie, out var zombieDownedError) == false)
+			{
+				return new
+				{
+					success = false,
+					zombie = DescribeZombie(zombie),
+					error = zombieDownedError
+				};
+			}
+			if (TryMakeDownedForCombat(ordinaryPawn, out var ordinaryDownedError) == false)
+			{
+				return new
+				{
+					success = false,
+					ordinaryPawn = DescribePawn(ordinaryPawn),
+					error = ordinaryDownedError
+				};
+			}
+
+			ApplyZombieSettingsOverride(settings => settings.doubleTapRequired = true);
+			var zombieHealthDownedWithDoubleTap = zombie.health.Downed;
+			var zombiePublicDownedWithDoubleTap = zombie.Downed;
+			var ordinaryPublicDownedWithDoubleTap = ordinaryPawn.Downed;
+
+			ApplyZombieSettingsOverride(settings => settings.doubleTapRequired = false);
+			var zombiePublicDownedWithoutDoubleTap = zombie.Downed;
+			var ordinaryPublicDownedWithoutDoubleTap = ordinaryPawn.Downed;
+
+			return new
+			{
+				success = zombieHealthDownedWithDoubleTap
+					&& zombiePublicDownedWithDoubleTap == false
+					&& zombiePublicDownedWithoutDoubleTap
+					&& ordinaryPublicDownedWithDoubleTap
+					&& ordinaryPublicDownedWithoutDoubleTap,
+				zombie = new
+				{
+					healthDowned = zombieHealthDownedWithDoubleTap,
+					publicDownedWithDoubleTap = zombiePublicDownedWithDoubleTap,
+					publicDownedWithoutDoubleTap = zombiePublicDownedWithoutDoubleTap
+				},
+				ordinaryPawn = new
+				{
+					publicDownedWithDoubleTap = ordinaryPublicDownedWithDoubleTap,
+					publicDownedWithoutDoubleTap = ordinaryPublicDownedWithoutDoubleTap
+				}
+			};
+		}
+
+		static object VerifyAreaWorkflowDownedCrawlerVisuals(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var wigglerPatchTargets = PatchedMethodsForPatchClass("PawnDownedWiggler_WigglerTick_Patch");
+			var bodyAnglePatchTargets = PatchedMethodsForPatchClass("PawnRenderer_BodyAngle_Patch");
+			var processPostTickVisuals = AccessTools.Method(typeof(PawnDownedWiggler), nameof(PawnDownedWiggler.ProcessPostTickVisuals), new[] { typeof(int) });
+			var wigglerField = AccessTools.Field(typeof(PawnRenderer), "wiggler");
+			var destinationField = AccessTools.Field(typeof(Pawn_PathFollower), "destination");
+			var bodyAnglePrefix = FindNestedPatchMethod("PawnRenderer_BodyAngle_Patch", "Prefix");
+			if (processPostTickVisuals == null || wigglerField == null || destinationField == null || bodyAnglePrefix == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect all downed-crawler visual patch probe members.",
+					reflection = new
+					{
+						processPostTickVisuals = processPostTickVisuals != null,
+						wigglerField = wigglerField != null,
+						destinationField = destinationField != null,
+						bodyAnglePrefix = bodyAnglePrefix != null
+					},
+					patchTargets = new
+					{
+						wiggler = wigglerPatchTargets,
+						bodyAngle = bodyAnglePatchTargets
+					}
+				};
+			}
+
+			if (FindDownedCrawlerVisualCells(map, root, out var cells, out var cellError) == false)
+				return cellError;
+
+			var downedZombie = SpawnTargetZombie(map, cells[0], ZombieType.Normal, "ZL_Area_DownedVisualZombie", spawnedThings);
+			var standingZombie = SpawnTargetZombie(map, cells[1], ZombieType.Normal, "ZL_Area_DownedVisualStandingZombie", spawnedThings);
+			var downedHuman = SpawnAreaWorkflowPawn(map, "ZL_Area_DownedVisualHuman", cells[2], Faction.OfPlayer, spawnedThings);
+			if (downedZombie == null || standingZombie == null || downedHuman == null)
+			{
+				return new
+				{
+					success = false,
+					downedZombie = DescribeZombie(downedZombie),
+					standingZombie = DescribeZombie(standingZombie),
+					downedHuman = DescribePawn(downedHuman),
+					error = "Could not create all downed-crawler visual fixtures."
+				};
+			}
+
+			if (TryMakeDownedForCombat(downedZombie, out var downedZombieError) == false)
+				return new { success = false, downedZombie = DescribeZombie(downedZombie), error = downedZombieError };
+			if (TryMakeDownedForCombat(downedHuman, out var downedHumanError) == false)
+				return new { success = false, downedHuman = DescribePawn(downedHuman), error = downedHumanError };
+
+			var renderer = downedZombie.Drawer?.renderer;
+			var standingRenderer = standingZombie.Drawer?.renderer;
+			var humanRenderer = downedHuman.Drawer?.renderer;
+			var zombieWiggler = wigglerField.GetValue(renderer) as PawnDownedWiggler;
+			var standingWiggler = wigglerField.GetValue(standingRenderer) as PawnDownedWiggler;
+			var humanWiggler = wigglerField.GetValue(humanRenderer) as PawnDownedWiggler;
+			if (renderer == null || standingRenderer == null || humanRenderer == null || zombieWiggler == null || standingWiggler == null || humanWiggler == null)
+			{
+				return new
+				{
+					success = false,
+					downedZombie = DescribeZombie(downedZombie),
+					standingZombie = DescribeZombie(standingZombie),
+					downedHuman = DescribePawn(downedHuman),
+					error = "Could not access all pawn renderers and downed wigglers."
+				};
+			}
+
+			var destinationCell = cells[3];
+			destinationField.SetValue(downedZombie.pather, new LocalTargetInfo(destinationCell));
+			zombieWiggler.downedAngle = 12.5f;
+			processPostTickVisuals.Invoke(zombieWiggler, new object[] { 1 });
+			var expectedWiggleAngle = ExpectedDownedCrawlerWiggleAngle(downedZombie, destinationCell);
+			var wiggleAngleAfterPostTick = zombieWiggler.downedAngle;
+			var wigglerUpdated = AnglesApproximatelyEqual(wiggleAngleAfterPostTick, expectedWiggleAngle, 0.05f);
+
+			downedZombie.currentDownedAngle = -1f;
+			var firstAngle = renderer.BodyAngle(PawnRenderFlags.None);
+			var expectedFirstAngle = zombieWiggler.downedAngle + 360f;
+			var firstAngleMatches = AnglesApproximatelyEqual(firstAngle, expectedFirstAngle, 0.05f)
+				&& AnglesApproximatelyEqual(downedZombie.currentDownedAngle, expectedFirstAngle, 0.05f);
+
+			zombieWiggler.downedAngle += 48f;
+			var wiggleAngleAfterShift = zombieWiggler.downedAngle;
+			var expectedSecondAngle = (expectedFirstAngle * 15f + wiggleAngleAfterShift + 360f) / 16f;
+			var secondAngle = renderer.BodyAngle(PawnRenderFlags.None);
+			var secondAngleMatches = AnglesApproximatelyEqual(secondAngle, expectedSecondAngle, 0.05f)
+				&& AnglesApproximatelyEqual(downedZombie.currentDownedAngle, expectedSecondAngle, 0.05f);
+
+			var downedZombiePrefixArgs = new object[] { downedZombie, zombieWiggler, 0f };
+			var downedZombiePrefixContinues = (bool)bodyAnglePrefix.Invoke(null, downedZombiePrefixArgs);
+			var downedZombiePrefixAngle = (float)downedZombiePrefixArgs[2];
+			var standingZombiePrefixArgs = new object[] { standingZombie, standingWiggler, 0f };
+			var standingZombiePrefixContinues = (bool)bodyAnglePrefix.Invoke(null, standingZombiePrefixArgs);
+			var downedHumanPrefixArgs = new object[] { downedHuman, humanWiggler, 0f };
+			var downedHumanPrefixContinues = (bool)bodyAnglePrefix.Invoke(null, downedHumanPrefixArgs);
+
+			return new
+			{
+				success = wigglerPatchTargets.Length > 0
+					&& bodyAnglePatchTargets.Length > 0
+					&& wigglerUpdated
+					&& firstAngleMatches
+					&& secondAngleMatches
+					&& downedZombiePrefixContinues == false
+					&& downedZombiePrefixAngle > 0f
+					&& standingZombiePrefixContinues
+					&& downedHumanPrefixContinues,
+				patchTargets = new
+				{
+					wiggler = wigglerPatchTargets,
+					bodyAngle = bodyAnglePatchTargets
+				},
+				fixtures = new
+				{
+					downedZombie = DescribeZombie(downedZombie),
+					standingZombie = DescribeZombie(standingZombie),
+					downedHuman = DescribePawn(downedHuman),
+					destination = ZombieRuntimeActions.DescribeCell(destinationCell)
+				},
+				wiggler = new
+				{
+					destination = ZombieRuntimeActions.DescribeCell(((LocalTargetInfo)destinationField.GetValue(downedZombie.pather)).Cell),
+					angleAfterPostTick = wiggleAngleAfterPostTick,
+					expectedAngle = expectedWiggleAngle,
+					angleAfterSmoothingProbeShift = wiggleAngleAfterShift,
+					updated = wigglerUpdated
+				},
+				bodyAngle = new
+				{
+					firstAngle,
+					expectedFirstAngle,
+					firstAngleMatches,
+					secondAngle,
+					expectedSecondAngle,
+					secondAngleMatches,
+					currentDownedAngle = downedZombie.currentDownedAngle
+				},
+				prefixBranches = new
+				{
+					downedZombie = new { continues = downedZombiePrefixContinues, result = downedZombiePrefixAngle },
+					standingZombie = new { continues = standingZombiePrefixContinues },
+					downedHuman = new { continues = downedHumanPrefixContinues }
+				}
+			};
+		}
+
+		static bool FindDownedCrawlerVisualCells(Map map, IntVec3 root, out IntVec3[] cells, out object error)
+		{
+			cells = GenRadial.RadialCellsAround(root, 22f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.OrderBy(cell => cell.DistanceToSquared(root))
+				.Take(4)
+				.ToArray();
+			if (cells.Length >= 4)
+			{
+				error = null;
+				return true;
+			}
+
+			error = new
+			{
+				success = false,
+				root = ZombieRuntimeActions.DescribeCell(root),
+				foundCells = cells.Length,
+				error = "Could not find enough cells for the downed-crawler visual fixture."
+			};
+			return false;
+		}
+
+		static float ExpectedDownedCrawlerWiggleAngle(Pawn pawn, IntVec3 destinationCell)
+		{
+			var vec = destinationCell - pawn.Position;
+			var pos = pawn.DrawPos;
+			return vec.AngleFlat + 15f * Mathf.Sin(6f * pos.x) * Mathf.Cos(6f * pos.z);
+		}
+
+		static bool AnglesApproximatelyEqual(float actual, float expected, float tolerance)
+		{
+			return Mathf.Abs(actual - expected) <= tolerance;
+		}
+
+		static object VerifyAreaWorkflowRootPlayHooks(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var rootUpdateTargets = PatchedMethodsForPatchClass("Root_Play_Update_Patch");
+			var quickTestTargets = PatchedMethodsForPatchClass("Root_Play_SetupForQuickTestPlay_Patch");
+			var rootUpdatePostfix = FindNestedPatchMethod("Root_Play_Update_Patch", "Postfix");
+			var quickTestPostfix = FindNestedPatchMethod("Root_Play_SetupForQuickTestPlay_Patch", "Postfix");
+			var rootUpdateMethod = AccessTools.Method(typeof(Root_Play), nameof(Root_Play.Update));
+			var quickTestMethod = AccessTools.Method(typeof(Root_Play), nameof(Root_Play.SetupForQuickTestPlay));
+			var electricSustainerField = AccessTools.Field(typeof(TickManager), "electricSustainer");
+			var tankSustainerField = AccessTools.Field(typeof(TickManager), "tankSustainer");
+			var tickManager = map.GetComponent<TickManager>();
+
+			if (rootUpdatePostfix == null || quickTestPostfix == null || rootUpdateMethod == null || quickTestMethod == null || electricSustainerField == null || tankSustainerField == null || tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect all Root_Play hook probe members.",
+					reflection = new
+					{
+						rootUpdatePostfix = rootUpdatePostfix != null,
+						quickTestPostfix = quickTestPostfix != null,
+						rootUpdateMethod = rootUpdateMethod != null,
+						quickTestMethod = quickTestMethod != null,
+						electricSustainerField = electricSustainerField != null,
+						tankSustainerField = tankSustainerField != null,
+						tickManager = tickManager != null
+					},
+					patchTargets = new
+					{
+						rootUpdate = rootUpdateTargets,
+						quickTest = quickTestTargets
+					}
+				};
+			}
+
+			var settingsProbe = VerifyRootPlayQuickTestDefaults(quickTestPostfix);
+			var soundProbe = VerifyRootPlayUpdateSoundHooks(map, tickManager, root, spawnedThings, rootUpdatePostfix, electricSustainerField, tankSustainerField);
+
+			return new
+			{
+				success = rootUpdateTargets.Length > 0
+					&& quickTestTargets.Length > 0
+					&& ObjectSuccess(settingsProbe)
+					&& ObjectSuccess(soundProbe),
+				patchTargets = new
+				{
+					rootUpdate = rootUpdateTargets,
+					quickTest = quickTestTargets
+				},
+				settingsProbe,
+				soundProbe
+			};
+		}
+
+		static object VerifyRootPlayQuickTestDefaults(MethodInfo quickTestPostfix)
+		{
+			var settingsSnapshot = SnapshotZombieSettings();
+			var oldScrollPosition = SettingsDialog.scrollPosition;
+			try
+			{
+				ZombieSettings.Values = new SettingsGroup
+				{
+					threatScale = 0.123f,
+					doubleTapRequired = false,
+					moveSpeedIdle = 0.987f,
+					playCreepyAmbientSound = false
+				};
+				ZombieSettings.ValuesOverTime = new()
+				{
+					new SettingsKeyFrame
+					{
+						amount = 7,
+						unit = SettingsKeyFrame.Unit.Days,
+						values = ZombieSettings.Values.MakeCopy()
+					}
+				};
+				SettingsDialog.scrollPosition = new Vector2(31f, 47f);
+
+				quickTestPostfix.Invoke(null, Array.Empty<object>());
+
+				var defaults = ZombieSettingsDefaults.group;
+				var defaultFrames = ZombieSettingsDefaults.groupOverTime;
+				var values = ZombieSettings.Values;
+				var frames = ZombieSettings.ValuesOverTime;
+				var valuesMatchDefaults = values != null
+					&& defaults != null
+					&& Mathf.Approximately(values.threatScale, defaults.threatScale)
+					&& values.doubleTapRequired == defaults.doubleTapRequired
+					&& Mathf.Approximately(values.moveSpeedIdle, defaults.moveSpeedIdle)
+					&& values.playCreepyAmbientSound == defaults.playCreepyAmbientSound;
+				var framesMatchDefaults = frames != null
+					&& defaultFrames != null
+					&& frames.Count == defaultFrames.Count
+					&& frames.Count > 0
+					&& frames[0] != null
+					&& defaultFrames[0] != null
+					&& frames[0].Ticks == defaultFrames[0].Ticks
+					&& Mathf.Approximately(frames[0].values.threatScale, defaultFrames[0].values.threatScale);
+				var scrollReset = SettingsDialog.scrollPosition == Vector2.zero;
+
+				return new
+				{
+					success = valuesMatchDefaults && framesMatchDefaults && scrollReset,
+					values = new
+					{
+						valuesMatchDefaults,
+						threatScale = values?.threatScale,
+						defaultThreatScale = defaults?.threatScale,
+						doubleTapRequired = values?.doubleTapRequired,
+						defaultDoubleTapRequired = defaults?.doubleTapRequired,
+						moveSpeedIdle = values?.moveSpeedIdle,
+						defaultMoveSpeedIdle = defaults?.moveSpeedIdle,
+						playCreepyAmbientSound = values?.playCreepyAmbientSound,
+						defaultPlayCreepyAmbientSound = defaults?.playCreepyAmbientSound
+					},
+					frames = new
+					{
+						framesMatchDefaults,
+						count = frames?.Count ?? -1,
+						defaultCount = defaultFrames?.Count ?? -1,
+						firstTicks = frames?.FirstOrDefault()?.Ticks ?? -1,
+						defaultFirstTicks = defaultFrames?.FirstOrDefault()?.Ticks ?? -1
+					},
+					scroll = new
+					{
+						scrollReset,
+						position = DescribeVector(SettingsDialog.scrollPosition)
+					}
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+				SettingsDialog.scrollPosition = oldScrollPosition;
+			}
+		}
+
+		static object VerifyRootPlayUpdateSoundHooks(
+			Map map,
+			TickManager tickManager,
+			IntVec3 root,
+			List<Thing> spawnedThings,
+			MethodInfo rootUpdatePostfix,
+			FieldInfo electricSustainerField,
+			FieldInfo tankSustainerField)
+		{
+			var oldUseSound = Constants.USE_SOUND;
+			var oldVolumeAmbient = Prefs.VolumeAmbient;
+			var oldElectricSustainer = electricSustainerField.GetValue(tickManager) as Sustainer;
+			var oldTankSustainer = tankSustainerField.GetValue(tickManager) as Sustainer;
+			Sustainer spawnedElectricSustainer = null;
+			Sustainer spawnedTankSustainer = null;
+
+			try
+			{
+				if (FindDownedCrawlerVisualCells(map, root, out var cells, out var cellError) == false)
+					return cellError;
+
+				var electrifier = SpawnTargetZombie(map, cells[0], ZombieType.Electrifier, "ZL_Area_RootPlayElectrifier", spawnedThings);
+				var tanky = SpawnTargetZombie(map, cells[1], ZombieType.TankyOperator, "ZL_Area_RootPlayTanky", spawnedThings);
+				if (electrifier == null || tanky == null)
+				{
+					return new
+					{
+						success = false,
+						electrifier = DescribeZombie(electrifier),
+						tanky = DescribeZombie(tanky),
+						error = "Could not create root-play sound hook fixtures."
+					};
+				}
+
+				_ = tickManager.hummingZombies.Add(electrifier);
+				_ = tickManager.tankZombies.Add(tanky);
+				Constants.USE_SOUND = true;
+				Prefs.VolumeAmbient = Mathf.Max(Prefs.VolumeAmbient, 0.5f);
+
+				var attempts = 0;
+				Sustainer electricSustainer = null;
+				Sustainer tankSustainer = null;
+				for (; attempts < 5000; attempts++)
+				{
+					rootUpdatePostfix.Invoke(null, Array.Empty<object>());
+					electricSustainer = electricSustainerField.GetValue(tickManager) as Sustainer;
+					tankSustainer = tankSustainerField.GetValue(tickManager) as Sustainer;
+					if (electricSustainer != null && tankSustainer != null)
+						break;
+				}
+
+				if (electricSustainer != null && ReferenceEquals(electricSustainer, oldElectricSustainer) == false)
+					spawnedElectricSustainer = electricSustainer;
+				if (tankSustainer != null && ReferenceEquals(tankSustainer, oldTankSustainer) == false)
+					spawnedTankSustainer = tankSustainer;
+
+				return new
+				{
+					success = attempts < 5000
+						&& electricSustainer != null
+						&& tankSustainer != null
+						&& tickManager.hummingZombies.Contains(electrifier)
+						&& tickManager.tankZombies.Contains(tanky),
+					attempts = attempts + 1,
+					fixtures = new
+					{
+						electrifier = DescribeZombie(electrifier),
+						tanky = DescribeZombie(tanky)
+					},
+					sound = new
+					{
+						useSound = Constants.USE_SOUND,
+						volumeAmbient = Prefs.VolumeAmbient,
+						electricSustainerCreated = electricSustainer != null,
+						tankSustainerCreated = tankSustainer != null,
+						electricVolumeFactor = electricSustainer?.info.volumeFactor,
+						tankVolumeFactor = tankSustainer?.info.volumeFactor
+					},
+					trackingSets = new
+					{
+						hummingContainsElectrifier = tickManager.hummingZombies.Contains(electrifier),
+						tankContainsTanky = tickManager.tankZombies.Contains(tanky),
+						hummingCount = tickManager.hummingZombies.Count,
+						tankCount = tickManager.tankZombies.Count
+					}
+				};
+			}
+			finally
+			{
+				if (spawnedElectricSustainer != null)
+					spawnedElectricSustainer.End();
+				if (spawnedTankSustainer != null)
+					spawnedTankSustainer.End();
+				electricSustainerField.SetValue(tickManager, oldElectricSustainer);
+				tankSustainerField.SetValue(tickManager, oldTankSustainer);
+				Constants.USE_SOUND = oldUseSound;
+				Prefs.VolumeAmbient = oldVolumeAmbient;
+			}
+		}
+
+		static object VerifyAreaWorkflowRenderNodeGraphics(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var bodyPatchTargets = PatchedMethodsForPatchClass("PawnRenderNode_Body_GraphicFor_Patch");
+			var headPatchTargets = PatchedMethodsForPatchClass("PawnRenderNode_Head_GraphicFor_Patch");
+			var bodyPrefix = FindNestedPatchMethod("PawnRenderNode_Body_GraphicFor_Patch", "Prefix");
+			var headPrefix = FindNestedPatchMethod("PawnRenderNode_Head_GraphicFor_Patch", "Prefix");
+			var bodyMethod = AccessTools.Method(typeof(PawnRenderNode_Body), nameof(PawnRenderNode_Body.GraphicFor), new[] { typeof(Pawn) });
+			var headMethod = AccessTools.Method(typeof(PawnRenderNode_Head), nameof(PawnRenderNode_Head.GraphicFor), new[] { typeof(Pawn) });
+			if (bodyPrefix == null || headPrefix == null || bodyMethod == null || headMethod == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect all render-node graphic probe members.",
+					reflection = new
+					{
+						bodyPrefix = bodyPrefix != null,
+						headPrefix = headPrefix != null,
+						bodyMethod = bodyMethod != null,
+						headMethod = headMethod != null
+					},
+					patchTargets = new
+					{
+						body = bodyPatchTargets,
+						head = headPatchTargets
+					}
+				};
+			}
+
+			if (FindDownedCrawlerVisualCells(map, root, out var cells, out var cellError) == false)
+				return cellError;
+
+			var zombie = SpawnTargetZombie(map, cells[0], ZombieType.Normal, "ZL_Area_RenderNodeZombie", spawnedThings);
+			var headlessZombie = SpawnTargetZombie(map, cells[1], ZombieType.Normal, "ZL_Area_RenderNodeHeadlessZombie", spawnedThings);
+			var ordinaryHuman = SpawnAreaWorkflowPawn(map, "ZL_Area_RenderNodeHuman", cells[2], Faction.OfPlayer, spawnedThings);
+			if (zombie == null || headlessZombie == null || ordinaryHuman == null)
+			{
+				return new
+				{
+					success = false,
+					zombie = DescribeZombie(zombie),
+					headlessZombie = DescribeZombie(headlessZombie),
+					ordinaryHuman = DescribePawn(ordinaryHuman),
+					error = "Could not create render-node graphic fixtures."
+				};
+			}
+
+			ZombieRenderCompat.ResolveAllGraphics(zombie);
+			ZombieRenderCompat.ResolveAllGraphics(headlessZombie);
+			ZombieRenderCompat.ResolveAllGraphics(ordinaryHuman);
+
+			var customBody = MakeRenderNodeProbeBodyGraphic(zombie);
+			var customHead = MakeRenderNodeProbeHeadGraphic(zombie);
+			var customHeadForHeadless = MakeRenderNodeProbeHeadGraphic(headlessZombie);
+			if (customBody == null || customHead == null || customHeadForHeadless == null)
+			{
+				return new
+				{
+					success = false,
+					zombie = DescribeZombie(zombie),
+					headlessZombie = DescribeZombie(headlessZombie),
+					error = "Could not create render-node probe graphics."
+				};
+			}
+
+			ZombieRenderCompat.SetBodyGraphic(zombie, customBody);
+			ZombieRenderCompat.SetHeadGraphic(zombie, customHead);
+			ZombieRenderCompat.SetHeadGraphic(headlessZombie, customHeadForHeadless);
+
+			var bodyNode = new PawnRenderNode_Body(zombie, new PawnRenderNodeProperties(), zombie.Drawer.renderer.renderTree);
+			var headNode = new PawnRenderNode_Head(zombie, new PawnRenderNodeProperties(), zombie.Drawer.renderer.renderTree);
+			var headlessHeadNode = new PawnRenderNode_Head(headlessZombie, new PawnRenderNodeProperties(), headlessZombie.Drawer.renderer.renderTree);
+			var actualBodyGraphic = bodyNode.GraphicFor(zombie);
+			var actualHeadGraphic = headNode.GraphicFor(zombie);
+
+			var headRemoval = TryRemoveHeadForRenderNodeProbe(headlessZombie, out var headRemovalError);
+			var headlessHeadGraphic = headlessHeadNode.GraphicFor(headlessZombie);
+
+			var humanBodyArgs = new object[] { ordinaryHuman, null };
+			var humanBodyContinues = (bool)bodyPrefix.Invoke(null, humanBodyArgs);
+			var humanHeadArgs = new object[] { ordinaryHuman, null };
+			var humanHeadContinues = (bool)headPrefix.Invoke(null, humanHeadArgs);
+			var headlessHeadArgs = new object[] { headlessZombie, customHeadForHeadless };
+			var headlessHeadContinues = (bool)headPrefix.Invoke(null, headlessHeadArgs);
+			var headlessHeadPrefixResult = headlessHeadArgs[1] as Graphic;
+
+			return new
+			{
+				success = bodyPatchTargets.Length > 0
+					&& headPatchTargets.Length > 0
+					&& ReferenceEquals(actualBodyGraphic, customBody)
+					&& ReferenceEquals(actualHeadGraphic, customHead)
+					&& headRemoval
+					&& headlessZombie.health.hediffSet.HasHead == false
+					&& headlessHeadGraphic == null
+					&& humanBodyContinues
+					&& humanHeadContinues
+					&& headlessHeadContinues == false
+					&& headlessHeadPrefixResult == null,
+				patchTargets = new
+				{
+					body = bodyPatchTargets,
+					head = headPatchTargets
+				},
+				fixtures = new
+				{
+					zombie = DescribeZombie(zombie),
+					headlessZombie = DescribeZombie(headlessZombie),
+					ordinaryHuman = DescribePawn(ordinaryHuman)
+				},
+				customRouting = new
+				{
+					bodyReferenceMatched = ReferenceEquals(actualBodyGraphic, customBody),
+					headReferenceMatched = ReferenceEquals(actualHeadGraphic, customHead),
+					bodyGraphicType = actualBodyGraphic?.GetType().Name,
+					headGraphicType = actualHeadGraphic?.GetType().Name
+				},
+				passThrough = new
+				{
+					humanBodyContinues,
+					humanBodyResultStillNull = humanBodyArgs[1] == null,
+					humanHeadContinues,
+					humanHeadResultStillNull = humanHeadArgs[1] == null
+				},
+				headless = new
+				{
+					headRemoval,
+					headRemovalError,
+					hasHead = headlessZombie.health.hediffSet.HasHead,
+					actualGraphicIsNull = headlessHeadGraphic == null,
+					prefixContinues = headlessHeadContinues,
+					prefixResultIsNull = headlessHeadPrefixResult == null
+				}
+			};
+		}
+
+		static Graphic MakeRenderNodeProbeBodyGraphic(Pawn pawn)
+		{
+			var path = pawn?.story?.bodyType?.bodyNakedGraphicPath;
+			if (path.NullOrEmpty())
+				return null;
+			return GraphicDatabase.Get<Graphic_Multi>(path, ShaderDatabase.Cutout, Vector2.one, Color.green);
+		}
+
+		static Graphic MakeRenderNodeProbeHeadGraphic(Pawn pawn)
+		{
+			return pawn?.story?.headType?.GetGraphic(pawn, Color.cyan)
+				?? HeadTypeDefOf.Skull.GetGraphic(pawn, Color.cyan);
+		}
+
+		static bool TryRemoveHeadForRenderNodeProbe(Pawn pawn, out string error)
+		{
+			error = null;
+			var head = pawn?.health?.hediffSet?
+				.GetNotMissingParts(BodyPartHeight.Undefined, BodyPartDepth.Undefined)
+				.FirstOrDefault(part => part.def == BodyPartDefOf.Head);
+			if (head == null)
+			{
+				error = "Could not find a non-missing head body part.";
+				return false;
+			}
+
+			var missing = (Hediff_MissingPart)HediffMaker.MakeHediff(HediffDefOf.MissingBodyPart, pawn, null);
+			missing.IsFresh = true;
+			missing.lastInjury = HediffDefOf.Misc;
+			missing.Part = head;
+			pawn.health.hediffSet.AddDirect(missing, null, null);
+			if (pawn.health.hediffSet.HasHead)
+			{
+				error = "Adding MissingBodyPart to the head did not clear HasHead.";
+				return false;
+			}
+			return true;
 		}
 
 		static object VerifyAreaWorkflowAnimalResponse(Map map, IntVec3 root, List<Thing> spawnedThings)

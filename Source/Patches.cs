@@ -3603,6 +3603,11 @@ namespace ZombieLand
 			{
 				if (ZombieRenderCompat.TryGetHeadGraphic(pawn, out var graphic) == false)
 					return true;
+				if (pawn.health?.hediffSet?.HasHead == false)
+				{
+					__result = null;
+					return false;
+				}
 				__result = graphic;
 				return false;
 			}
