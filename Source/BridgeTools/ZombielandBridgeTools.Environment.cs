@@ -12,7 +12,7 @@ namespace ZombieLand
 {
 	public sealed partial class ZombielandBridgeTools
 	{
-		[Tool("zombieland/zombie_records_suppression", Description = "Verify zombies cannot mutate or report vanilla pawn records while ordinary pawns still can.")]
+		[Tool("zombieland/zombie_records_suppression", Description = "Verify zombies cannot mutate/report vanilla records and are excluded from world-pawn mothballing while ordinary pawns keep vanilla behavior.")]
 		public static object ZombieRecordsSuppression()
 		{
 			var map = CurrentMap;
@@ -25,76 +25,114 @@ namespace ZombieLand
 				};
 			}
 
-			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
-			foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
-				corpse.Destroy();
-
-			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
-			if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanSpawnError) == false)
-				return humanSpawnError;
-			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(4, 0, 0), 10f, out var zombieCell, out var zombieSpawnError) == false)
-				return zombieSpawnError;
-
-			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
-			DisablePawnWork(human);
-			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
-			if (zombie == null)
+			var spawnedThings = new List<Thing>();
+			try
 			{
+				var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+				foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+					corpse.Destroy();
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanSpawnError) == false)
+					return humanSpawnError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(4, 0, 0), 10f, out var zombieCell, out var zombieSpawnError) == false)
+					return zombieSpawnError;
+
+				var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+				DisablePawnWork(human);
+				spawnedThings.Add(human);
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						destroyedZombies,
+						human = DescribePawn(human),
+						error = "ZombieGenerator.SpawnZombie returned no records test zombie."
+					};
+				}
+				spawnedThings.Add(zombie);
+
+				if (TryFindRawRecordDef(human, RecordType.Int, out var recordDef, out var recordError) == false)
+				{
+					return new
+					{
+						success = false,
+						destroyedZombies,
+						human = DescribePawn(human),
+						zombie = DescribeZombie(zombie),
+						error = recordError
+					};
+				}
+
+				var humanBefore = DescribeRecord(human, recordDef);
+				var zombieBefore = DescribeRecord(zombie, recordDef);
+				human.records.Increment(recordDef);
+				human.records.AddTo(recordDef, 2f);
+				zombie.records.Increment(recordDef);
+				zombie.records.AddTo(recordDef, 2f);
+				var humanAfter = DescribeRecord(human, recordDef);
+				var zombieAfter = DescribeRecord(zombie, recordDef);
+
+				var humanRecordsMutated = humanAfter.rawValue == humanBefore.rawValue + 3f
+					&& humanAfter.publicValue == humanBefore.publicValue + 3f
+					&& humanAfter.publicInt == humanBefore.publicInt + 3;
+				var zombieRecordsNotMutated = zombieAfter.rawValue == zombieBefore.rawValue;
+				var zombieRecordsHidden = zombieAfter.publicValue == 0f && zombieAfter.publicInt == 0;
+
+				if (TryShouldMothball(human, out var humanShouldMothball, out var humanMothballError) == false)
+				{
+					return new
+					{
+						success = false,
+						human = DescribePawn(human),
+						error = humanMothballError
+					};
+				}
+				if (TryShouldMothball(zombie, out var zombieShouldMothball, out var zombieMothballError) == false)
+				{
+					return new
+					{
+						success = false,
+						zombie = DescribeZombie(zombie),
+						error = zombieMothballError
+					};
+				}
+				var humanMothballVanilla = humanShouldMothball;
+				var zombieMothballSuppressed = zombieShouldMothball == false;
+
 				return new
 				{
-					success = false,
+					success = humanRecordsMutated
+						&& zombieRecordsNotMutated
+						&& zombieRecordsHidden
+						&& humanMothballVanilla
+						&& zombieMothballSuppressed,
 					destroyedZombies,
+					recordDef = recordDef.defName,
 					human = DescribePawn(human),
-					error = "ZombieGenerator.SpawnZombie returned no records test zombie."
-				};
-			}
-
-			if (TryFindRawRecordDef(human, RecordType.Int, out var recordDef, out var recordError) == false)
-			{
-				return new
-				{
-					success = false,
-					destroyedZombies,
-					human = DescribePawn(human),
-					zombie = DescribeZombie(zombie),
-					error = recordError
-				};
-			}
-
-			var humanBefore = DescribeRecord(human, recordDef);
-			var zombieBefore = DescribeRecord(zombie, recordDef);
-			human.records.Increment(recordDef);
-			human.records.AddTo(recordDef, 2f);
-			zombie.records.Increment(recordDef);
-			zombie.records.AddTo(recordDef, 2f);
-			var humanAfter = DescribeRecord(human, recordDef);
-			var zombieAfter = DescribeRecord(zombie, recordDef);
-
-			var humanRecordsMutated = humanAfter.rawValue == humanBefore.rawValue + 3f
-				&& humanAfter.publicValue == humanBefore.publicValue + 3f
-				&& humanAfter.publicInt == humanBefore.publicInt + 3;
-			var zombieRecordsNotMutated = zombieAfter.rawValue == zombieBefore.rawValue;
-			var zombieRecordsHidden = zombieAfter.publicValue == 0f && zombieAfter.publicInt == 0;
-
-			return new
-			{
-				success = humanRecordsMutated
-					&& zombieRecordsNotMutated
-					&& zombieRecordsHidden,
-				destroyedZombies,
-				recordDef = recordDef.defName,
-				human = DescribePawn(human),
 				zombie = DescribeZombie(zombie),
 				humanBefore,
 				humanAfter,
-				zombieBefore,
-				zombieAfter,
-				humanRecordsMutated,
-				zombieRecordsNotMutated,
-				zombieRecordsHidden
-			};
+					zombieBefore,
+					zombieAfter,
+					humanRecordsMutated,
+					zombieRecordsNotMutated,
+					zombieRecordsHidden,
+					humanShouldMothball,
+					zombieShouldMothball,
+					humanMothballVanilla,
+					zombieMothballSuppressed
+				};
 			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
 
 			[Tool("zombieland/ambient_temperature_contract", Description = "Verify Zombieland pawns and zombie corpses report normal ambient temperature while ordinary spawned things keep vanilla map temperature.")]
 			public static object AmbientTemperatureContract()
@@ -330,6 +368,17 @@ namespace ZombieLand
 			var zombieEffectCount = ListenerEffectCount(zombie);
 			var spitterEffectCount = ListenerEffectCount(spitter);
 			var blobEffectCount = ListenerEffectCount(blob);
+			var listenerDescription = DescribePawn(listener);
+			var humanSourceDescription = DescribePawn(humanSource);
+			var zombieDescription = DescribeZombie(zombie);
+			var spitterDescription = DescribeZombie(spitter);
+			var blobDescription = DescribeZombie(blob);
+
+			foreach (var thing in new Thing[] { blob, spitter, zombie, humanSource, listener })
+			{
+				if (thing != null && thing.Destroyed == false)
+					thing.Destroy(DestroyMode.Vanish);
+			}
 
 			return new
 			{
@@ -338,11 +387,11 @@ namespace ZombieLand
 					&& spitterEffectCount == 0
 					&& blobEffectCount == 0,
 				destroyedZombies,
-				listener = DescribePawn(listener),
-				humanSource = DescribePawn(humanSource),
-				zombie = DescribeZombie(zombie),
-				spitter = DescribeZombie(spitter),
-				blob = DescribeZombie(blob),
+				listener = listenerDescription,
+				humanSource = humanSourceDescription,
+				zombie = zombieDescription,
+				spitter = spitterDescription,
+				blob = blobDescription,
 				humanEffectCount,
 				zombieEffectCount,
 				spitterEffectCount,
@@ -842,6 +891,9 @@ namespace ZombieLand
 			if (TryFindClearSpawnCell(map, mapFireCell + new IntVec3(0, 0, -3), 10f, out var blobCell, out var blobError) == false)
 				return blobError;
 
+			foreach (var fire in map.listerThings.ThingsOfDef(ThingDefOf.Fire).OfType<Fire>().ToArray())
+				fire.Destroy(DestroyMode.Vanish);
+
 			foreach (var cell in new[] { mapFireCell, humanCell, zombieCell, spitterCell, blobCell })
 			{
 				ClearGasAt(map, cell);
@@ -849,8 +901,15 @@ namespace ZombieLand
 					fire.Destroy();
 			}
 
+			Fire mapFire = null;
+			Pawn human = null;
+			Pawn zombie = null;
+			Pawn spitter = null;
+			Pawn blob = null;
+			try
+			{
 			FireUtility.TryStartFireIn(mapFireCell, map, 1.25f, null);
-			var mapFire = mapFireCell.GetThingList(map).OfType<Fire>().FirstOrDefault();
+			mapFire = mapFireCell.GetThingList(map).OfType<Fire>().FirstOrDefault();
 			if (mapFire == null)
 			{
 				return new
@@ -862,19 +921,19 @@ namespace ZombieLand
 			}
 			mapFire.fireSize = 1.25f;
 
-			var human = SpawnFireFixturePawn(map, humanCell, "human");
+			human = SpawnFireFixturePawn(map, humanCell, "human");
 			FireUtility.TryAttachFire(human, 2f, null);
 			var humanFire = human.GetAttachment(ThingDefOf.Fire) as Fire;
 
-			var zombie = SpawnFireFixturePawn(map, zombieCell, "normal");
+			zombie = SpawnFireFixturePawn(map, zombieCell, "normal");
 			FireUtility.TryAttachFire(zombie, 3f, null);
 			var zombieFire = zombie?.GetAttachment(ThingDefOf.Fire) as Fire;
 
-			var spitter = SpawnFireFixturePawn(map, spitterCell, "spitter");
+			spitter = SpawnFireFixturePawn(map, spitterCell, "spitter");
 			FireUtility.TryAttachFire(spitter, 1.5f, null);
 			var spitterFire = spitter?.GetAttachment(ThingDefOf.Fire) as Fire;
 
-			var blob = SpawnFireFixturePawn(map, blobCell, "blob");
+			blob = SpawnFireFixturePawn(map, blobCell, "blob");
 			FireUtility.TryAttachFire(blob, 1.75f, null);
 			var blobFire = blob?.GetAttachment(ThingDefOf.Fire) as Fire;
 
@@ -934,9 +993,19 @@ namespace ZombieLand
 				blobFireSize = blobFire.fireSize,
 				fireDangerAfter,
 				expectedExcludingZombie,
-				expectedIncludingZombie,
-				tolerance
-			};
+					expectedIncludingZombie,
+					tolerance
+				};
+			}
+			finally
+			{
+				DestroyFireFixturePawn(blob);
+				DestroyFireFixturePawn(spitter);
+				DestroyFireFixturePawn(zombie);
+				DestroyFireFixturePawn(human);
+				if (mapFire != null && mapFire.Destroyed == false)
+					mapFire.Destroy(DestroyMode.Vanish);
+			}
 		}
 
 		[Tool("zombieland/zombie_fire_rain_vulnerability_contract", Description = "Verify zombiesBurnLonger lets attached zombie fires sometimes ignore rain while human fires remain vanilla.")]
@@ -1149,11 +1218,15 @@ namespace ZombieLand
 					restoredBurnLonger = originalBurnLonger
 				};
 			}
-			finally
-			{
-				ZombieSettings.Values.zombiesBurnLonger = originalBurnLonger;
+				finally
+				{
+					ZombieSettings.Values.zombiesBurnLonger = originalBurnLonger;
+					DestroyFireFixturePawn(blob);
+					DestroyFireFixturePawn(spitter);
+					DestroyFireFixturePawn(zombie);
+					DestroyFireFixturePawn(human);
+				}
 			}
-		}
 
 		[Tool("zombieland/zombie_fire_damage_reduction_contract", Description = "Verify zombiesBurnLonger reduces real Fire.DoFireDamage for all Zombieland pawn fire fixtures while humans still take ordinary fire damage.")]
 		public static object ZombieFireDamageReductionContract(
@@ -1200,8 +1273,21 @@ namespace ZombieLand
 			foreach (var cell in fixtureCells)
 			{
 				ClearGasAt(map, cell);
+				ClearFilthAt(map, cell);
 				foreach (var existingFire in cell.GetThingList(map).OfType<Fire>().ToArray())
 					existingFire.Destroy();
+			}
+
+			FilthMaker.TryMakeFilth(fireCell, map, CustomDefs.TarSlime);
+			var fireSubstrate = map.thingGrid.ThingAt<TarSlime>(fireCell);
+			if (fireSubstrate == null)
+			{
+				return new
+				{
+					success = false,
+					fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
+					error = "Could not create a flammable TarSlime substrate for fire-damage sampling."
+				};
 			}
 
 			FireUtility.TryStartFireIn(fireCell, map, Fire.MaxFireSize, null);
@@ -1212,6 +1298,7 @@ namespace ZombieLand
 				{
 					success = false,
 					fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
+					fireSubstrate = ZombieRuntimeActions.StableThingId(fireSubstrate),
 					error = "Could not start a real fire for fire-damage sampling."
 				};
 			}
@@ -1233,11 +1320,12 @@ namespace ZombieLand
 			{
 				success = noErrors && humanFireDamageControl && normalReduced && spitterReduced && blobReduced,
 				seed,
-				samples = cappedSamples,
-				fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
-				fire = ZombieRuntimeActions.StableThingId(fire),
-				fireSize = fire.fireSize,
-				humanFireDamageControl,
+					samples = cappedSamples,
+					fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
+					fire = ZombieRuntimeActions.StableThingId(fire),
+					fireSubstrate = ZombieRuntimeActions.StableThingId(fireSubstrate),
+					fireSize = fire.fireSize,
+					humanFireDamageControl,
 				normalReduced,
 				spitterReduced,
 				blobReduced,

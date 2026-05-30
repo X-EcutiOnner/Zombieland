@@ -17,7 +17,7 @@ namespace ZombieLand
 		public static object DefenseRoomState(
 			[ToolParameter(Description = "Create a reusable defense-room fixture before reading state.", Required = false, DefaultValue = false)] bool setupFixture = false,
 			[ToolParameter(Description = "Try the equipped chainsaw's enabled command-action gizmo after setup/read preparation.", Required = false, DefaultValue = false)] bool activateChainsaw = false,
-			[ToolParameter(Description = "Optional action to run before readback: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, or wallDoorPressure.", Required = false, DefaultValue = "read")] string actionMode = "read",
+			[ToolParameter(Description = "Optional action to run before readback: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure, or infestationThumper.", Required = false, DefaultValue = "read")] string actionMode = "read",
 			[ToolParameter(Description = "Ticks to advance before reading final state; clamped to 0..5000.", Required = false, DefaultValue = 0)] int advanceTicks = 0)
 		{
 			var map = CurrentMap;
@@ -417,8 +417,11 @@ namespace ZombieLand
 				case "walldoorpressure":
 					result = RunSavedRoomWallDoorPressure(map);
 					return true;
+				case "infestationthumper":
+					result = RunSavedRoomInfestationThumper(map);
+					return true;
 				default:
-					error = "actionMode must be one of: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure.";
+					error = "actionMode must be one of: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure, infestationThumper.";
 					return false;
 			}
 		}
@@ -880,6 +883,175 @@ namespace ZombieLand
 				}).ToArray(),
 				samples
 			};
+		}
+
+		static object RunSavedRoomInfestationThumper(Map map)
+		{
+			var thumper = map.listerThings.ThingsOfDef(CustomDefs.Thumper).OfType<ZombieThumper>().FirstOrDefault();
+			if (thumper == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No ZombieThumper exists in the current map."
+				};
+			}
+
+			var switchable = thumper.TryGetComp<CompSwitchable>();
+			var oldActive = switchable?.isActive ?? false;
+			var oldFaction = thumper.Faction;
+			var candidates = GenRadial.RadialCellsAround(thumper.Position, Math.Min(10f, thumper.Radius), false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell != thumper.Position)
+				.Where(cell => cell.Walkable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetEdifice(map) == null)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.OrderBy(cell => cell.DistanceToSquared(thumper.Position))
+				.ToArray();
+			var roofDef = RoofDefOf.RoofRockThick;
+			if (roofDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "RoofRockThick is unavailable."
+				};
+			}
+
+			var roofCells = new List<IntVec3>();
+			var oldRoofs = new Dictionary<IntVec3, RoofDef>();
+			try
+			{
+				if (thumper.Faction != Faction.OfPlayer)
+					thumper.SetFactionDirect(Faction.OfPlayer);
+				if (switchable != null)
+					switchable.isActive = false;
+
+				var calculate = typeof(InfestationCellFinder).GetMethod("CalculateLocationCandidates", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+				var getScore = typeof(InfestationCellFinder).GetMethod("GetScoreAt", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+				var candidateListField = typeof(InfestationCellFinder).GetField("locationCandidates", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+				if (calculate == null || getScore == null || candidateListField == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not reflect InfestationCellFinder candidate methods."
+					};
+				}
+
+				var tested = new List<object>();
+				foreach (var candidate in candidates)
+				{
+					RestoreRoofs(map, oldRoofs, roofCells);
+					roofCells.Clear();
+					oldRoofs.Clear();
+					foreach (var roofCell in GenRadial.RadialCellsAround(candidate, 16f, true))
+					{
+						if (roofCell.InBounds(map) == false)
+							continue;
+						if (roofCell.GetEdifice(map) != null)
+							continue;
+						oldRoofs[roofCell] = map.roofGrid.RoofAt(roofCell);
+						map.roofGrid.SetRoof(roofCell, roofDef);
+						roofCells.Add(roofCell);
+					}
+					map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+					calculate.Invoke(null, new object[] { map });
+					var inactiveScore = (float)getScore.Invoke(null, new object[] { candidate, map });
+					var inactiveCandidateCount = CandidateCount(candidateListField);
+					var inactiveInsideRadiusCount = CandidateCountInsideRadius(candidateListField, thumper.Position, thumper.Radius + 0.5f);
+
+					if (switchable != null)
+						switchable.isActive = true;
+					calculate.Invoke(null, new object[] { map });
+					var activeScore = (float)getScore.Invoke(null, new object[] { candidate, map });
+					var activeCandidateCount = CandidateCount(candidateListField);
+					var activeInsideRadiusCount = CandidateCountInsideRadius(candidateListField, thumper.Position, thumper.Radius + 0.5f);
+					if (switchable != null)
+						switchable.isActive = false;
+
+					var sample = new
+					{
+						cell = ZombieRuntimeActions.DescribeCell(candidate),
+						distance = candidate.DistanceTo(thumper.Position),
+						roofedCells = roofCells.Count,
+						inactiveScore,
+						activeScore,
+						inactiveCandidateCount,
+						activeCandidateCount,
+						inactiveInsideRadiusCount,
+						activeInsideRadiusCount
+					};
+					tested.Add(sample);
+					if (inactiveScore > 0f && activeScore == 0f && activeInsideRadiusCount < inactiveInsideRadiusCount)
+					{
+						return new
+						{
+							success = true,
+							action = "infestationThumper",
+							thumper = ZombieRuntimeActions.StableThingId(thumper),
+							thumperCell = ZombieRuntimeActions.DescribeCell(thumper.Position),
+							thumperRadius = thumper.Radius,
+							candidate = sample,
+							tested = tested.ToArray()
+						};
+					}
+				}
+
+				return new
+				{
+					success = false,
+					action = "infestationThumper",
+					thumper = ZombieRuntimeActions.StableThingId(thumper),
+					thumperCell = ZombieRuntimeActions.DescribeCell(thumper.Position),
+					thumperRadius = thumper.Radius,
+					error = "No temporary thick-roofed infestation candidate produced a positive inactive score that the active thumper suppressed.",
+					tested = tested.ToArray()
+				};
+			}
+			finally
+			{
+				RestoreRoofs(map, oldRoofs, roofCells);
+				if (switchable != null)
+					switchable.isActive = oldActive;
+				if (oldFaction != thumper.Faction)
+					thumper.SetFactionDirect(oldFaction);
+				map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+			}
+		}
+
+		static void RestoreRoofs(Map map, Dictionary<IntVec3, RoofDef> oldRoofs, List<IntVec3> roofCells)
+		{
+			foreach (var cell in roofCells)
+			{
+				if (cell.InBounds(map) == false)
+					continue;
+				oldRoofs.TryGetValue(cell, out var oldRoof);
+				map.roofGrid.SetRoof(cell, oldRoof);
+			}
+		}
+
+		static int CandidateCount(FieldInfo candidateListField)
+			=> (candidateListField.GetValue(null) as System.Collections.ICollection)?.Count ?? -1;
+
+		static int CandidateCountInsideRadius(FieldInfo candidateListField, IntVec3 root, float radius)
+		{
+			var list = candidateListField.GetValue(null) as System.Collections.IEnumerable;
+			if (list == null)
+				return -1;
+
+			var count = 0;
+			foreach (var item in list)
+			{
+				var cellField = item.GetType().GetField("cell", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+				if (cellField == null)
+					continue;
+				var cell = (IntVec3)cellField.GetValue(item);
+				if (cell.DistanceTo(root) <= radius)
+					count++;
+			}
+			return count;
 		}
 
 		static object RunSavedRoomWallDoorPressure(Map map)

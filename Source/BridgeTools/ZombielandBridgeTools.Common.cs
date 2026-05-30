@@ -363,6 +363,9 @@ namespace ZombieLand
 		static readonly MethodInfo fireVulnerableToRainMethod = typeof(Fire).GetMethod("VulnerableToRain", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		static readonly MethodInfo fireWatcherUpdateObservationsMethod = typeof(FireWatcher).GetMethod("UpdateObservations", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 		static readonly MethodInfo meleeDamageInfosToApplyMethod = typeof(Verb_MeleeAttackDamage).GetMethod("DamageInfosToApply", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+		static readonly MethodInfo worldPawnsShouldMothballMethod = typeof(RimWorld.Planet.WorldPawns).GetMethod("ShouldMothball", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Pawn) }, null);
+		static readonly MethodInfo tickManagerNothingHappeningMethod = typeof(Verse.TickManager).GetMethod("NothingHappeningInGame", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+		static readonly MethodInfo pawnPathFollowerWillCollideMethod = typeof(Pawn_PathFollower).GetMethod("WillCollideWithPawnAt", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(IntVec3), typeof(bool), typeof(bool) }, null);
 
 		static bool TryCostToMoveIntoCell(Pawn pawn, IntVec3 cell, out float cost, out string error)
 		{
@@ -435,6 +438,58 @@ namespace ZombieLand
 			}
 
 			vulnerable = (bool)fireVulnerableToRainMethod.Invoke(fire, null);
+			return true;
+		}
+
+		static bool TryShouldMothball(Pawn pawn, out bool shouldMothball, out string error)
+		{
+			shouldMothball = false;
+			error = null;
+			if (worldPawnsShouldMothballMethod == null)
+			{
+				error = "Could not find WorldPawns.ShouldMothball(Pawn).";
+				return false;
+			}
+			if (pawn == null)
+			{
+				error = "Pawn is required.";
+				return false;
+			}
+
+			shouldMothball = (bool)worldPawnsShouldMothballMethod.Invoke(Find.WorldPawns, new object[] { pawn });
+			return true;
+		}
+
+		static bool TryNothingHappeningInGame(out bool nothingHappening, out string error)
+		{
+			nothingHappening = false;
+			error = null;
+			if (tickManagerNothingHappeningMethod == null)
+			{
+				error = "Could not find TickManager.NothingHappeningInGame().";
+				return false;
+			}
+
+			nothingHappening = (bool)tickManagerNothingHappeningMethod.Invoke(Find.TickManager, null);
+			return true;
+		}
+
+		static bool TryWillCollideWithPawnAt(Pawn pawn, IntVec3 cell, out bool willCollide, out string error)
+		{
+			willCollide = false;
+			error = null;
+			if (pawnPathFollowerWillCollideMethod == null)
+			{
+				error = "Could not find Pawn_PathFollower.WillCollideWithPawnAt(IntVec3, bool, bool).";
+				return false;
+			}
+			if (pawn?.pather == null)
+			{
+				error = "Pawn with path follower is required.";
+				return false;
+			}
+
+			willCollide = (bool)pawnPathFollowerWillCollideMethod.Invoke(pawn.pather, new object[] { cell, false, false });
 			return true;
 		}
 
@@ -556,6 +611,23 @@ namespace ZombieLand
 			}
 
 			return null;
+		}
+
+		static void DestroyFireFixturePawn(Pawn pawn)
+		{
+			if (pawn == null)
+				return;
+
+			var fire = pawn.GetAttachment(ThingDefOf.Fire) as Fire;
+			if (fire != null)
+			{
+				pawn.TryGetComp<CompAttachBase>()?.RemoveAttachment(fire);
+				if (fire.Destroyed == false)
+					fire.Destroy(DestroyMode.Vanish);
+			}
+
+			if (pawn.Destroyed == false)
+				pawn.Destroy(DestroyMode.Vanish);
 		}
 
 		static void NormalizeFireDamagePawn(Pawn pawn)

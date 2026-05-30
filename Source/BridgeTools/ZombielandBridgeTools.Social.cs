@@ -52,11 +52,14 @@ namespace ZombieLand
 			}
 
 			var beforeConversionIds = new HashSet<string>(CurrentZombies(map).Select(ZombieRuntimeActions.StableThingId));
-			var formerPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			GenSpawn.Spawn(formerPawn, formerPawnCell, map, Rot4.South);
-			DisablePawnWork(formerPawn);
-			var formerPawnBeforeConversion = DescribePawn(formerPawn);
-			ZombieRuntimeActions.ConvertPawnToZombie(formerPawn, map, true);
+				var formerPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(formerPawn, formerPawnCell, map, Rot4.South);
+				DisablePawnWork(formerPawn);
+				formerPawn.apparel?.DestroyAll();
+				formerPawn.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+				formerPawn.inventory?.DestroyAll();
+				var formerPawnBeforeConversion = DescribePawn(formerPawn);
+				ZombieRuntimeActions.ConvertPawnToZombie(formerPawn, map, true);
 			var formerZombie = CurrentZombies(map)
 				.OfType<Zombie>()
 				.Where(zombie => beforeConversionIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
@@ -306,12 +309,22 @@ namespace ZombieLand
 				return normalZombieSpawnError;
 			if (TryFindClearSpawnCell(map, workerCell + new IntVec3(6, 0, 0), 12f, out var formerPawnCell, out var formerPawnSpawnError) == false)
 				return formerPawnSpawnError;
-			if (TryFindClearSpawnCell(map, workerCell + new IntVec3(0, 0, 3), 10f, out var humanCorpseCell, out var humanCorpseSpawnError) == false)
-				return humanCorpseSpawnError;
+				if (TryFindClearSpawnCell(map, workerCell + new IntVec3(0, 0, 3), 10f, out var humanCorpseCell, out var humanCorpseSpawnError) == false)
+					return humanCorpseSpawnError;
+				if (TryFindClearSpawnCell(map, workerCell + new IntVec3(-3, 0, 0), 10f, out var reserveControlCell, out var reserveControlSpawnError) == false)
+					return reserveControlSpawnError;
+				if (TryFindClearSpawnCell(map, workerCell + new IntVec3(0, 0, 6), 12f, out var stripHumanCell, out var stripHumanSpawnError) == false)
+					return stripHumanSpawnError;
+				if (TryFindClearSpawnCell(map, stripHumanCell + new IntVec3(3, 0, 0), 10f, out var stripNormalCell, out var stripNormalSpawnError) == false)
+					return stripNormalSpawnError;
+				if (TryFindClearSpawnCell(map, stripNormalCell + new IntVec3(3, 0, 0), 10f, out var stripSpitterCell, out var stripSpitterSpawnError) == false)
+					return stripSpitterSpawnError;
+				if (TryFindClearSpawnCell(map, stripSpitterCell + new IntVec3(3, 0, 0), 10f, out var stripBlobCell, out var stripBlobSpawnError) == false)
+					return stripBlobSpawnError;
 
-			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
-			DisablePawnWork(worker);
+				var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+				DisablePawnWork(worker);
 
 			var normalZombie = ZombieRuntimeActions.SpawnZombie(normalZombieCell, map, ZombieType.Normal, true);
 			if (normalZombie == null)
@@ -347,12 +360,64 @@ namespace ZombieLand
 					worker = DescribePawn(worker),
 					formerPawn = formerPawnBeforeConversion,
 					error = "Converting the former-colonist corpse test pawn did not produce a zombie."
-				};
-			}
+					};
+				}
 
-			var humanPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			GenSpawn.Spawn(humanPawn, humanCorpseCell, map, Rot4.South);
-			DisablePawnWork(humanPawn);
+				if (TryProbeZombieReservations(map, worker, normalZombie, formerZombie, reserveControlCell, out var reservationProbe, out var reservationError) == false)
+				{
+					return new
+					{
+						success = false,
+						destroyedZombies,
+						destroyedZombieCorpses,
+						worker = DescribePawn(worker),
+						normalZombie = DescribeZombie(normalZombie),
+						formerZombie = DescribeZombie(formerZombie),
+						reservationProbe,
+						error = reservationError
+					};
+				}
+
+				var stripHuman = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(stripHuman, stripHumanCell, map, Rot4.South);
+				DisablePawnWork(stripHuman);
+				var stripNormal = ZombieRuntimeActions.SpawnZombie(stripNormalCell, map, ZombieType.Normal, true);
+				var stripSpitter = SpawnFireFixturePawn(map, stripSpitterCell, "spitter") as ZombieSpitter;
+				var stripBlob = SpawnFireFixturePawn(map, stripBlobCell, "blob") as ZombieBlob;
+				if (stripNormal == null || stripSpitter == null || stripBlob == null)
+				{
+					return new
+					{
+						success = false,
+						destroyedZombies,
+						destroyedZombieCorpses,
+						worker = DescribePawn(worker),
+						stripHuman = DescribePawn(stripHuman),
+						stripNormal = DescribeZombie(stripNormal),
+						stripSpitter = DescribeZombie(stripSpitter),
+						stripBlob = DescribeZombie(stripBlob),
+						error = "Could not spawn all strip-probe pawns."
+					};
+				}
+				if (TryProbeAnythingToStrip(stripHuman, stripNormal, stripSpitter, stripBlob, out var stripProbe, out var stripError) == false)
+				{
+					return new
+					{
+						success = false,
+						destroyedZombies,
+						destroyedZombieCorpses,
+						worker = DescribePawn(worker),
+						stripProbe,
+						error = stripError
+					};
+				}
+				stripNormal.DeSpawn(DestroyMode.Vanish);
+				stripSpitter.DeSpawn(DestroyMode.Vanish);
+				stripBlob.DeSpawn(DestroyMode.Vanish);
+
+				var humanPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(humanPawn, humanCorpseCell, map, Rot4.South);
+				DisablePawnWork(humanPawn);
 			var humanPawnBeforeDeath = DescribePawn(humanPawn);
 			if (ZombieRuntimeActions.KillPawnToCorpse(humanPawn, out var humanCorpse, out var killError) == false)
 			{
@@ -404,13 +469,30 @@ namespace ZombieLand
 
 			var extractWorkGiver = new WorkGiver_ExtractZombieSerum();
 			var doubleTapWorkGiver = new WorkGiver_DoubleTap();
-			var normalZombieCorpseHasExtractJob = extractWorkGiver.HasJobOnThing(worker, normalZombieCorpse, true);
-			var formerZombieCorpseHasExtractJob = extractWorkGiver.HasJobOnThing(worker, formerZombieCorpse, true);
-			var normalZombieCorpseHasDoubleTapJob = doubleTapWorkGiver.HasJobOnThing(worker, normalZombieCorpse, true);
-			var formerZombieCorpseHasDoubleTapJob = doubleTapWorkGiver.HasJobOnThing(worker, formerZombieCorpse, true);
-			if (TryProbeThingMakerZombieCorpseDefs(out var thingMakerCorpseSuccess, out var thingMakerCorpseProbe, out var thingMakerCorpseError) == false)
-			{
-				return new
+				var normalZombieCorpseHasExtractJob = extractWorkGiver.HasJobOnThing(worker, normalZombieCorpse, true);
+				var formerZombieCorpseHasExtractJob = extractWorkGiver.HasJobOnThing(worker, formerZombieCorpse, true);
+				var normalZombieCorpseHasDoubleTapJob = doubleTapWorkGiver.HasJobOnThing(worker, normalZombieCorpse, true);
+				var formerZombieCorpseHasDoubleTapJob = doubleTapWorkGiver.HasJobOnThing(worker, formerZombieCorpse, true);
+				humanCorpse.SetForbidden(false, false);
+				normalZombieCorpse.SetForbidden(false, false);
+				formerZombieCorpse.SetForbidden(false, false);
+				if (TryProbeZombieCorpseHaul(map, worker, humanCorpse, normalZombieCorpse, out var haulProbe, out var haulError) == false)
+				{
+					return new
+					{
+						success = false,
+						destroyedZombies,
+						destroyedZombieCorpses,
+						worker = DescribePawn(worker),
+						humanCorpse = DescribeCorpse(humanCorpse),
+						normalZombieCorpse = DescribeCorpse(normalZombieCorpse),
+						error = haulError,
+						haulProbe
+					};
+				}
+				if (TryProbeThingMakerZombieCorpseDefs(out var thingMakerCorpseSuccess, out var thingMakerCorpseProbe, out var thingMakerCorpseError) == false)
+				{
+					return new
 				{
 					success = false,
 					destroyedZombies,
@@ -430,13 +512,16 @@ namespace ZombieLand
 					&& humanCorpseForbiddenAfterOutsideHome
 					&& normalZombieCorpseForbiddenAfterOutsideHome == false
 					&& formerZombieCorpseForbiddenAfterOutsideHome == false
-					&& normalZombieCorpseHasExtractJob
-					&& formerZombieCorpseHasExtractJob
-					&& normalZombieCorpseHasDoubleTapJob == false
-					&& formerZombieCorpseHasDoubleTapJob == false
-					&& thingMakerCorpseSuccess,
-				destroyedZombies,
-				destroyedZombieCorpses,
+						&& normalZombieCorpseHasExtractJob
+						&& formerZombieCorpseHasExtractJob
+						&& normalZombieCorpseHasDoubleTapJob == false
+						&& formerZombieCorpseHasDoubleTapJob == false
+						&& ReservationProbeSuccess(reservationProbe)
+						&& StripProbeSuccess(stripProbe)
+						&& HaulProbeSuccess(haulProbe)
+						&& thingMakerCorpseSuccess,
+					destroyedZombies,
+					destroyedZombieCorpses,
 				worker = DescribePawn(worker),
 				humanPawnBeforeDeath,
 				formerPawnBeforeConversion,
@@ -451,11 +536,223 @@ namespace ZombieLand
 				humanCorpseForbiddenAfterOutsideHome,
 				normalZombieCorpseForbiddenAfterOutsideHome,
 				formerZombieCorpseForbiddenAfterOutsideHome,
-				normalZombieCorpseHasExtractJob,
-				formerZombieCorpseHasExtractJob,
-				normalZombieCorpseHasDoubleTapJob,
-				formerZombieCorpseHasDoubleTapJob,
-				thingMakerCorpseProbe
+					normalZombieCorpseHasExtractJob,
+					formerZombieCorpseHasExtractJob,
+					normalZombieCorpseHasDoubleTapJob,
+					formerZombieCorpseHasDoubleTapJob,
+					reservationProbe,
+					stripProbe,
+					haulProbe,
+					thingMakerCorpseProbe
+				};
+			}
+
+		static bool TryProbeZombieReservations(Map map, Pawn worker, Zombie normalZombie, Zombie formerZombie, IntVec3 controlCell, out object evidence, out string error)
+		{
+			error = null;
+			var manager = map?.reservationManager;
+			if (manager == null)
+			{
+				evidence = null;
+				error = "Map has no reservation manager.";
+				return false;
+			}
+			var controlThing = ThingMaker.MakeThing(ThingDefOf.Steel);
+			controlThing.stackCount = 1;
+			GenSpawn.Spawn(controlThing, controlCell, map, WipeMode.Vanish);
+			controlThing.SetForbidden(false, false);
+			var controlJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+			var normalJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+			var formerJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+			var controlCanReserve = manager.CanReserve(worker, controlThing, 1, -1, null, false);
+			var normalCanReserve = manager.CanReserve(worker, normalZombie, 1, -1, null, false);
+			var formerCanReserve = manager.CanReserve(worker, formerZombie, 1, -1, null, false);
+			var controlReserve = manager.Reserve(worker, controlJob, controlThing, 1, -1, null, false, false, true);
+			manager.ReleaseAllClaimedBy(worker);
+			var normalReserve = manager.Reserve(worker, normalJob, normalZombie, 1, -1, null, false, false, true);
+			manager.ReleaseAllClaimedBy(worker);
+			var formerReserve = manager.Reserve(worker, formerJob, formerZombie, 1, -1, null, false, false, true);
+			manager.ReleaseAllClaimedBy(worker);
+			var success = controlCanReserve
+				&& controlReserve
+				&& normalCanReserve == false
+				&& normalReserve == false
+				&& formerCanReserve
+				&& formerReserve == false;
+			evidence = new
+			{
+				success,
+				controlThing = ZombieRuntimeActions.StableThingId(controlThing),
+				controlCell = ZombieRuntimeActions.DescribeCell(controlCell),
+				normalZombie = DescribeZombie(normalZombie),
+				formerZombie = DescribeZombie(formerZombie),
+				normalWasMapPawnBefore = normalZombie.wasMapPawnBefore,
+				formerWasMapPawnBefore = formerZombie.wasMapPawnBefore,
+				controlCanReserve,
+				controlReserve,
+				normalCanReserve,
+				normalReserve,
+				formerCanReserve,
+				formerReserve
+			};
+			if (success == false)
+				error = "Zombie reservation probe failed.";
+			return success;
+		}
+
+		static bool TryProbeAnythingToStrip(Pawn human, Zombie normal, ZombieSpitter spitter, ZombieBlob blob, out object evidence, out string error)
+		{
+			error = null;
+			var humanPayload = TryAddStripPayload(human, out var humanPayloadEvidence, out var humanPayloadError);
+			var normalPayload = TryAddStripPayload(normal, out var normalPayloadEvidence, out var normalPayloadError);
+			var spitterPayload = TryAddStripPayload(spitter, out var spitterPayloadEvidence, out var spitterPayloadError);
+			var blobPayload = TryAddStripPayload(blob, out var blobPayloadEvidence, out var blobPayloadError);
+			var humanAnythingToStrip = human.AnythingToStrip();
+			var normalAnythingToStrip = normal.AnythingToStrip();
+			var spitterAnythingToStrip = spitter.AnythingToStrip();
+			var blobAnythingToStrip = blob.AnythingToStrip();
+			var success = humanPayload
+				&& normalPayload
+				&& spitterPayload
+				&& blobPayload
+				&& humanAnythingToStrip
+				&& normalAnythingToStrip == false
+				&& spitterAnythingToStrip == false
+				&& blobAnythingToStrip == false;
+			evidence = new
+			{
+				success,
+				human = DescribePawn(human),
+				normal = DescribeZombie(normal),
+				spitter = DescribeZombie(spitter),
+				blob = DescribeZombie(blob),
+				humanPayload,
+				normalPayload,
+				spitterPayload,
+				blobPayload,
+				humanPayloadEvidence,
+				normalPayloadEvidence,
+				spitterPayloadEvidence,
+				blobPayloadEvidence,
+				humanPayloadError,
+				normalPayloadError,
+				spitterPayloadError,
+				blobPayloadError,
+				humanAnythingToStrip,
+				normalAnythingToStrip,
+				spitterAnythingToStrip,
+				blobAnythingToStrip
+			};
+			if (success == false)
+				error = "AnythingToStrip probe failed.";
+			return success;
+		}
+
+		static bool TryAddStripPayload(Pawn pawn, out object evidence, out string error)
+		{
+			error = null;
+			if (pawn?.inventory?.innerContainer == null)
+			{
+				evidence = new
+				{
+					added = false,
+					error = "Pawn has no inventory inner container."
+				};
+				error = "Pawn has no inventory inner container.";
+				return false;
+			}
+			var item = ThingMaker.MakeThing(ThingDefOf.Steel);
+			item.stackCount = 1;
+			var added = pawn.inventory.innerContainer.TryAdd(item, true);
+			evidence = new
+			{
+				added,
+				payloadDef = item.def?.defName,
+				inventoryCount = pawn.inventory.innerContainer.Count,
+				inventoryContents = pawn.inventory.innerContainer.Select(thing => thing.def?.defName ?? "<null>").OrderBy(name => name).ToArray()
+			};
+			if (added == false)
+				error = $"Could not add strip payload to {pawn.LabelShort}.";
+			return added;
+		}
+
+		static bool TryProbeZombieCorpseHaul(Map map, Pawn worker, Corpse humanCorpse, ZombieCorpse zombieCorpse, out object evidence, out string error)
+		{
+			evidence = null;
+			error = null;
+			if (TryFindClearSpawnCell(map, worker.Position + new IntVec3(0, 0, -5), 16f, out var stockpileCell, out var stockpileError) == false)
+			{
+				error = stockpileError?.ToString() ?? "Could not find a stockpile cell for haul probe.";
+				return false;
+			}
+
+			var zone = new Zone_Stockpile(StorageSettingsPreset.CorpseStockpile, map.zoneManager);
+			map.zoneManager.RegisterZone(zone);
+			zone.AddCell(stockpileCell);
+			var workGiver = new WorkGiver_HaulCorpses();
+			var humanUnforcedJob = workGiver.JobOnThing(worker, humanCorpse, false);
+			var zombieUnforcedJob = workGiver.JobOnThing(worker, zombieCorpse, false);
+			var zombieForcedJob = workGiver.JobOnThing(worker, zombieCorpse, true);
+			var success = humanUnforcedJob != null
+				&& zombieUnforcedJob == null
+				&& zombieForcedJob == null
+				&& zone.Accepts(humanCorpse)
+				&& zone.Accepts(zombieCorpse) == false;
+			evidence = new
+			{
+				success,
+				stockpileCell = ZombieRuntimeActions.DescribeCell(stockpileCell),
+				zoneCellCount = zone.cells.Count,
+				zoneAcceptsHumanCorpse = zone.Accepts(humanCorpse),
+				zoneAcceptsZombieCorpse = zone.Accepts(zombieCorpse),
+				humanCorpse = DescribeCorpse(humanCorpse),
+				zombieCorpse = DescribeCorpse(zombieCorpse),
+				humanUnforcedJobDef = humanUnforcedJob?.def?.defName,
+				zombieUnforcedJobDef = zombieUnforcedJob?.def?.defName,
+				zombieForcedJobDef = zombieForcedJob?.def?.defName,
+				humanUnforcedJobTarget = DescribeJobTarget(humanUnforcedJob),
+				zombieForcedJobTarget = DescribeJobTarget(zombieForcedJob)
+			};
+			if (success == false)
+				error = "Zombie corpse haul probe failed.";
+			return success;
+		}
+
+		static bool StripProbeSuccess(object probe)
+		{
+			return (bool)(probe?.GetType().GetProperty("success")?.GetValue(probe) ?? false);
+		}
+
+		static bool HaulProbeSuccess(object probe)
+		{
+			return (bool)(probe?.GetType().GetProperty("success")?.GetValue(probe) ?? false);
+		}
+
+		static bool ReservationProbeSuccess(object probe)
+		{
+			return (bool)(probe?.GetType().GetProperty("success")?.GetValue(probe) ?? false);
+		}
+
+		static object DescribeJobTarget(Job job)
+		{
+			if (job == null)
+				return null;
+			return new
+			{
+				targetA = DescribeLocalTarget(job.targetA),
+				targetB = DescribeLocalTarget(job.targetB),
+				targetC = DescribeLocalTarget(job.targetC)
+			};
+		}
+
+		static object DescribeLocalTarget(LocalTargetInfo target)
+		{
+			return new
+			{
+				isValid = target.IsValid,
+				hasThing = target.HasThing,
+				thing = target.Thing == null ? null : ZombieRuntimeActions.StableThingId(target.Thing),
+				cell = target.Cell.IsValid ? ZombieRuntimeActions.DescribeCell(target.Cell) : null
 			};
 		}
 
@@ -736,7 +1033,7 @@ namespace ZombieLand
 			};
 		}
 
-		[Tool("zombieland/zombie_health_needs_upkeep_suppression", Description = "Verify zombie needs reconciliation, needs ticking, and immunity ticking are suppressed while normal pawns still use the vanilla upkeep paths.")]
+		[Tool("zombieland/zombie_health_needs_upkeep_suppression", Description = "Verify zombie needs/upkeep suppression and alert-tracked infected-colonist health overrides while normal pawns keep vanilla behavior.")]
 		public static object ZombieHealthNeedsUpkeepSuppression()
 		{
 			var map = CurrentMap;
@@ -840,6 +1137,7 @@ namespace ZombieLand
 				&& zombieNeedsAfterFinalReconcile.allCount == 0;
 			var humanImmunityAdvanced = humanImmunityAfter > humanImmunityBefore && humanImmunityRecordCountAfter > humanImmunityRecordCountBefore;
 			var zombieImmunitySuppressed = zombieImmunityAfter == zombieImmunityBefore && zombieImmunityRecordCountAfter == zombieImmunityRecordCountBefore;
+			var infectedColonistHealthSuppressed = TryProbeInfectedColonistHealthSuppression(map, zombieCell + new IntVec3(4, 0, 0), out var infectedColonistHealthEvidence, out var infectedColonistHealthError);
 
 			return new
 			{
@@ -849,7 +1147,8 @@ namespace ZombieLand
 					&& zombieNeedTickSkipped
 					&& zombieNeedsClearedAfterTick
 					&& humanImmunityAdvanced
-					&& zombieImmunitySuppressed,
+					&& zombieImmunitySuppressed
+					&& infectedColonistHealthSuppressed,
 				destroyedZombies,
 				human = DescribePawn(human),
 				zombie = DescribeZombie(zombie),
@@ -879,8 +1178,222 @@ namespace ZombieLand
 				zombieImmunityRecordCountBefore,
 				zombieImmunityRecordCountAfter,
 				humanImmunityAdvanced,
-				zombieImmunitySuppressed
+				zombieImmunitySuppressed,
+				infectedColonistHealthSuppressed,
+				infectedColonistHealthError,
+				infectedColonistHealthEvidence
 			};
+		}
+
+		static bool TryProbeInfectedColonistHealthSuppression(Map map, IntVec3 root, out object evidence, out string error)
+		{
+			evidence = null;
+			error = null;
+			if (TryFindClearSpawnCell(map, root, 16f, out var controlCell, out var controlSpawnError) == false)
+			{
+				error = controlSpawnError?.ToString() ?? "Could not find control colonist spawn cell.";
+				return false;
+			}
+			if (TryFindClearSpawnCell(map, controlCell + new IntVec3(4, 0, 0), 10f, out var infectedCell, out var infectedSpawnError) == false)
+			{
+				error = infectedSpawnError?.ToString() ?? "Could not find infected colonist spawn cell.";
+				return false;
+			}
+			if (TryFindClearSpawnCell(map, infectedCell + new IntVec3(4, 0, 0), 10f, out var deadInfectedCell, out var deadSpawnError) == false)
+			{
+				error = deadSpawnError?.ToString() ?? "Could not find dead infected colonist spawn cell.";
+				return false;
+			}
+			if (TryFindClearSpawnCell(map, deadInfectedCell + new IntVec3(4, 0, 0), 10f, out var controlMentalCell, out var controlMentalSpawnError) == false)
+			{
+				error = controlMentalSpawnError?.ToString() ?? "Could not find control mental-state spawn cell.";
+				return false;
+			}
+			if (TryFindClearSpawnCell(map, controlMentalCell + new IntVec3(4, 0, 0), 10f, out var infectedMentalCell, out var infectedMentalSpawnError) == false)
+			{
+				error = infectedMentalSpawnError?.ToString() ?? "Could not find infected mental-state spawn cell.";
+				return false;
+			}
+
+			var control = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var infected = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var deadInfected = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var controlMental = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var infectedMental = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(control, controlCell, map, Rot4.South);
+			GenSpawn.Spawn(infected, infectedCell, map, Rot4.South);
+			GenSpawn.Spawn(deadInfected, deadInfectedCell, map, Rot4.South);
+			GenSpawn.Spawn(controlMental, controlMentalCell, map, Rot4.South);
+			GenSpawn.Spawn(infectedMental, infectedMentalCell, map, Rot4.South);
+			DisablePawnWork(control);
+			DisablePawnWork(infected);
+			DisablePawnWork(deadInfected);
+			DisablePawnWork(controlMental);
+			DisablePawnWork(infectedMental);
+			controlMental.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			var controlMentalChainsaw = ThingMaker.MakeThing(CustomDefs.Chainsaw) as Chainsaw;
+			if (controlMentalChainsaw == null)
+			{
+				error = "Could not create Chainsaw for mental-state drop probe.";
+				return false;
+			}
+			controlMental.equipment.AddEquipment(controlMentalChainsaw);
+			var chainsawId = ZombieRuntimeActions.StableThingId(controlMentalChainsaw);
+			var chainsawEquippedBeforeMental = ReferenceEquals(controlMental.equipment.Primary, controlMentalChainsaw)
+				&& controlMentalChainsaw.Spawned == false
+				&& ReferenceEquals(controlMentalChainsaw.pawn, controlMental);
+
+			if (ZombieRuntimeActions.AddZombieBite(infected, "final", out var infectedBite, out error) == false)
+				return false;
+			if (ZombieRuntimeActions.AddZombieBite(infectedMental, "final", out var infectedMentalBite, out error) == false)
+				return false;
+
+			var tracked = Patches.Need_CurLevel_Patch.infectedColonists ??= new HashSet<Pawn>();
+			var controlWasTracked = tracked.Contains(control);
+			var infectedWasTracked = tracked.Contains(infected);
+			var deadInfectedWasTracked = tracked.Contains(deadInfected);
+			var controlMentalWasTracked = tracked.Contains(controlMental);
+			var infectedMentalWasTracked = tracked.Contains(infectedMental);
+			try
+			{
+				tracked.Remove(control);
+				tracked.Add(infected);
+				tracked.Add(deadInfected);
+				tracked.Remove(controlMental);
+				tracked.Add(infectedMental);
+
+				control.needs.AddOrRemoveNeedsAsAppropriate();
+				infected.needs.AddOrRemoveNeedsAsAppropriate();
+				var controlNeed = control.needs.TryGetNeed(NeedDefOf.Food);
+				var infectedNeed = infected.needs.TryGetNeed(NeedDefOf.Food);
+				if (controlNeed == null || infectedNeed == null)
+				{
+					error = $"Food need missing. control={controlNeed != null}, infected={infectedNeed != null}.";
+					return false;
+				}
+
+				const float requestedNeedLevel = 0.13f;
+				controlNeed.CurLevel = requestedNeedLevel;
+				infectedNeed.CurLevel = requestedNeedLevel;
+				var controlNeedAfterSet = controlNeed.CurLevel;
+				var infectedNeedAfterLowSet = infectedNeed.CurLevel;
+				infectedNeed.CurLevel = 0.93f;
+				var infectedNeedAfterHighSet = infectedNeed.CurLevel;
+
+				if (TryApplyPainfulCut(control, out error) == false)
+					return false;
+				if (TryApplyPainfulCut(infected, out error) == false)
+					return false;
+				var controlPainAfterCut = control.health.hediffSet.PainTotal;
+				var infectedPainAfterCut = infected.health.hediffSet.PainTotal;
+
+				ApplyAnestheticCapacitySuppressor(control);
+				ApplyAnestheticCapacitySuppressor(infected);
+				var controlConsciousnessAfterAnesthetic = control.health.capacities.GetLevel(PawnCapacityDefOf.Consciousness);
+				var infectedConsciousnessAfterAnesthetic = infected.health.capacities.GetLevel(PawnCapacityDefOf.Consciousness);
+				var infectedMovingAfterAnesthetic = infected.health.capacities.GetLevel(PawnCapacityDefOf.Moving);
+				if (ZombieRuntimeActions.KillPawnToCorpse(deadInfected, out var deadInfectedCorpse, out error) == false)
+					return false;
+				var deadInfectedConsciousness = deadInfected.health.capacities.GetLevel(PawnCapacityDefOf.Consciousness);
+
+				var controlMentalStarted = controlMental.mindState.mentalStateHandler.TryStartMentalState(MentalStateDefOf.Berserk, "Zombieland bridge control", true, true);
+				var chainsawDroppedAfterMental = controlMentalStarted
+					&& controlMental.equipment.Primary == null
+					&& controlMentalChainsaw.Spawned
+					&& ReferenceEquals(controlMentalChainsaw.pawn, null)
+					&& controlMentalChainsaw.Position == controlMental.Position;
+				var infectedMentalStarted = infectedMental.mindState.mentalStateHandler.TryStartMentalState(MentalStateDefOf.Berserk, "Zombieland bridge infected", true, true);
+
+				var controlNeedVanilla = Approximately(controlNeedAfterSet, requestedNeedLevel);
+				var infectedNeedForcedAverage = Approximately(infectedNeedAfterLowSet, 0.5f) && Approximately(infectedNeedAfterHighSet, 0.5f);
+				var controlPainVanilla = controlPainAfterCut > 0.001f;
+				var infectedPainSuppressed = Approximately(infectedPainAfterCut, 0f);
+				var controlCapacitySuppressed = controlConsciousnessAfterAnesthetic < 0.5f;
+				var infectedCapacityFull = Approximately(infectedConsciousnessAfterAnesthetic, 1f) && Approximately(infectedMovingAfterAnesthetic, 1f);
+				var deadInfectedCapacityVanilla = deadInfectedConsciousness <= 0.001f;
+				var infectedMentalSuppressed = controlMentalStarted && infectedMentalStarted == false;
+
+				evidence = new
+				{
+					control = DescribePawn(control),
+					infected = DescribePawn(infected),
+					deadInfected = DescribePawn(deadInfected),
+					controlMental = DescribePawn(controlMental),
+					infectedMental = DescribePawn(infectedMental),
+					infectedBite = infectedBite.LabelCap,
+					infectedMentalBite = infectedMentalBite.LabelCap,
+					trackedCount = tracked.Count,
+					chainsawId,
+					chainsawEquippedBeforeMental,
+					chainsawDroppedAfterMental,
+					chainsawSpawnedAfterMental = controlMentalChainsaw.Spawned,
+					chainsawPositionAfterMental = ZombieRuntimeActions.DescribeCell(controlMentalChainsaw.Position),
+					requestedNeedLevel,
+					controlNeedAfterSet,
+					infectedNeedAfterLowSet,
+					infectedNeedAfterHighSet,
+					controlPainAfterCut,
+					infectedPainAfterCut,
+					controlConsciousnessAfterAnesthetic,
+					infectedConsciousnessAfterAnesthetic,
+					infectedMovingAfterAnesthetic,
+					deadInfectedConsciousness,
+					deadInfectedCorpse = DescribeCorpse(deadInfectedCorpse),
+					controlMentalStarted,
+					infectedMentalStarted,
+					controlNeedVanilla,
+					infectedNeedForcedAverage,
+					controlPainVanilla,
+					infectedPainSuppressed,
+					controlCapacitySuppressed,
+					infectedCapacityFull,
+					deadInfectedCapacityVanilla,
+					infectedMentalSuppressed
+				};
+				return controlNeedVanilla
+					&& infectedNeedForcedAverage
+					&& controlPainVanilla
+					&& infectedPainSuppressed
+					&& controlCapacitySuppressed
+					&& infectedCapacityFull
+					&& deadInfectedCapacityVanilla
+					&& infectedMentalSuppressed
+					&& chainsawEquippedBeforeMental
+					&& chainsawDroppedAfterMental;
+			}
+			finally
+			{
+				RestoreTrackedPawn(tracked, control, controlWasTracked);
+				RestoreTrackedPawn(tracked, infected, infectedWasTracked);
+				RestoreTrackedPawn(tracked, deadInfected, deadInfectedWasTracked);
+				RestoreTrackedPawn(tracked, controlMental, controlMentalWasTracked);
+				RestoreTrackedPawn(tracked, infectedMental, infectedMentalWasTracked);
+			}
+		}
+
+		static void RestoreTrackedPawn(HashSet<Pawn> tracked, Pawn pawn, bool wasTracked)
+		{
+			if (wasTracked)
+				tracked.Add(pawn);
+			else
+				tracked.Remove(pawn);
+		}
+
+		static bool TryApplyPainfulCut(Pawn pawn, out string error)
+		{
+			error = null;
+			var part = pawn.health.hediffSet.GetNotMissingParts(BodyPartHeight.Undefined, BodyPartDepth.Outside)
+				.FirstOrDefault(record => record.def == BodyPartDefOf.Torso)
+				?? pawn.health.hediffSet.GetNotMissingParts(BodyPartHeight.Undefined, BodyPartDepth.Outside).FirstOrDefault();
+			if (part == null)
+			{
+				error = $"Could not find a cut target body part for {pawn.LabelShort}.";
+				return false;
+			}
+			var cut = HediffMaker.MakeHediff(HediffDefOf.Cut, pawn, part);
+			cut.Severity = 8f;
+			pawn.health.AddHediff(cut, part, new DamageInfo(DamageDefOf.Cut, 8f));
+			return true;
 		}
 
 		static readonly FieldInfo thingFactionIntField = typeof(Thing).GetField("factionInt", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);

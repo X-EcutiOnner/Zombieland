@@ -884,6 +884,8 @@ namespace ZombieLand
 			fuel.stackCount = Math.Min(ThingDefOf.Chemfuel.stackLimit, refuelable.GetFuelCountToFullyRefuel());
 			GenSpawn.Spawn(fuel, chainsawCell + IntVec3.South, map, WipeMode.Vanish);
 			refuelable.Refuel(new List<Thing> { fuel });
+			var refuelableStats = VerifyRefuelableSpecialDisplayStats(refuelable.Props);
+			var refuelableGizmoGuard = VerifyRefuelableFuelStatusGizmoGuard(refuelable);
 			var fuelBeforeEquip = refuelable.Fuel;
 			chainsaw.DeSpawn();
 			actor.equipment.AddEquipment(chainsaw);
@@ -891,6 +893,7 @@ namespace ZombieLand
 			actor.drafter.Drafted = true;
 			var equipped = ReferenceEquals(actor.equipment.Primary, chainsaw);
 			var pawnSet = ReferenceEquals(chainsaw.pawn, actor);
+			var movementAngle = VerifyChainsawMovementAngle(map, actor, chainsaw);
 			var gizmos = chainsaw.GetGizmos().ToArray();
 			var toggle = gizmos.OfType<Command_Action>().FirstOrDefault(command => command.disabled == false);
 			var toggleAvailable = toggle != null;
@@ -924,6 +927,9 @@ namespace ZombieLand
 			{
 				success = equipped
 					&& pawnSet
+					&& ObjectSuccess(movementAngle)
+					&& ObjectSuccess(refuelableStats)
+					&& ObjectSuccess(refuelableGizmoGuard)
 					&& toggleAvailable
 					&& runningAfterToggle
 					&& fuelAfterTicks < fuelAfterToggle
@@ -947,6 +953,9 @@ namespace ZombieLand
 				},
 				actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
 				chainsawCell = ZombieRuntimeActions.DescribeCell(chainsawCell),
+				movementAngle,
+				refuelableStats,
+				refuelableGizmoGuard,
 				gizmoCount = gizmos.Length,
 				toggleAvailable,
 				runningAfterToggle,
@@ -957,6 +966,221 @@ namespace ZombieLand
 				fuelDeltaWhileRunning = fuelAfterToggle - fuelAfterTicks,
 				hasFuelAfter = refuelable.HasFuel,
 				destroyedZombies,
+				samples
+			};
+		}
+
+		static object VerifyRefuelableFuelStatusGizmoGuard(CompRefuelable refuelable)
+		{
+			var target = typeof(Gizmo_SetFuelLevel).GetMethod(
+				nameof(Gizmo_SetFuelLevel.GizmoOnGUI),
+				BindingFlags.Instance | BindingFlags.Public);
+			var patchInfo = target == null ? null : HarmonyLib.Harmony.GetPatchInfo(target);
+			var prefix = patchInfo?.Prefixes
+				.Select(patch => patch.PatchMethod)
+				.FirstOrDefault(method => method.DeclaringType?.Name?.Contains("Gizmo_RefuelableFuelStatus_GizmoOnGUI_Patch") == true);
+			if (target == null || prefix == null)
+			{
+				return new
+				{
+					success = false,
+					targetFound = target != null,
+					prefixFound = prefix != null,
+					error = "Could not find the installed Gizmo_SetFuelLevel.GizmoOnGUI prefix."
+				};
+			}
+
+			var nullPrefixResult = (bool)prefix.Invoke(null, new object[] { null });
+			var normalPrefixResult = (bool)prefix.Invoke(null, new object[] { refuelable });
+			var normalGizmo = new Gizmo_SetFuelLevel(refuelable);
+			var nullGizmo = new Gizmo_SetFuelLevel(null);
+
+			return new
+			{
+				success = nullPrefixResult == false
+					&& normalPrefixResult
+					&& refuelable != null
+					&& normalGizmo.Visible
+					&& nullGizmo != null,
+				target = $"{target.DeclaringType?.FullName}.{target.Name}",
+				prefix = $"{prefix.DeclaringType?.FullName}.{prefix.Name}",
+				nullRefuelablePrefixResult = nullPrefixResult,
+				normalRefuelablePrefixResult = normalPrefixResult,
+				normalGizmo = new
+				{
+					normalGizmo.Visible,
+					widthAt140 = normalGizmo.GetWidth(140f),
+					refuelable.Fuel,
+					refuelable.TargetFuelLevel,
+					refuelable.HasFuel
+				}
+			};
+		}
+
+		static object VerifyRefuelableSpecialDisplayStats(CompProperties_Refuelable chainsawRefuelableProps)
+		{
+			if (chainsawRefuelableProps == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Chainsaw refuelable props were null."
+				};
+			}
+
+			var chainsawEntries = chainsawRefuelableProps
+				.SpecialDisplayStats(StatRequest.For(CustomDefs.Chainsaw, null))
+				.ToList();
+			var chainsawFuelEntry = chainsawEntries.FirstOrDefault(entry =>
+				entry.category == StatCategoryDefOf.Weapon_Melee
+				&& entry.ValueString == ((int)chainsawRefuelableProps.fuelCapacity).ToString());
+
+			var vanillaRefuelableDef = DefDatabase<ThingDef>.AllDefs
+				.Where(def => def != CustomDefs.Chainsaw)
+				.Where(def => def.building?.IsTurret == true)
+				.Select(def => new
+				{
+					def,
+					props = def.GetCompProperties<CompProperties_Refuelable>()
+				})
+				.FirstOrDefault(item => item.props != null);
+			if (vanillaRefuelableDef == null)
+			{
+				return new
+				{
+					success = false,
+					chainsawEntries = chainsawEntries.Select(DescribeStatDrawEntry).ToArray(),
+					error = "No vanilla refuelable turret definition was available for the pass-through stat probe."
+				};
+			}
+
+			var vanillaEntries = vanillaRefuelableDef.props
+				.SpecialDisplayStats(StatRequest.For(vanillaRefuelableDef.def, null))
+				.ToList();
+			var vanillaShotsEntry = vanillaEntries.FirstOrDefault(entry =>
+				entry.category == StatCategoryDefOf.Building
+				&& entry.ValueString == ((int)vanillaRefuelableDef.props.fuelCapacity).ToString());
+
+			return new
+			{
+				success = chainsawEntries.Count == 1
+					&& chainsawFuelEntry != null
+					&& vanillaShotsEntry != null
+					&& vanillaEntries.Any(entry => entry.category == StatCategoryDefOf.Weapon_Melee) == false,
+				chainsaw = new
+				{
+					def = CustomDefs.Chainsaw.defName,
+					fuelCapacity = chainsawRefuelableProps.fuelCapacity,
+					fuelLabel = chainsawRefuelableProps.FuelLabel,
+					entries = chainsawEntries.Select(DescribeStatDrawEntry).ToArray()
+				},
+				vanillaRefuelable = new
+				{
+					def = vanillaRefuelableDef.def.defName,
+					fuelCapacity = vanillaRefuelableDef.props.fuelCapacity,
+					fuelLabel = vanillaRefuelableDef.props.FuelLabel,
+					entries = vanillaEntries.Select(DescribeStatDrawEntry).ToArray()
+				}
+			};
+		}
+
+		static object DescribeStatDrawEntry(StatDrawEntry entry)
+		{
+			return new
+			{
+				category = entry.category?.defName,
+				stat = entry.stat?.defName,
+				label = entry.LabelCap,
+				value = entry.ValueString,
+				priority = entry.DisplayPriorityWithinCategory
+			};
+		}
+
+		static object VerifyChainsawMovementAngle(Map map, Pawn actor, Chainsaw chainsaw)
+		{
+			if (actor?.pather == null || chainsaw == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Chainsaw movement angle probe requires a spawned pawn with a path follower and chainsaw."
+				};
+			}
+
+			var origin = actor.Position;
+			var destination = GenRadial.RadialCellsAround(origin, 16f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.DistanceTo(origin) >= 8f)
+				.Where(cell => actor.CanReach(cell, PathEndMode.OnCell, Danger.Deadly))
+				.OrderByDescending(cell => cell.DistanceToSquared(origin))
+				.FirstOrDefault();
+			if (destination.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					error = "No reachable destination was found for the chainsaw movement angle probe."
+				};
+			}
+
+			var wasSwinging = chainsaw.swinging;
+			var angleBefore = chainsaw.angle;
+			chainsaw.angle = 359f;
+			actor.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+			actor.pather.StartPath(destination, PathEndMode.OnCell);
+
+			var samples = new List<object>();
+			object successSample = null;
+			for (var tick = 1; tick <= 60; tick++)
+			{
+				AdvanceGameTicks(1);
+				var nextCell = actor.pather.nextCell;
+				var hasMoveDelta = nextCell.IsValid && nextCell != actor.Position;
+				var expectedAngle = hasMoveDelta ? (nextCell - actor.Position).AngleFlat : float.NaN;
+				var angleDelta = hasMoveDelta ? Mathf.Abs(Mathf.DeltaAngle(chainsaw.angle, expectedAngle)) : float.NaN;
+				var angleMatches = hasMoveDelta && angleDelta < 0.01f;
+
+				if (tick <= 3 || angleMatches || tick == 60)
+				{
+					var sample = new
+					{
+						tick,
+						position = ZombieRuntimeActions.DescribeCell(actor.Position),
+						nextCell = nextCell.IsValid ? ZombieRuntimeActions.DescribeCell(nextCell) : null,
+						actor.pather.Moving,
+						actor.pather.MovingNow,
+						chainsaw.swinging,
+						chainsaw.angle,
+						expectedAngle,
+						angleDelta,
+						angleMatches
+					};
+					samples.Add(sample);
+					if (angleMatches && successSample == null)
+						successSample = sample;
+				}
+
+				if (angleMatches)
+					break;
+			}
+
+			actor.pather.StopDead();
+
+			return new
+			{
+				success = successSample != null && wasSwinging == false && chainsaw.swinging == false,
+				actor = DescribePawn(actor),
+				origin = ZombieRuntimeActions.DescribeCell(origin),
+				destination = ZombieRuntimeActions.DescribeCell(destination),
+				wasSwinging,
+				stillNotSwinging = chainsaw.swinging == false,
+				angleBefore,
+				angleAfter = chainsaw.angle,
+				successSample,
 				samples
 			};
 		}
@@ -1050,12 +1274,15 @@ namespace ZombieLand
 				};
 			}
 
+			var meleeSuppression = VerifyMeleeAttackSuppression(map, actor, zombie, actorCell + new IntVec3(8, 0, 0));
+			var rotationSuppression = VerifyChainsawRotationSuppression(actor, chainsaw);
+
 			var tickManager = map.GetComponent<TickManager>();
 			var victimHeadsBefore = tickManager?.victimHeads?.Count ?? 0;
 			var hitPointsBefore = chainsaw.HitPoints;
 			var fuelBefore = refuelable.Fuel;
 			var toggle = chainsaw.GetGizmos().OfType<Command_Action>().FirstOrDefault(command => command.disabled == false);
-			toggle?.action();
+			var floatMenuMeleeActions = VerifyFloatMenuMeleeActions(map, actor, zombie, actorCell + new IntVec3(-8, 0, 0), toggle);
 			chainsaw.angle = targetIndex * 45f + 22.5f;
 			var runningAfterToggle = chainsaw.running;
 			var samples = new List<object>();
@@ -1091,6 +1318,9 @@ namespace ZombieLand
 			return new
 			{
 				success = runningAfterToggle
+					&& ObjectSuccess(meleeSuppression)
+					&& ObjectSuccess(floatMenuMeleeActions)
+					&& ObjectSuccess(rotationSuppression)
 					&& tickHit > 0
 					&& zombie.Dead
 					&& victimHeadsAfter > victimHeadsBefore
@@ -1100,6 +1330,9 @@ namespace ZombieLand
 				destroyedZombies,
 				actor = DescribePawn(actor),
 				zombie = DescribeZombie(zombie),
+				meleeSuppression,
+				floatMenuMeleeActions,
+				rotationSuppression,
 				cells = new
 				{
 					actor = ZombieRuntimeActions.DescribeCell(actorCell),
@@ -1129,6 +1362,193 @@ namespace ZombieLand
 					chainsaw.angle
 				},
 				samples
+			};
+		}
+
+		static object VerifyChainsawRotationSuppression(Pawn chainsawPawn, Chainsaw chainsaw)
+		{
+			if (chainsawPawn?.rotationTracker == null || chainsaw == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Chainsaw rotation suppression probe requires a pawn rotation tracker and chainsaw."
+				};
+			}
+
+			chainsawPawn.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+			chainsawPawn.pather?.StopDead();
+			chainsawPawn.Rotation = Rot4.North;
+			chainsaw.swinging = true;
+			chainsawPawn.rotationTracker.UpdateRotation();
+			var swingingRotation = chainsawPawn.Rotation;
+
+			chainsawPawn.Rotation = Rot4.North;
+			chainsaw.swinging = false;
+			chainsawPawn.rotationTracker.UpdateRotation();
+			var normalRotation = chainsawPawn.Rotation;
+
+			return new
+			{
+				success = swingingRotation == Rot4.North
+					&& normalRotation == Rot4.South
+					&& chainsaw.swinging == false,
+				chainsawPawn = DescribePawn(chainsawPawn),
+				startRotation = Rot4.North.ToString(),
+				swingingRotation = swingingRotation.ToString(),
+				normalRotation = normalRotation.ToString(),
+				restoredSwinging = chainsaw.swinging == false,
+				drafted = chainsawPawn.Drafted
+			};
+		}
+
+		static object VerifyFloatMenuMeleeActions(Map map, Pawn chainsawPawn, Zombie normalZombie, IntVec3 controlRoot, Command_Action toggle)
+		{
+			if (chainsawPawn == null || normalZombie == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Float-menu melee action probe requires a chainsaw pawn and normal zombie."
+				};
+			}
+			if (toggle == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Chainsaw had no enabled toggle action for the running float-menu probe."
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, controlRoot, 20f, out var controlCell, out var controlError) == false)
+				return controlError;
+
+			var controlPawn = GenerateAreaWorkflowPawn(Faction.OfPlayer, true);
+			GenSpawn.Spawn(controlPawn, controlCell, map, Rot4.South);
+			DisablePawnWork(controlPawn);
+			controlPawn.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			controlPawn.drafter.Drafted = true;
+
+			var stoppedRunningBefore = chainsawPawn.equipment?.Primary is Chainsaw { running: true };
+			var stoppedAction = FloatMenuUtility.GetMeleeAttackAction(chainsawPawn, new LocalTargetInfo(normalZombie), out var stoppedFailStr);
+			var ordinaryAction = FloatMenuUtility.GetMeleeAttackAction(controlPawn, new LocalTargetInfo(normalZombie), out var ordinaryFailStr);
+			toggle.action();
+			var runningAfterToggle = chainsawPawn.equipment?.Primary is Chainsaw { running: true };
+			var runningAction = FloatMenuUtility.GetMeleeAttackAction(chainsawPawn, new LocalTargetInfo(normalZombie), out var runningFailStr);
+			var controlDescription = DescribePawn(controlPawn);
+			var controlViolentDisabled = controlPawn.WorkTagIsDisabled(WorkTags.Violent);
+			controlPawn.Destroy(DestroyMode.Vanish);
+
+			return new
+			{
+				success = stoppedAction != null
+					&& ordinaryAction != null
+					&& runningAfterToggle
+					&& runningAction == null,
+				chainsawPawn = DescribePawn(chainsawPawn),
+				controlPawn = controlDescription,
+				target = DescribeZombie(normalZombie),
+				stoppedChainsaw = new
+				{
+					actionAvailable = stoppedAction != null,
+					failStr = stoppedFailStr?.ToString(),
+					running = stoppedRunningBefore
+				},
+				ordinaryPawn = new
+				{
+					actionAvailable = ordinaryAction != null,
+					failStr = ordinaryFailStr?.ToString(),
+					violentDisabled = controlViolentDisabled
+				},
+				runningChainsaw = new
+				{
+					actionAvailable = runningAction != null,
+					failStr = runningFailStr?.ToString(),
+					runningAfterToggle
+				}
+			};
+		}
+
+		static object VerifyMeleeAttackSuppression(Map map, Pawn chainsawPawn, Zombie normalZombie, IntVec3 root)
+		{
+			if (chainsawPawn?.meleeVerbs == null || normalZombie == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Chainsaw melee suppression probe requires a chainsaw pawn and normal zombie."
+				};
+			}
+
+			var injuryBefore = TotalInjurySeverity(normalZombie);
+			var chainsawTryMeleeResult = chainsawPawn.meleeVerbs.TryMeleeAttack(normalZombie);
+			var injuryAfter = TotalInjurySeverity(normalZombie);
+
+			if (TryFindClearSpawnCell(map, root, 20f, out var spitterCell, out var spitterError) == false)
+				return spitterError;
+			if (TryFindClearSpawnCell(map, spitterCell + new IntVec3(4, 0, 0), 20f, out var blobCell, out var blobError) == false)
+				return blobError;
+
+			var zombieFaction = Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies);
+			var spitter = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieSpitter, zombieFaction) as ZombieSpitter;
+			var blob = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieBlob, zombieFaction) as ZombieBlob;
+			if (spitter == null || blob == null)
+			{
+				return new
+				{
+					success = false,
+					spitterGenerated = spitter != null,
+					blobGenerated = blob != null,
+					error = "Could not generate both special zombie melee-suppression pawns."
+				};
+			}
+
+			GenSpawn.Spawn(spitter, spitterCell, map, Rot4.South, WipeMode.Vanish, false);
+			GenSpawn.Spawn(blob, blobCell, map, Rot4.South, WipeMode.Vanish, false);
+			if (spitter.meleeVerbs == null || blob.meleeVerbs == null)
+			{
+				var spitterDescription = DescribePawn(spitter);
+				var blobDescription = DescribePawn(blob);
+				var spitterHasMeleeVerbs = spitter.meleeVerbs != null;
+				var blobHasMeleeVerbs = blob.meleeVerbs != null;
+				spitter.Destroy(DestroyMode.Vanish);
+				blob.Destroy(DestroyMode.Vanish);
+				return new
+				{
+					success = false,
+					spitter = spitterDescription,
+					blob = blobDescription,
+					spitterHasMeleeVerbs,
+					blobHasMeleeVerbs,
+					error = "Generated special zombies did not both have melee verb trackers."
+				};
+			}
+
+			var spitterTryMeleeResult = spitter.meleeVerbs.TryMeleeAttack(chainsawPawn);
+			var blobTryMeleeResult = blob.meleeVerbs.TryMeleeAttack(chainsawPawn);
+			var spitterEvidence = DescribePawn(spitter);
+			var blobEvidence = DescribePawn(blob);
+			spitter.Destroy(DestroyMode.Vanish);
+			blob.Destroy(DestroyMode.Vanish);
+
+			return new
+			{
+				success = chainsawTryMeleeResult == false
+					&& injuryAfter == injuryBefore
+					&& normalZombie.Dead == false
+					&& normalZombie.Destroyed == false
+					&& spitterTryMeleeResult == false
+					&& blobTryMeleeResult == false,
+				chainsawPawn = DescribePawn(chainsawPawn),
+				normalZombie = DescribeZombie(normalZombie),
+				chainsawTryMeleeResult,
+				normalZombieInjuryBefore = injuryBefore,
+				normalZombieInjuryAfter = injuryAfter,
+				spitter = spitterEvidence,
+				blob = blobEvidence,
+				spitterTryMeleeResult,
+				blobTryMeleeResult
 			};
 		}
 

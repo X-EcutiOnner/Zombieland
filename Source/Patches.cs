@@ -1019,12 +1019,77 @@ namespace ZombieLand
 				return Rand.Chance(Constants.COLONISTS_HIT_ZOMBIES_CHANCE);
 			}
 
+			static bool Prefix(Verb_LaunchProjectile __instance, ref bool __result)
+			{
+				if (SkipMissingShotsAtZombies(__instance, __instance.currentTarget) == false)
+					return true;
+
+				if (__instance.currentTarget.HasThing && __instance.currentTarget.Thing.Map != __instance.caster.Map)
+				{
+					__result = false;
+					return false;
+				}
+
+				var projectileDef = __instance.Projectile;
+				if (projectileDef == null)
+				{
+					__result = false;
+					return false;
+				}
+
+				var hasShootLine = __instance.TryFindShootLineFromTo(__instance.caster.Position, __instance.currentTarget, out var resultingLine);
+				if (__instance.verbProps.stopBurstWithoutLos && hasShootLine == false)
+				{
+					__result = false;
+					return false;
+				}
+
+				var equipmentSource = __instance.EquipmentSource;
+				if (equipmentSource != null)
+				{
+					equipmentSource.GetComp<CompChangeableProjectile>()?.Notify_ProjectileLaunched();
+					equipmentSource.GetComp<CompApparelVerbOwner_Charged>()?.UsedOnce();
+				}
+				__instance.lastShotTick = Find.TickManager.TicksGame;
+
+				Thing manningPawn = __instance.caster;
+				Thing projectileEquipment = equipmentSource;
+				var compMannable = __instance.caster.TryGetComp<CompMannable>();
+				if (compMannable?.ManningPawn != null)
+				{
+					manningPawn = compMannable.ManningPawn;
+					projectileEquipment = __instance.caster;
+				}
+
+				var projectile = (Projectile)GenSpawn.Spawn(projectileDef, resultingLine.Source, __instance.caster.Map);
+				if (projectileEquipment != null && projectileEquipment.TryGetComp(out CompUniqueWeapon comp))
+					foreach (var trait in comp.TraitsListForReading)
+					{
+						if (trait.damageDefOverride != null)
+							projectile.damageDefOverride = trait.damageDefOverride;
+						if (trait.extraDamages.NullOrEmpty() == false)
+						{
+							projectile.extraDamages ??= new List<ExtraDamage>();
+							projectile.extraDamages.AddRange(trait.extraDamages);
+						}
+					}
+
+				var projectileHitFlags = ProjectileHitFlags.IntendedTarget;
+				if (__instance.canHitNonTargetPawnsNow)
+					projectileHitFlags |= ProjectileHitFlags.NonTargetPawns;
+				if (__instance.currentTarget.HasThing == false || __instance.currentTarget.Thing.def.Fillage == FillCategory.Full)
+					projectileHitFlags |= ProjectileHitFlags.NonTargetWorld;
+
+				projectile.Launch(manningPawn, __instance.caster.DrawPos, __instance.currentTarget, __instance.currentTarget, projectileHitFlags, __instance.preventFriendlyFire, projectileEquipment);
+				__result = true;
+				return false;
+			}
+
 			[HarmonyPriority(Priority.First)]
 			static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
 			{
 				var m_SkipMissingShotsAtZombies = SymbolExtensions.GetMethodInfo(() => SkipMissingShotsAtZombies(null, null));
 				var p_forcedMissRadius = AccessTools.DeclaredPropertyGetter(typeof(VerbProperties), nameof(VerbProperties.ForcedMissRadius));
-				var f_canHitNonTargetPawnsNow = AccessTools.DeclaredField(typeof(Verb), "canHitNonTargetPawnsNow");
 				var f_currentTarget = typeof(Verb).Field("currentTarget");
 
 				var skipLabel = generator.DefineLabel();
@@ -1033,23 +1098,22 @@ namespace ZombieLand
 				var idx1 = inList.FirstIndexOf(instr => instr.Calls(p_forcedMissRadius));
 				if (idx1 > 0 && idx1 < inList.Count())
 				{
+					var insertIndex = idx1;
+					while (insertIndex > 0 && inList[insertIndex].opcode != OpCodes.Ldarg_0)
+						insertIndex--;
+					var toHitIndex = inList.FirstIndexOf(instr => instr.LoadsConstant("ToHit"));
 					var jumpToIndex = -1;
-					for (var i = inList.Count - 1; i >= 3; i--)
-					{
-						if (inList[i].LoadsField(f_canHitNonTargetPawnsNow) == false)
-							continue;
-						i -= 3;
-						if (inList[i].LoadsConstant(1))
+					for (var i = toHitIndex; i >= 0; i--)
+						if (inList[i].LoadsConstant((int)ProjectileHitFlags.IntendedTarget))
 						{
 							jumpToIndex = i;
 							break;
 						}
-					}
-					if (jumpToIndex >= 0)
+					if (jumpToIndex >= 0 && inList[insertIndex].opcode == OpCodes.Ldarg_0)
 					{
 						inList[jumpToIndex].labels.Add(skipLabel);
 
-						idx1 -= 2;
+						idx1 = insertIndex;
 						inList.Insert(idx1++, new CodeInstruction(OpCodes.Ldarg_0));
 						inList.Insert(idx1++, new CodeInstruction(OpCodes.Ldarg_0));
 						inList.Insert(idx1++, new CodeInstruction(OpCodes.Ldfld, f_currentTarget));
@@ -1057,7 +1121,7 @@ namespace ZombieLand
 						inList.Insert(idx1++, new CodeInstruction(OpCodes.Brtrue, skipLabel));
 					}
 					else
-						Error("No ldfld canHitNonTargetPawnsNow prefixed by ldc.i4.1;stloc.s;ldarg.0 in Verb_LaunchProjectile.TryCastShot");
+						Error("No safe ForcedMissRadius insert point or ToHit intended-target branch in Verb_LaunchProjectile.TryCastShot");
 				}
 				else
 					Error("No ldfld forcedMissRadius in Verb_LaunchProjectile.TryCastShot");

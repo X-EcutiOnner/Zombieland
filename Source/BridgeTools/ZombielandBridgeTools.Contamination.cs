@@ -718,6 +718,7 @@ namespace ZombieLand
 			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
 			DisablePawnWork(human);
 			human.needs?.AddOrRemoveNeedsAsAppropriate();
+			var needGate = VerifyContaminationNeedGate(human);
 			human.ClearContamination();
 			var initial = DescribeContamination(human);
 
@@ -755,9 +756,128 @@ namespace ZombieLand
 			var splitCount = split?.stackCount ?? 0;
 			var componentAfterSplitContamination = component.GetContamination();
 			var splitContamination = split?.GetContamination() ?? 0f;
+			var groundRepair = VerifyGroundRepair(map);
+			var destroyCleanup = VerifyDestroyCleanup(map, itemCell + new IntVec3(3, 0, 0));
 
 			static bool Close(float? value, float expected) => value.HasValue && Mathf.Abs(value.Value - expected) < 0.0001f;
 			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+
+			static object VerifyContaminationNeedGate(Pawn pawn)
+			{
+				var shouldHaveNeedMethod = typeof(Pawn_NeedsTracker).GetMethod("ShouldHaveNeed", BindingFlags.Instance | BindingFlags.NonPublic);
+				if (pawn?.needs == null || CustomDefs.Contamination == null || shouldHaveNeedMethod == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Need gate probe requires pawn needs, CustomDefs.Contamination, and Pawn_NeedsTracker.ShouldHaveNeed."
+					};
+				}
+
+				var originalContamination = Constants.CONTAMINATION;
+				try
+				{
+					Constants.CONTAMINATION = true;
+					pawn.needs.AddOrRemoveNeedsAsAppropriate();
+					var enabledShouldHaveNeed = (bool)shouldHaveNeedMethod.Invoke(pawn.needs, new object[] { CustomDefs.Contamination });
+					var enabledHasNeed = pawn.needs.TryGetNeed<ContaminationNeed>() != null;
+
+					Constants.CONTAMINATION = false;
+					var disabledShouldHaveNeed = (bool)shouldHaveNeedMethod.Invoke(pawn.needs, new object[] { CustomDefs.Contamination });
+					pawn.needs.AddOrRemoveNeedsAsAppropriate();
+					var disabledHasNeed = pawn.needs.TryGetNeed<ContaminationNeed>() != null;
+
+					return new
+					{
+						success = enabledShouldHaveNeed
+							&& enabledHasNeed
+							&& disabledShouldHaveNeed == false
+							&& disabledHasNeed == false,
+						enabledShouldHaveNeed,
+						enabledHasNeed,
+						disabledShouldHaveNeed,
+						disabledHasNeed
+					};
+				}
+				finally
+				{
+					Constants.CONTAMINATION = originalContamination;
+					pawn.needs.AddOrRemoveNeedsAsAppropriate();
+				}
+			}
+
+			static object VerifyGroundRepair(Map map)
+			{
+				var manager = ContaminationManager.Instance;
+				var mapIndex = map.Index;
+				var hadOriginal = manager.grounds.TryGetValue(mapIndex, out var originalGrid);
+				try
+				{
+					manager.grounds.Remove(mapIndex);
+					var missingBeforeRepair = manager.grounds.ContainsKey(mapIndex) == false;
+					manager.FixGrounds();
+					var repaired = manager.grounds.TryGetValue(mapIndex, out var repairedGrid)
+						&& repairedGrid.map == map
+						&& repairedGrid.cells.Length == map.Size.x * map.Size.z
+						&& repairedGrid.mapSizeX == map.Size.x;
+
+					return new
+					{
+						success = missingBeforeRepair && repaired,
+						mapIndex,
+						hadOriginal,
+						missingBeforeRepair,
+						repaired,
+						repairedCellCount = repairedGrid?.cells?.Length ?? 0,
+						expectedCellCount = map.Size.x * map.Size.z
+					};
+				}
+				finally
+				{
+					if (hadOriginal)
+						manager.grounds[mapIndex] = originalGrid;
+					else
+						manager.grounds.Remove(mapIndex);
+				}
+			}
+
+			static object VerifyDestroyCleanup(Map map, IntVec3 root)
+			{
+				var manager = ContaminationManager.Instance;
+				if (TryFindClearSpawnCell(map, root, 8f, out var destroyCell, out var spawnError) == false)
+					return spawnError;
+
+				var thing = ThingMaker.MakeThing(ThingDefOf.ComponentIndustrial);
+				try
+				{
+					GenSpawn.Spawn(thing, destroyCell, map, WipeMode.Vanish);
+					thing.SetContamination(0.37f);
+					var id = thing.thingIDNumber;
+					var contaminationBeforeDestroy = thing.GetContamination();
+					var entryBeforeDestroy = manager.contaminations.ContainsKey(id);
+					thing.Destroy(DestroyMode.Vanish);
+					var destroyed = thing.Destroyed;
+					var entryAfterDestroy = manager.contaminations.ContainsKey(id);
+
+					return new
+					{
+						success = entryBeforeDestroy
+							&& destroyed
+							&& entryAfterDestroy == false,
+						thing = ZombieRuntimeActions.StableThingId(thing),
+						cell = ZombieRuntimeActions.DescribeCell(destroyCell),
+						contaminationBeforeDestroy,
+						entryBeforeDestroy,
+						destroyed,
+						entryAfterDestroy
+					};
+				}
+				finally
+				{
+					if (thing.Destroyed == false)
+						thing.Destroy(DestroyMode.Vanish);
+				}
+			}
 
 			var expectedEffectivenessAfterAdd = Mathf.Max(0.05f, 1f - addValue * ZombieSettings.Values.contamination.contaminationEffectivenessPercentage);
 			var expectedEffectivenessAfterSet = Mathf.Max(0.05f, 1f - setValue * ZombieSettings.Values.contamination.contaminationEffectivenessPercentage);
@@ -802,10 +922,14 @@ namespace ZombieLand
 					&& highNonLethalAddSynced
 					&& clampSynced
 					&& secondClearSynced
-					&& splitPropagated,
+					&& splitPropagated
+					&& ObjectSuccess(needGate)
+					&& ObjectSuccess(groundRepair)
+					&& ObjectSuccess(destroyCleanup),
 				human = DescribePawn(human),
 				humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
 				itemCell = ZombieRuntimeActions.DescribeCell(itemCell),
+				needGate,
 				initial,
 				afterAdd,
 				afterSet,
@@ -824,6 +948,8 @@ namespace ZombieLand
 				componentBeforeSplitContamination,
 				componentAfterSplitContamination,
 				splitContamination,
+				groundRepair,
+				destroyCleanup,
 				initialClean,
 				addSynced,
 				setSynced,
@@ -2847,6 +2973,8 @@ namespace ZombieLand
 				var stackAfter = feed.Destroyed ? 0 : feed.stackCount;
 				var mealContamination = meal?.GetContamination() ?? -1f;
 				var expectedMealContamination = feedContamination * transferFactor;
+				var activeFeedField = typeof(Building_NutrientPasteDispenser_TryDispenseFood_Patch).GetField("activeFeed", BindingFlags.Static | BindingFlags.NonPublic);
+				var activeFeedCleared = activeFeedField?.GetValue(null) == null;
 
 				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
 				var mealProduced = canDispense
@@ -2862,7 +2990,7 @@ namespace ZombieLand
 
 				return new
 				{
-					success = mealProduced && contaminationTransferred,
+					success = mealProduced && contaminationTransferred && activeFeedCleared,
 					dispenser = ZombieRuntimeActions.StableThingId(dispenser),
 					dispenserCell = ZombieRuntimeActions.DescribeCell(dispenserCell),
 					hopper = ZombieRuntimeActions.StableThingId(hopper),
@@ -2881,6 +3009,7 @@ namespace ZombieLand
 					mealContamination,
 					expectedMealContamination,
 					transferFactor,
+					activeFeedCleared,
 					mealProduced,
 					contaminationTransferred
 				};

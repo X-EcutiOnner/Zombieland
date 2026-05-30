@@ -1,5 +1,7 @@
+using HarmonyLib;
 using RimBridgeServer.Annotations;
 using RimWorld;
+using RimWorld.Planet;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -1682,13 +1684,15 @@ namespace ZombieLand
 				&& playerFaction != null
 				&& playerFaction.HostileTo(zombieFaction)
 				&& zombieFaction.HostileTo(playerFaction);
+			var goodwillSuppression = VerifyZombieFactionGoodwillSuppression(zombieFaction, playerFaction, nonZombieFactions);
 
 			return new
 			{
 				success = zombieFactions.Length == 1
 					&& zombieFaction != null
 					&& playerHostility
-					&& mutualHostility,
+					&& mutualHostility
+					&& ObjectSuccess(goodwillSuppression),
 				zombieFactionCount = zombieFactions.Length,
 				zombieFaction = zombieFaction == null ? null : new
 				{
@@ -1700,10 +1704,172 @@ namespace ZombieLand
 				playerFaction = playerFaction?.def?.defName,
 				playerHostility,
 				mutualHostility,
+				goodwillSuppression,
 				factionCount = factions.Length,
 				nonZombieFactionCount = nonZombieFactions.Length,
 				relations
 			};
+		}
+
+		static object VerifyZombieFactionGoodwillSuppression(Faction zombieFaction, Faction playerFaction, Faction[] nonZombieFactions)
+		{
+			if (zombieFaction == null || playerFaction == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Zombie and player factions are required for the goodwill suppression probe."
+				};
+			}
+
+			var target = typeof(Faction).GetMethod(nameof(Faction.TryAffectGoodwillWith), new[]
+			{
+				typeof(Faction),
+				typeof(int),
+				typeof(bool),
+				typeof(bool),
+				typeof(HistoryEventDef),
+				typeof(GlobalTargetInfo?)
+			});
+			var patchInfo = target == null ? null : HarmonyLib.Harmony.GetPatchInfo(target);
+			var prefix = patchInfo?.Prefixes
+				.Select(patch => patch.PatchMethod)
+				.FirstOrDefault(method => method.DeclaringType?.Name?.Contains("Faction_TryAffectGoodwillWith_Patch") == true);
+			if (target == null || prefix == null)
+			{
+				return new
+				{
+					success = false,
+					targetFound = target != null,
+					prefixFound = prefix != null,
+					error = "Could not find the installed Faction.TryAffectGoodwillWith prefix."
+				};
+			}
+
+			var prefixArgs = new object[] { true, zombieFaction, playerFaction };
+			var prefixContinue = (bool)prefix.Invoke(null, prefixArgs);
+			var prefixResult = (bool)prefixArgs[0];
+
+			var zombieToPlayerBefore = DescribeFactionRelation(zombieFaction, playerFaction);
+			var playerToZombieBefore = DescribeFactionRelation(playerFaction, zombieFaction);
+			var zombieCallResult = zombieFaction.TryAffectGoodwillWith(playerFaction, 25, false, false);
+			var reverseZombieCallResult = playerFaction.TryAffectGoodwillWith(zombieFaction, 25, false, false);
+			var zombieToPlayerAfter = DescribeFactionRelation(zombieFaction, playerFaction);
+			var playerToZombieAfter = DescribeFactionRelation(playerFaction, zombieFaction);
+
+			var ordinaryPair = FindOrdinaryGoodwillPair(playerFaction, nonZombieFactions);
+			if (ordinaryPair == null)
+			{
+				return new
+				{
+					success = false,
+					prefix = $"{prefix.DeclaringType?.FullName}.{prefix.Name}",
+					prefixContinue,
+					prefixResult,
+					zombieCallResult,
+					reverseZombieCallResult,
+					zombieToPlayerBefore,
+					zombieToPlayerAfter,
+					playerToZombieBefore,
+					playerToZombieAfter,
+					error = "No ordinary goodwill-capable faction pair was available."
+				};
+			}
+
+			var ordinaryRelation = ordinaryPair.RelationWith(playerFaction);
+			var playerRelation = playerFaction.RelationWith(ordinaryPair);
+			var ordinaryBefore = DescribeFactionRelation(ordinaryPair, playerFaction);
+			var playerBefore = DescribeFactionRelation(playerFaction, ordinaryPair);
+			var ordinaryResult = false;
+			object ordinaryAfter;
+			object playerAfter;
+			try
+			{
+				ordinaryRelation.baseGoodwill = 0;
+				ordinaryRelation.kind = FactionRelationKind.Neutral;
+				playerRelation.baseGoodwill = 0;
+				playerRelation.kind = FactionRelationKind.Neutral;
+				ordinaryResult = ordinaryPair.TryAffectGoodwillWith(playerFaction, 15, false, false);
+				ordinaryAfter = DescribeFactionRelation(ordinaryPair, playerFaction);
+				playerAfter = DescribeFactionRelation(playerFaction, ordinaryPair);
+			}
+			finally
+			{
+				RestoreFactionRelation(ordinaryRelation, ordinaryBefore);
+				RestoreFactionRelation(playerRelation, playerBefore);
+			}
+
+			return new
+			{
+				success = prefixContinue == false
+					&& prefixResult == false
+					&& zombieCallResult == false
+					&& reverseZombieCallResult == false
+					&& FactionRelationUnchanged(zombieToPlayerBefore, zombieToPlayerAfter)
+					&& FactionRelationUnchanged(playerToZombieBefore, playerToZombieAfter)
+					&& ordinaryResult
+					&& (int)ordinaryAfter.GetType().GetProperty("baseGoodwill")?.GetValue(ordinaryAfter) == 15
+					&& (int)playerAfter.GetType().GetProperty("baseGoodwill")?.GetValue(playerAfter) == 15,
+				target = $"{target.DeclaringType?.FullName}.{target.Name}",
+				prefix = $"{prefix.DeclaringType?.FullName}.{prefix.Name}",
+				prefixContinue,
+				prefixResult,
+				zombie = new
+				{
+					zombieCallResult,
+					reverseZombieCallResult,
+					zombieToPlayerBefore,
+					zombieToPlayerAfter,
+					playerToZombieBefore,
+					playerToZombieAfter
+				},
+				ordinary = new
+				{
+					faction = ordinaryPair.def?.defName,
+					factionName = ordinaryPair.Name,
+					ordinaryResult,
+					before = ordinaryBefore,
+					after = ordinaryAfter,
+					playerBefore,
+					playerAfter
+				}
+			};
+		}
+
+		static Faction FindOrdinaryGoodwillPair(Faction playerFaction, IEnumerable<Faction> factions)
+		{
+			return factions
+				.Where(faction => faction != null && faction != playerFaction)
+				.Where(faction => faction.def != ZombieDefOf.Zombies)
+				.Where(faction => faction.HasGoodwill && playerFaction.HasGoodwill)
+				.Where(faction => faction.def.permanentEnemy == false && faction.defeated == false)
+				.Where(faction => faction.RelationWith(playerFaction, true) != null)
+				.Where(faction => playerFaction.RelationWith(faction, true) != null)
+				.FirstOrDefault();
+		}
+
+		static object DescribeFactionRelation(Faction faction, Faction other)
+		{
+			var relation = faction.RelationWith(other);
+			return new
+			{
+				faction = faction.def?.defName,
+				other = other.def?.defName,
+				relation.baseGoodwill,
+				kind = relation.kind.ToString()
+			};
+		}
+
+		static void RestoreFactionRelation(FactionRelation relation, object snapshot)
+		{
+			relation.baseGoodwill = (int)snapshot.GetType().GetProperty("baseGoodwill").GetValue(snapshot);
+			relation.kind = (FactionRelationKind)Enum.Parse(typeof(FactionRelationKind), (string)snapshot.GetType().GetProperty("kind").GetValue(snapshot));
+		}
+
+		static bool FactionRelationUnchanged(object before, object after)
+		{
+			return (int)before.GetType().GetProperty("baseGoodwill").GetValue(before) == (int)after.GetType().GetProperty("baseGoodwill").GetValue(after)
+				&& (string)before.GetType().GetProperty("kind").GetValue(before) == (string)after.GetType().GetProperty("kind").GetValue(after);
 		}
 
 		[Tool("zombieland/zombie_ticking_budget_contract", Description = "Verify reduced zombie ticking counts production ticks and keeps move-speed compensation active.")]
@@ -1782,6 +1948,11 @@ namespace ZombieLand
 				FillZombieTickPercent(targetPercent);
 				var throttledSpeed = sample?.GetStatValue(StatDefOf.MoveSpeed) ?? 0f;
 				var speedRatio = normalSpeed == 0f ? 0f : throttledSpeed / normalSpeed;
+				var awakeCapacity = VerifyZombieAwakeCapacity(map, sample, root + new IntVec3(-8, 0, -8));
+				var makeDowned = VerifyMakeDownedPatch(map, root + new IntVec3(-16, 0, -8));
+				var idleState = VerifyNothingHappeningSpawnGate();
+				var gunshotPheromones = VerifyGunshotPheromoneBump(map, root + new IntVec3(-18, 0, 10));
+				var collisionSuppression = VerifyZombieCollisionSuppression(map, sample);
 
 				return new
 				{
@@ -1792,7 +1963,12 @@ namespace ZombieLand
 						&& subsetCount == expectedTicking
 						&& tickedCount == subsetCount
 						&& allTickedWereLive
-						&& speedRatio > 3.5f,
+						&& speedRatio > 3.5f
+						&& ObjectSuccess(awakeCapacity)
+						&& ObjectSuccess(makeDowned)
+						&& ObjectSuccess(idleState)
+						&& ObjectSuccess(gunshotPheromones)
+						&& ObjectSuccess(collisionSuppression),
 					destroyedExisting,
 					spawnedCount = spawned.Count,
 					liveCachedBefore,
@@ -1805,6 +1981,11 @@ namespace ZombieLand
 					normalSpeed,
 					throttledSpeed,
 					speedRatio,
+					awakeCapacity,
+					makeDowned,
+					idleState,
+					gunshotPheromones,
+					collisionSuppression,
 					sample = DescribeZombie(sample)
 				};
 			}
@@ -1819,6 +2000,351 @@ namespace ZombieLand
 				tickManager.currentZombiesTicking = Array.Empty<Zombie>();
 				tickManager.currentZombiesTickingIndex = 0;
 			}
+		}
+
+		static object VerifyNothingHappeningSpawnGate()
+		{
+			var originalSpawning = ZombieGenerator.ZombiesSpawning;
+			try
+			{
+				ZombieGenerator.ZombiesSpawning = 0;
+				if (TryNothingHappeningInGame(out var noSpawnNothingHappening, out var noSpawnError) == false)
+				{
+					return new
+					{
+						success = false,
+						error = noSpawnError
+					};
+				}
+
+				ZombieGenerator.ZombiesSpawning = 1;
+				if (TryNothingHappeningInGame(out var spawningNothingHappening, out var spawnError) == false)
+				{
+					return new
+					{
+						success = false,
+						error = spawnError
+					};
+				}
+
+				return new
+				{
+					success = noSpawnNothingHappening && spawningNothingHappening == false,
+					noSpawnNothingHappening,
+					spawningNothingHappening,
+					originalSpawning
+				};
+			}
+			finally
+			{
+				ZombieGenerator.ZombiesSpawning = originalSpawning;
+			}
+		}
+
+			static object VerifyGunshotPheromoneBump(Map map, IntVec3 root)
+			{
+				var spawnedThings = new List<Thing>();
+				var originalInstinct = ZombieSettings.Values.zombieInstinct;
+				try
+				{
+					if (TryFindClearSpawnCell(map, root, 16f, out var shooterCell, out var shooterError) == false)
+						return shooterError;
+					var targetCell = GenRadial.RadialCellsAround(shooterCell, 12f, false)
+						.Where(cell => cell.InBounds(map))
+						.Where(cell => cell.Standable(map))
+						.Where(cell => cell.Fogged(map) == false)
+						.Where(cell => cell.DistanceTo(shooterCell) >= 6f)
+						.Where(cell => GenSight.LineOfSight(shooterCell, cell, map, true))
+						.OrderBy(cell => cell.DistanceToSquared(shooterCell))
+						.FirstOrDefault();
+					if (targetCell.IsValid == false)
+					{
+						return new
+						{
+							success = false,
+							shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
+							error = "No line-of-sight target cell was found for the gunshot pheromone fixture."
+						};
+					}
+					if (TryFindClearSpawnCell(map, shooterCell + new IntVec3(0, 0, 3), 10f, out var spitterCell, out var spitterError) == false)
+						return spitterError;
+
+					ZombieSettings.Values.zombieInstinct = ZombieInstinct.Normal;
+					var shooter = SpawnArmedAreaWorkflowPawn(map, "ZL_Core_GunshotPheromoneShooter", shooterCell, Faction.OfPlayer, spawnedThings);
+					var projectileDef = shooter?.equipment?.PrimaryEq?.PrimaryVerb?.verbProps?.defaultProjectile;
+					if (shooter == null || projectileDef == null)
+					{
+						return new
+						{
+							success = false,
+							shooter = DescribePawn(shooter),
+							error = "Could not create an armed pawn with a default projectile."
+						};
+					}
+
+					const float radius = 16f;
+					ClearPheromones(map, shooterCell, radius);
+					var beforeHumanShot = SnapshotPheromones(map, shooterCell, radius);
+					var humanProjectile = (Projectile)GenSpawn.Spawn(ThingMaker.MakeThing(projectileDef), shooterCell, map, WipeMode.Vanish);
+					spawnedThings.Add(humanProjectile);
+					humanProjectile.Launch(shooter, shooter.DrawPos, targetCell, targetCell, ProjectileHitFlags.IntendedTarget, false, shooter.equipment.Primary);
+					var humanChange = DescribePheromoneChange(map, beforeHumanShot, out var humanChangedCount);
+
+					var spitter = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieSpitter, Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies)) as ZombieSpitter;
+					GenSpawn.Spawn(spitter, spitterCell, map, Rot4.South, WipeMode.Vanish, false);
+					spawnedThings.Add(spitter);
+					ClearPheromones(map, spitterCell, radius);
+					var beforeSpitterShot = SnapshotPheromones(map, spitterCell, radius);
+					var spitterProjectile = (Projectile)GenSpawn.Spawn(ThingMaker.MakeThing(projectileDef), spitterCell, map, WipeMode.Vanish);
+					spawnedThings.Add(spitterProjectile);
+					spitterProjectile.Launch(spitter, spitter.DrawPos, targetCell, targetCell, ProjectileHitFlags.IntendedTarget, false, null);
+					var spitterChange = DescribePheromoneChange(map, beforeSpitterShot, out var spitterChangedCount);
+
+					return new
+					{
+						success = humanChangedCount > 0 && spitterChangedCount == 0,
+						shooter = DescribePawn(shooter),
+						spitter = DescribeZombie(spitter),
+						projectileDef = projectileDef.defName,
+						shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
+						spitterCell = ZombieRuntimeActions.DescribeCell(spitterCell),
+						targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+						humanChangedCount,
+						spitterChangedCount,
+						humanChange,
+						spitterChange
+					};
+				}
+				finally
+				{
+					ZombieSettings.Values.zombieInstinct = originalInstinct;
+					foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+						thing.Destroy(DestroyMode.Vanish);
+				}
+			}
+
+			static object VerifyZombieCollisionSuppression(Map map, Zombie zombie)
+			{
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						error = "No sample zombie was available for collision suppression."
+					};
+				}
+
+				var probeCell = zombie.Position + IntVec3.East;
+				if (probeCell.InBounds(map) == false)
+					probeCell = zombie.Position;
+				if (TryWillCollideWithPawnAt(zombie, probeCell, out var zombieWillCollide, out var collideError) == false)
+				{
+					return new
+					{
+						success = false,
+						zombie = DescribeZombie(zombie),
+						error = collideError
+					};
+				}
+				var collisionOffset = PawnCollisionTweenerUtility.PawnCollisionPosOffsetFor(zombie);
+				return new
+				{
+					success = zombieWillCollide == false && collisionOffset == Vector3.zero,
+					zombie = DescribeZombie(zombie),
+					probeCell = ZombieRuntimeActions.DescribeCell(probeCell),
+					zombieWillCollide,
+					collisionOffset = new
+					{
+						collisionOffset.x,
+						collisionOffset.y,
+						collisionOffset.z
+					}
+				};
+			}
+
+			static object VerifyZombieAwakeCapacity(Map map, Zombie zombie, IntVec3 humanRoot)
+			{
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No sample zombie was available for the awake-capacity probe."
+				};
+			}
+
+			Pawn human = null;
+			try
+			{
+				if (TryFindClearSpawnCell(map, humanRoot, 16f, out var humanCell, out var spawnError) == false)
+					return spawnError;
+
+				human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(human, humanCell, map, WipeMode.Vanish);
+				DisablePawnWork(human);
+
+				ApplyAnestheticCapacitySuppressor(zombie);
+				ApplyAnestheticCapacitySuppressor(human);
+				var zombieCase = DescribeAwakeCapacityCase("zombie", zombie);
+				var humanCase = DescribeAwakeCapacityCase("humanControl", human);
+				var zombieConsciousness = zombie.health.capacities.GetLevel(PawnCapacityDefOf.Consciousness);
+				var humanConsciousness = human.health.capacities.GetLevel(PawnCapacityDefOf.Consciousness);
+
+				return new
+				{
+					success = zombieConsciousness < 0.3f
+						&& zombie.health.capacities.CanBeAwake
+						&& humanConsciousness < 0.3f
+						&& human.health.capacities.CanBeAwake == false,
+					zombie = zombieCase,
+					humanControl = humanCase
+				};
+			}
+			finally
+			{
+				if (human != null && human.Destroyed == false)
+					human.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object VerifyMakeDownedPatch(Map map, IntVec3 root)
+		{
+			var makeDowned = AccessTools.Method(typeof(Pawn_HealthTracker), nameof(Pawn_HealthTracker.MakeDowned));
+			if (makeDowned == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect Pawn_HealthTracker.MakeDowned."
+				};
+			}
+
+			var pawns = new List<Pawn>();
+			var oldKillCircleMultiplier = Constants.KILL_CIRCLE_RADIUS_MULTIPLIER;
+			try
+			{
+				if (TryFindClearSpawnCell(map, root, 18f, out var humanCell, out var humanError) == false)
+					return humanError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(4, 0, 0), 10f, out var spitterCell, out var spitterError) == false)
+					return spitterError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(8, 0, 0), 10f, out var blobCell, out var blobError) == false)
+					return blobError;
+
+				var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(human, humanCell, map, WipeMode.Vanish);
+				DisablePawnWork(human);
+				pawns.Add(human);
+
+				var spitter = SpawnMakeDownedSpitter(map, spitterCell);
+				var blob = SpawnMakeDownedBlob(map, blobCell);
+				if (spitter == null || blob == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not spawn both spitter and blob for MakeDowned probe.",
+						spitterSpawned = spitter != null,
+						blobSpawned = blob != null
+					};
+				}
+				pawns.Add(spitter);
+				pawns.Add(blob);
+
+				Constants.KILL_CIRCLE_RADIUS_MULTIPLIER = 2f;
+				var grid = map.GetGrid();
+				var timestamp = Tools.Ticks();
+				var radius = Tools.RadiusForPawn(human) * Constants.KILL_CIRCLE_RADIUS_MULTIPLIER;
+				radius /= ZombieSettings.Values.zombieInstinct.HalfToDoubleValue();
+				var seededCells = GenRadial.RadialCellsAround(human.Position, radius, true)
+					.Where(cell => cell.InBounds(map))
+					.ToArray();
+				foreach (var cell in seededCells)
+					grid.SetTimestamp(cell, timestamp - 1);
+				grid.SetTimestamp(human.Position, timestamp);
+				var seededBefore = seededCells.Count(cell => grid.GetTimestamp(cell) > 0);
+
+				InvokeMakeDowned(makeDowned, human);
+				InvokeMakeDowned(makeDowned, spitter);
+				InvokeMakeDowned(makeDowned, blob);
+
+				var unclearedAfter = seededCells.Count(cell => grid.GetTimestamp(cell) > 0);
+				var humanDowned = human.health.Downed;
+				var spitterDowned = spitter.health.Downed;
+				var blobDowned = blob.health.Downed;
+
+				return new
+				{
+					success = seededBefore > 0
+						&& unclearedAfter == 0
+						&& humanDowned
+						&& spitterDowned == false
+						&& blobDowned == false,
+					seededBefore,
+					unclearedAfter,
+					radius,
+					human = DescribePawn(human),
+					spitter = DescribeZombie(spitter),
+					blob = DescribeZombie(blob),
+					humanHealthDowned = humanDowned,
+					spitterHealthDowned = spitterDowned,
+					blobHealthDowned = blobDowned
+				};
+			}
+			finally
+			{
+				Constants.KILL_CIRCLE_RADIUS_MULTIPLIER = oldKillCircleMultiplier;
+				foreach (var pawn in pawns)
+					if (pawn != null && pawn.Destroyed == false)
+						pawn.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static void InvokeMakeDowned(MethodInfo makeDowned, Pawn pawn)
+		{
+			makeDowned.Invoke(pawn.health, new object[makeDowned.GetParameters().Length]);
+		}
+
+		static ZombieSpitter SpawnMakeDownedSpitter(Map map, IntVec3 cell)
+		{
+			var existing = CurrentZombies(map).OfType<ZombieSpitter>().Select(StableId).ToHashSet();
+			ZombieSpitter.Spawn(map, cell);
+			var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+				.FirstOrDefault(candidate => existing.Contains(StableId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
+			if (spitter != null)
+				spitter.state = SpitterState.Idle;
+			return spitter;
+		}
+
+		static ZombieBlob SpawnMakeDownedBlob(Map map, IntVec3 cell)
+		{
+			var existing = CurrentZombies(map).OfType<ZombieBlob>().Select(StableId).ToHashSet();
+			ZombieBlob.Spawn(map, cell);
+			return CurrentZombies(map).OfType<ZombieBlob>()
+				.FirstOrDefault(candidate => existing.Contains(StableId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
+		}
+
+		static void ApplyAnestheticCapacitySuppressor(Pawn pawn)
+		{
+			var anesthetic = HediffMaker.MakeHediff(HediffDefOf.Anesthetic, pawn);
+			anesthetic.Severity = 1f;
+			pawn.health.hediffSet.AddDirect(anesthetic);
+		}
+
+		static object DescribeAwakeCapacityCase(string label, Pawn pawn)
+		{
+			return new
+			{
+				label,
+				pawn = DescribePawn(pawn),
+				consciousness = pawn.health.capacities.GetLevel(PawnCapacityDefOf.Consciousness),
+				canBeAwake = pawn.health.capacities.CanBeAwake,
+				raceAlwaysAwake = pawn.RaceProps.alwaysAwake,
+				deactivated = pawn.IsDeactivated(),
+				healthDowned = pawn.health.Downed,
+				publicDowned = pawn.Downed
+			};
 		}
 
 		[Tool("zombieland/zombie_ticking_feedback_contract", Description = "Verify the TickManagerUpdate patch resets, sizes, and feeds back the adaptive zombie tick budget.")]
@@ -1917,6 +2443,18 @@ namespace ZombieLand
 					&& prefixCurrentTicking > 0
 					&& prefixCurrentTicking < prefixMaxTicking;
 
+				ZombieTicker.zombiesTicked = 0;
+				tickManager.currentZombiesTicking = Array.Empty<Zombie>();
+				tickManager.currentZombiesTickingIndex = 0;
+				gameTickManager.DoSingleTick();
+				var singleTickExpected = Mathf.FloorToInt(liveCached * prefixPercentRead);
+				var singleTickTickedCount = ZombieTicker.zombiesTicked;
+				var singleTickSubsetCount = tickManager.currentZombiesTicking?.Length ?? 0;
+				var singleTickAllLive = tickManager.currentZombiesTicking?.All(zombie => zombie.Spawned && zombie.Dead == false) ?? false;
+				var singleTickRanBudget = singleTickTickedCount == singleTickExpected
+					&& singleTickSubsetCount == singleTickExpected
+					&& singleTickAllLive;
+
 				FillZombieTickPercent(1f);
 				ZombieTicker.currentTicking = 400;
 				ZombieTicker.zombiesTicked = 100;
@@ -1935,6 +2473,7 @@ namespace ZombieLand
 				{
 					success = prefixResetCounter
 						&& prefixSizedBudget
+						&& singleTickRanBudget
 						&& postfixReducedBudget,
 					destroyedExisting,
 					spawnedCount = spawned.Count,
@@ -1948,6 +2487,15 @@ namespace ZombieLand
 						prefixResetCounter,
 						prefixSizedBudget,
 						timeSpeed = gameTickManager.CurTimeSpeed.ToString()
+					},
+					singleTick = new
+					{
+						expectedTicking = singleTickExpected,
+						updateBudgetTicking = prefixCurrentTicking,
+						singleTickTickedCount,
+						singleTickSubsetCount,
+						singleTickAllLive,
+						singleTickRanBudget
 					},
 					postfix = new
 					{

@@ -19,6 +19,10 @@ namespace ZombieLand
 			var tickManager = map?.GetComponent<TickManager>();
 			var zombies = CurrentZombies(map);
 			var gameTickManager = Current.Game?.tickManager;
+			var survivalMeal = ThingDefOf.MealSurvivalPack;
+			var zombieRace = CustomDefs.Zombie?.race;
+			var settings = ZombieSettings.Values;
+			var zombieGrid = DescribeZombieGrid(map, zombies);
 
 			return new
 			{
@@ -46,11 +50,75 @@ namespace ZombieLand
 					currentColonyPoints = tickManager.currentColonyPoints,
 					spawningInProgress = ZombieGenerator.ZombiesSpawning
 				},
+				zombieGrid,
 				spawnedZombieCount = zombies.Length,
 				ordinaryZombies = zombies.OfType<Zombie>().Count(),
 				blobs = zombies.OfType<ZombieBlob>().Count(),
 				spitters = zombies.OfType<ZombieSpitter>().Count(),
+				finalizedDefs = new
+				{
+					replaceTwinkieSetting = settings?.replaceTwinkie,
+					survivalMealLabel = survivalMeal?.label,
+					survivalMealDescription = survivalMeal?.description,
+					survivalMealGraphicType = survivalMeal?.graphic?.GetType().FullName,
+					survivalMealCachedGraphicType = survivalMeal?.graphicData?.cachedGraphic?.GetType().FullName,
+					twinkieCachedGraphicApplied = survivalMeal?.graphicData?.cachedGraphic == GraphicsDatabase.twinkieGraphic,
+					healthFactorSetting = settings?.healthFactor,
+					zombieBaseHealthScale = zombieRace?.baseHealthScale,
+					zombieHealthScaleApplied = settings != null
+						&& zombieRace != null
+						&& Mathf.Abs(zombieRace.baseHealthScale - settings.healthFactor) < 0.0001f
+				},
 				timeSpeed = gameTickManager == null ? null : gameTickManager.CurTimeSpeed.ToString()
+			};
+		}
+
+		static object DescribeZombieGrid(Map map, Pawn[] zombies)
+		{
+			if (map == null)
+				return null;
+
+			var grid = map.GetGrid();
+			var nonZeroCells = 0;
+			var totalZombieCount = 0;
+			var maxZombieCount = 0;
+			grid.IterateCells((_, _, cell) =>
+			{
+				if (cell.zombieCount == 0)
+					return;
+				nonZeroCells++;
+				totalZombieCount += cell.zombieCount;
+				maxZombieCount = Math.Max(maxZombieCount, cell.zombieCount);
+			});
+
+			var liveOrdinaryZombies = zombies.OfType<Zombie>()
+				.Where(zombie => zombie.Spawned && zombie.Dead == false)
+				.ToArray();
+			var liveOrdinaryWithGridCount = liveOrdinaryZombies.Count(zombie =>
+				grid.GetZombieCount(zombie.Position) > 0
+				|| (zombie.lastGotoPosition.IsValid && grid.GetZombieCount(zombie.lastGotoPosition) > 0));
+
+			return new
+			{
+				nonZeroCells,
+				totalZombieCount,
+				maxZombieCount,
+				liveOrdinaryZombieCount = liveOrdinaryZombies.Length,
+				liveOrdinaryWithGridCount,
+				liveOrdinaryWithoutGridCount = liveOrdinaryZombies.Length - liveOrdinaryWithGridCount,
+				samples = liveOrdinaryZombies
+					.OrderBy(zombie => zombie.ThingID, StringComparer.Ordinal)
+					.Take(12)
+					.Select(zombie => new
+					{
+						pawnId = ZombieRuntimeActions.StableThingId(zombie),
+						thingId = zombie.ThingID,
+						position = ZombieRuntimeActions.DescribeCell(zombie.Position),
+						lastGotoPosition = zombie.lastGotoPosition.IsValid ? ZombieRuntimeActions.DescribeCell(zombie.lastGotoPosition) : null,
+						gridAtPosition = grid.GetZombieCount(zombie.Position),
+						gridAtLastGotoPosition = zombie.lastGotoPosition.IsValid ? grid.GetZombieCount(zombie.lastGotoPosition) : 0
+					})
+					.ToArray()
 			};
 		}
 
@@ -310,7 +378,8 @@ namespace ZombieLand
 			[ToolParameter(Description = "Target x coordinate. Use -1 with z -1 to spawn near map center.", Required = false, DefaultValue = -1)] int x = -1,
 			[ToolParameter(Description = "Target z coordinate. Use -1 with x -1 to spawn near map center.", Required = false, DefaultValue = -1)] int z = -1,
 			[ToolParameter(Description = "Zombie type name, for example Normal, Random, SuicideBomber, ToxicSplasher, TankyOperator, Miner, Electrifier, Albino, DarkSlimer, or Healer.", Required = false, DefaultValue = "Normal")] string type = "Normal",
-			[ToolParameter(Description = "When true, skip the underground dig-out state and spawn the zombie standing.", Required = false, DefaultValue = true)] bool appearDirectly = true)
+			[ToolParameter(Description = "When true, skip the underground dig-out state and spawn the zombie standing.", Required = false, DefaultValue = true)] bool appearDirectly = true,
+			[ToolParameter(Description = "Optional zombie-count grid value to seed at the spawned cell for save/load and pathing fixtures. Zero leaves the grid untouched.", Required = false, DefaultValue = 0)] int primeGridCount = 0)
 		{
 			if (TryParseZombieType(type, out var zombieType, out var parseError) == false)
 			{
@@ -335,12 +404,25 @@ namespace ZombieLand
 			}
 
 			var tickManager = map.GetComponent<TickManager>();
+			var grid = map.GetGrid();
+			var primedGridCount = 0;
+			if (primeGridCount > 0)
+			{
+				var current = grid.GetZombieCount(cell);
+				if (current != 0)
+					grid.ChangeZombieCount(cell, -current);
+				grid.ChangeZombieCount(cell, primeGridCount);
+				zombie.lastGotoPosition = cell;
+				primedGridCount = grid.GetZombieCount(cell);
+			}
 			return new
 			{
 				success = zombie.Spawned,
 				requestedCell = ZombieRuntimeActions.DescribeCell(new IntVec3(x, 0, z)),
 				spawnCell = ZombieRuntimeActions.DescribeCell(cell),
 				appearDirectly,
+				primeGridCount,
+				primedGridCount,
 				zombie = DescribeZombie(zombie),
 				tickManagerCached = tickManager?.allZombiesCached?.Contains(zombie) ?? false
 			};

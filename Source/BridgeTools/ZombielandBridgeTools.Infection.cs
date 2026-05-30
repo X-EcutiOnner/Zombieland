@@ -106,7 +106,7 @@ namespace ZombieLand
 			};
 		}
 
-		[Tool("zombieland/infection_medical_state", Description = "Run compact medical patch contracts for zombie-bite natural healing, ShouldRemove persistence, and remove-body-part surgery targeting.")]
+		[Tool("zombieland/infection_medical_state", Description = "Run compact medical patch contracts for zombie-bite natural healing, Pawn.Tick state sync, ShouldRemove persistence, and remove-body-part surgery targeting.")]
 		public static object InfectionMedicalState()
 		{
 			var map = CurrentMap;
@@ -203,15 +203,17 @@ namespace ZombieLand
 				var removeBodyPartValid = bittenParts.Length > 0
 					&& missingBittenParts.Length == 0
 					&& duplicateParts.Length == 0;
+				var pawnTick = VerifyPawnTickPatch(map, patient.Position + new IntVec3(12, 0, 0), spawnedPawns);
 
 				return new
 				{
-					success = naturalHealingValid && shouldRemoveValid && removeBodyPartValid,
+					success = naturalHealingValid && shouldRemoveValid && removeBodyPartValid && ObjectSuccess(pawnTick),
 					patient = DescribePawn(patient),
 					infection = ZombieRuntimeActions.DescribePawnInfection(patient),
 					naturalHealingValid,
 					shouldRemoveValid,
 					removeBodyPartValid,
+					pawnTick,
 					healCases,
 					animalHealCase,
 					animalCase = animalCase.description,
@@ -232,6 +234,188 @@ namespace ZombieLand
 				foreach (var pawn in spawnedPawns.Where(pawn => pawn != null && pawn.Destroyed == false).ToArray())
 					pawn.Destroy(DestroyMode.Vanish);
 			}
+		}
+
+		static object VerifyPawnTickPatch(Map map, IntVec3 root, List<Pawn> spawnedPawns)
+		{
+			var tickMethod = typeof(Pawn).GetMethod("Tick", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (tickMethod == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find protected Verse.Pawn.Tick() by reflection."
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, root, 16f, out var infectionCell, out var infectionSpawnError) == false)
+				return infectionSpawnError;
+			if (TryFindClearSpawnCell(map, infectionCell + new IntVec3(4, 0, 0), 16f, out var cleanCell, out var cleanSpawnError) == false)
+				return cleanSpawnError;
+			if (TryFindClearSpawnCell(map, cleanCell + new IntVec3(4, 0, 0), 16f, out var contaminatedCell, out var contaminatedSpawnError) == false)
+				return contaminatedSpawnError;
+
+			var oldContamination = Constants.CONTAMINATION;
+			var oldEffectivenessPercentage = ZombieSettings.Values.contamination.contaminationEffectivenessPercentage;
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				Constants.CONTAMINATION = true;
+				ZombieSettings.Values.contamination.contaminationEffectivenessPercentage = 0.95f;
+
+				var infectionPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				var cleanPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				var contaminatedPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(infectionPawn, infectionCell, map, WipeMode.Vanish);
+				GenSpawn.Spawn(cleanPawn, cleanCell, map, WipeMode.Vanish);
+				GenSpawn.Spawn(contaminatedPawn, contaminatedCell, map, WipeMode.Vanish);
+				spawnedPawns.AddRange(new[] { infectionPawn, cleanPawn, contaminatedPawn });
+				DisablePawnWork(infectionPawn);
+				DisablePawnWork(cleanPawn);
+				DisablePawnWork(contaminatedPawn);
+
+				if (ZombieRuntimeActions.AddZombieBite(infectionPawn, "final", out var bite, out var biteError) == false)
+				{
+					return new
+					{
+						success = false,
+						pawn = DescribePawn(infectionPawn),
+						error = biteError
+					};
+				}
+
+				var biteState = bite.TendDuration?.GetInfectionState() ?? InfectionState.None;
+				var customStateBefore = infectionPawn.InfectionState();
+				tickMethod.Invoke(infectionPawn, Array.Empty<object>());
+				var customStateAfter = infectionPawn.InfectionState();
+				var infectionStateUpdated = customStateBefore == InfectionState.None
+					&& customStateAfter == biteState
+					&& biteState == InfectionState.Infecting;
+
+				if (TryEquipRunningChainsaw(cleanPawn, cleanCell, spawnedThings, out var cleanChainsaw, out var cleanRefuelable, out var cleanError) == false)
+					return cleanError;
+				if (TryEquipRunningChainsaw(contaminatedPawn, contaminatedCell, spawnedThings, out var contaminatedChainsaw, out var contaminatedRefuelable, out var contaminatedError) == false)
+					return contaminatedError;
+
+				contaminatedPawn.SetContamination(0.7f);
+				var cleanEffectiveness = cleanPawn.GetEffectiveness();
+				var contaminatedEffectiveness = contaminatedPawn.GetEffectiveness();
+				var cleanFuelBefore = cleanRefuelable.Fuel;
+				var contaminatedFuelBefore = contaminatedRefuelable.Fuel;
+
+				const int probeTicks = 40;
+				Rand.PushState(94031);
+				try
+				{
+					for (var i = 0; i < probeTicks; i++)
+						tickMethod.Invoke(cleanPawn, Array.Empty<object>());
+					for (var i = 0; i < probeTicks; i++)
+						tickMethod.Invoke(contaminatedPawn, Array.Empty<object>());
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				var cleanFuelAfter = cleanRefuelable.Fuel;
+				var contaminatedFuelAfter = contaminatedRefuelable.Fuel;
+				var cleanFuelDelta = cleanFuelBefore - cleanFuelAfter;
+				var contaminatedFuelDelta = contaminatedFuelBefore - contaminatedFuelAfter;
+				var contaminationGateReducedTicks = cleanFuelDelta > 0f
+					&& contaminatedPawn.Spawned
+					&& contaminatedPawn.Dead == false
+					&& contaminatedPawn.Downed == false
+					&& contaminatedEffectiveness < cleanEffectiveness
+					&& contaminatedFuelDelta >= 0f
+					&& contaminatedFuelDelta < cleanFuelDelta * 0.5f;
+
+				return new
+				{
+					success = infectionStateUpdated && contaminationGateReducedTicks,
+					infection = new
+					{
+						pawn = DescribePawn(infectionPawn),
+						biteState = biteState.ToString(),
+						customStateBefore = customStateBefore.ToString(),
+						customStateAfter = customStateAfter.ToString(),
+						infectionStateUpdated
+					},
+					contamination = new
+					{
+						probeTicks,
+						cleanPawn = DescribePawn(cleanPawn),
+						contaminatedPawn = DescribePawn(contaminatedPawn),
+						contaminatedPawnSpawnedAfterTicks = contaminatedPawn.Spawned,
+						contaminatedPawnDeadAfterTicks = contaminatedPawn.Dead,
+						contaminatedPawnDownedAfterTicks = contaminatedPawn.Downed,
+						cleanEffectiveness,
+						contaminatedEffectiveness,
+						cleanChainsaw = ZombieRuntimeActions.StableThingId(cleanChainsaw),
+						contaminatedChainsaw = ZombieRuntimeActions.StableThingId(contaminatedChainsaw),
+						cleanFuelBefore,
+						cleanFuelAfter,
+						cleanFuelDelta,
+						contaminatedFuelBefore,
+						contaminatedFuelAfter,
+						contaminatedFuelDelta,
+						contaminationGateReducedTicks
+					}
+				};
+			}
+			finally
+			{
+				Constants.CONTAMINATION = oldContamination;
+				ZombieSettings.Values.contamination.contaminationEffectivenessPercentage = oldEffectivenessPercentage;
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static bool TryEquipRunningChainsaw(Pawn pawn, IntVec3 pawnCell, List<Thing> spawnedThings, out Chainsaw chainsaw, out CompRefuelable refuelable, out object error)
+		{
+			chainsaw = null;
+			refuelable = null;
+			error = null;
+			pawn.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			var chainsawCell = pawnCell + IntVec3.East;
+			if (chainsawCell.InBounds(pawn.Map) == false || chainsawCell.Standable(pawn.Map) == false)
+				chainsawCell = pawnCell;
+
+			chainsaw = ThingMaker.MakeThing(CustomDefs.Chainsaw) as Chainsaw;
+			if (chainsaw == null)
+			{
+				error = new
+				{
+					success = false,
+					pawn = DescribePawn(pawn),
+					error = "Could not create Chainsaw."
+				};
+				return false;
+			}
+
+			GenSpawn.Spawn(chainsaw, chainsawCell, pawn.Map, WipeMode.Vanish);
+			refuelable = chainsaw.TryGetComp<CompRefuelable>();
+			if (refuelable == null)
+			{
+				error = new
+				{
+					success = false,
+					pawn = DescribePawn(pawn),
+					chainsaw = ZombieRuntimeActions.StableThingId(chainsaw),
+					error = "The spawned chainsaw did not have a refuelable comp."
+				};
+				return false;
+			}
+
+			var fuel = ThingMaker.MakeThing(ThingDefOf.Chemfuel);
+			fuel.stackCount = Math.Min(ThingDefOf.Chemfuel.stackLimit, refuelable.GetFuelCountToFullyRefuel());
+			GenSpawn.Spawn(fuel, chainsawCell + IntVec3.South, pawn.Map, WipeMode.Vanish);
+			spawnedThings.Add(fuel);
+			refuelable.Refuel(new List<Thing> { fuel });
+			chainsaw.DeSpawn();
+			pawn.equipment.AddEquipment(chainsaw);
+			chainsaw.StartMotor(true);
+			return true;
 		}
 
 		[Tool("zombieland/cure_zombie_infection_recipe", Description = "Apply the real cure-infection recipe worker with 100% serum and verify the cured corpse no longer queues conversion.")]

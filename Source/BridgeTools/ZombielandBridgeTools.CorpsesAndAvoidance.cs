@@ -12,10 +12,11 @@ namespace ZombieLand
 {
 	public sealed partial class ZombielandBridgeTools
 	{
-		[Tool("zombieland/convert_infected_corpse_to_zombie", Description = "Create an infected rotting corpse from a spawned pawn, verify Corpse.RotStageChanged queued it, then run that queued conversion.")]
+		[Tool("zombieland/convert_infected_corpse_to_zombie", Description = "Create an infected corpse from a spawned pawn, verify rot-stage or rare-tick conversion queuing, then run that queued conversion.")]
 		public static object ConvertInfectedCorpseToZombie(
 			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
-			[ToolParameter(Description = "Bite state to apply before death: harmful, final, or harmless.", Required = false, DefaultValue = "final")] string stage = "final")
+			[ToolParameter(Description = "Bite state to apply before death: harmful, final, or harmless.", Required = false, DefaultValue = "final")] string stage = "final",
+			[ToolParameter(Description = "Conversion trigger to exercise: rotStage or tickRare.", Required = false, DefaultValue = "rotStage")] string conversionTrigger = "rotStage")
 		{
 			var map = CurrentMap;
 			if (ZombieRuntimeActions.TryFindPawn(map, target, out var pawn, out var error) == false)
@@ -66,8 +67,10 @@ namespace ZombieLand
 				};
 			}
 
-			var corpseBeforeRot = DescribeCorpse(corpse);
-			if (ZombieRuntimeActions.TriggerCorpseRotStageChanged(corpse, out var rotStageBefore, out var rotStageAfter, out error) == false)
+			var normalizedTrigger = (conversionTrigger ?? "rotStage").Trim().ToLowerInvariant();
+			var corpseBeforeTrigger = DescribeCorpse(corpse);
+			object triggerEvidence;
+			if (TryTriggerCorpseConversion(corpse, map, normalizedTrigger, out triggerEvidence, out error) == false)
 			{
 				return new
 				{
@@ -76,12 +79,13 @@ namespace ZombieLand
 					targetThingId,
 					targetLabel,
 					biteLabel = bite.LabelCap,
-					corpse = corpseBeforeRot,
+					conversionTrigger = normalizedTrigger,
+					corpse = corpseBeforeTrigger,
 					error
 				};
 			}
 
-			var corpseAfterRot = DescribeCorpse(corpse);
+			var corpseAfterTrigger = DescribeCorpse(corpse);
 			var convertedQueuedCorpse = ZombieRuntimeActions.RunQueuedConversion(map, corpse, out var queueCountBeforeRun, out var queueCountAfterRun, out error);
 			var after = CurrentZombies(map);
 			var newZombies = after
@@ -96,11 +100,11 @@ namespace ZombieLand
 				targetThingId,
 				targetLabel,
 				stage = stage ?? "final",
+				conversionTrigger = normalizedTrigger,
 				biteLabel = bite.LabelCap,
-				rotStageBefore = rotStageBefore.ToString(),
-				rotStageAfter = rotStageAfter.ToString(),
-				corpseBeforeRot,
-				corpseAfterRot,
+				triggerEvidence,
+				corpseBeforeTrigger,
+				corpseAfterTrigger,
 				queuedConversionFound = convertedQueuedCorpse,
 				queueCountBeforeRun,
 				queueCountAfterRun,
@@ -110,6 +114,85 @@ namespace ZombieLand
 				newZombieCount = newZombies.Length,
 				newZombies
 			};
+		}
+
+		static bool TryTriggerCorpseConversion(Corpse corpse, Map map, string conversionTrigger, out object evidence, out string error)
+		{
+			evidence = null;
+			error = null;
+			if (conversionTrigger == "rotstage")
+			{
+				if (ZombieRuntimeActions.TriggerCorpseRotStageChanged(corpse, out var rotStageBefore, out var rotStageAfter, out error) == false)
+					return false;
+				evidence = new
+				{
+					trigger = "rotStage",
+					rotStageBefore = rotStageBefore.ToString(),
+					rotStageAfter = rotStageAfter.ToString()
+				};
+				return true;
+			}
+			if (conversionTrigger == "tickrare")
+				return TryTriggerCorpseTickRareConversion(corpse, map, out evidence, out error);
+
+			error = "conversionTrigger must be rotStage or tickRare.";
+			return false;
+		}
+
+		static bool TryTriggerCorpseTickRareConversion(Corpse corpse, Map map, out object evidence, out string error)
+		{
+			evidence = null;
+			error = null;
+			if (corpse == null || corpse.Destroyed)
+			{
+				error = "Target corpse is missing or destroyed.";
+				return false;
+			}
+			var pawn = corpse.InnerPawn;
+			if (pawn?.health?.hediffSet == null)
+			{
+				error = "Target corpse has no inner pawn health tracker.";
+				return false;
+			}
+			var queue = map?.GetComponent<TickManager>()?.colonistsToConvert;
+			if (queue == null)
+			{
+				error = "The current map has no Zombieland conversion queue.";
+				return false;
+			}
+
+			var infections = new List<Hediff_ZombieInfection>();
+			pawn.health.hediffSet.GetHediffs(ref infections);
+			if (infections.Count == 0)
+			{
+				error = "Target corpse inner pawn has no zombie infection hediff.";
+				return false;
+			}
+
+			var ticks = GenTicks.TicksGame;
+			var ticksBefore = infections.Select(infection => infection.ticksWhenBecomingZombie).ToArray();
+			foreach (var infection in infections)
+				infection.ticksWhenBecomingZombie = ticks - 1;
+			var queueCountBefore = queue.Count;
+			var queuedBefore = queue.Contains(corpse);
+			corpse.TickRare();
+			var queueCountAfter = queue.Count;
+			var queuedAfter = queue.Contains(corpse);
+
+			evidence = new
+			{
+				trigger = "tickRare",
+				ticksGame = ticks,
+				infectionCount = infections.Count,
+				ticksWhenBecomingZombieBefore = ticksBefore,
+				ticksWhenBecomingZombieAfter = infections.Select(infection => infection.ticksWhenBecomingZombie).ToArray(),
+				rotStage = corpse.GetRotStage().ToString(),
+				queueCountBefore,
+				queueCountAfter,
+				queuedBefore,
+				queuedAfter
+			};
+			return true;
 		}
 
 		[Tool("zombieland/double_tap_infected_corpse", Description = "Run the real DoubleTap job on an infected corpse and verify the missing brain prevents corpse conversion.")]

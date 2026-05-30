@@ -55,13 +55,15 @@ namespace ZombieLand
 				action = RunAreaWorkflowBehavior(map, fixtureAreas);
 			else if (normalizedActionMode == "targeting")
 				action = RunAreaWorkflowTargeting(map);
+			else if (normalizedActionMode == "ranged-projectiles")
+				action = RunAreaWorkflowRangedProjectiles(map);
 			else if (normalizedActionMode != "read")
 			{
 				return new
 				{
 					success = false,
 					actionMode,
-					error = "Unsupported area workflow actionMode. Use read, behavior, or targeting."
+					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, or ranged-projectiles."
 				};
 			}
 			var actionSucceeded = normalizedActionMode == "read"
@@ -1161,6 +1163,7 @@ namespace ZombieLand
 				var tarSmokeMeleeTargeting = VerifyAreaWorkflowTarSmokeMeleeTargeting(map, shooterCell, spawnedThings);
 				var tarSmokeAimChance = VerifyAreaWorkflowTarSmokeAimChance(map, shooterCell, spawnedThings);
 				var downedCombat = VerifyAreaWorkflowDownedCombat(map, shooterCell, spawnedThings);
+				var rangedProjectilePatches = VerifyAreaWorkflowRangedProjectilePatches(map, shooterCell + new IntVec3(24, 0, 13), spawnedThings);
 
 				var success = playerTargetIds.Contains(StableId(normal))
 					&& playerTargetIds.Contains(StableId(roped)) == false
@@ -1195,7 +1198,8 @@ namespace ZombieLand
 					&& ObjectSuccess(turretTargeting)
 					&& ObjectSuccess(tarSmokeMeleeTargeting)
 					&& ObjectSuccess(tarSmokeAimChance)
-					&& ObjectSuccess(downedCombat);
+					&& ObjectSuccess(downedCombat)
+					&& ObjectSuccess(rangedProjectilePatches);
 
 				return new
 				{
@@ -1271,7 +1275,8 @@ namespace ZombieLand
 					turretTargeting,
 					tarSmokeMeleeTargeting,
 					tarSmokeAimChance,
-					downedCombat
+					downedCombat,
+					rangedProjectilePatches
 				};
 			}
 			finally
@@ -1281,6 +1286,20 @@ namespace ZombieLand
 				ZombieSettings.Values.animalsAttackZombies = oldAnimalsAttackZombies;
 				ZombieSettings.Values.doubleTapRequired = oldDoubleTapRequired;
 				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowRangedProjectiles(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowRangedProjectilePatches(map, new IntVec3(114, 0, 113), spawnedThings);
+			}
+			finally
+			{
 				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
 					thing.Destroy(DestroyMode.Vanish);
 			}
@@ -2359,6 +2378,292 @@ namespace ZombieLand
 			{
 				RestoreZombieSettings(settingsSnapshot);
 			}
+		}
+
+		static object VerifyAreaWorkflowRangedProjectilePatches(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var settingsSnapshot = SnapshotZombieSettings();
+			var oldColonistsHitChance = Constants.COLONISTS_HIT_ZOMBIES_CHANCE;
+			var forcedMissRadiusField = AccessTools.Field(typeof(VerbProperties), "forcedMissRadius");
+			var warmupTimeField = AccessTools.Field(typeof(VerbProperties), "warmupTime");
+			var impactSomething = AccessTools.Method(typeof(Projectile), "ImpactSomething");
+			var destinationField = AccessTools.Field(typeof(Projectile), "destination");
+			var projectilePatchTargets = PatchedMethodsForPatchClass("Projectile_ImpactSomething_Patch");
+			var launchPatchTargets = PatchedMethodsForPatchClass("Verb_LaunchProjectile_TryCastShot_Patch");
+			try
+			{
+				ApplyZombieSettingsOverride(settings => settings.threatScale = 1f);
+				Constants.COLONISTS_HIT_ZOMBIES_CHANCE = 1f;
+
+				if (forcedMissRadiusField == null || warmupTimeField == null || impactSomething == null || destinationField == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not reflect all projectile patch probe members.",
+						reflection = new
+						{
+							forcedMissRadiusField = forcedMissRadiusField != null,
+							warmupTimeField = warmupTimeField != null,
+							impactSomething = impactSomething != null,
+							destinationField = destinationField != null
+						},
+						patchTargets = new
+						{
+							projectileImpact = projectilePatchTargets,
+							launchProjectile = launchPatchTargets
+						}
+					};
+				}
+
+				if (TryFindClearSpawnCell(map, root, 16f, out var shooterCell, out var shooterError) == false)
+					return shooterError;
+				var targetCell = GenRadial.RadialCellsAround(shooterCell, 12f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(shooterCell) >= 6f)
+					.Where(cell => cell.DistanceTo(shooterCell) <= 12f)
+					.Where(cell => GenSight.LineOfSight(shooterCell, cell, map, true))
+					.OrderBy(cell => cell.DistanceToSquared(shooterCell))
+					.FirstOrDefault();
+				if (targetCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
+						error = "No line-of-sight target cell was found for the ranged projectile patch fixture."
+					};
+				}
+
+				var shooter = SpawnArmedAreaWorkflowPawn(map, "ZL_Area_RangedPatchShooter", shooterCell, Faction.OfPlayer, spawnedThings);
+				var zombie = SpawnTargetZombie(map, targetCell, ZombieType.Normal, "ZL_Area_RangedPatchZombie", spawnedThings);
+				if (shooter == null || zombie == null)
+				{
+					return new
+					{
+						success = false,
+						shooter = DescribePawn(shooter),
+						zombie = DescribeZombie(zombie),
+						error = "Could not create the ranged projectile patch fixture."
+					};
+				}
+				if (TryMakeDownedForCombat(zombie, out var downedError) == false)
+				{
+					return new
+					{
+						success = false,
+						shooter = DescribePawn(shooter),
+						zombie = DescribeZombie(zombie),
+						error = downedError
+					};
+				}
+
+				var verb = shooter.equipment?.PrimaryEq?.PrimaryVerb as Verb_LaunchProjectile;
+				if (verb == null)
+				{
+					return new
+					{
+						success = false,
+						shooter = DescribePawn(shooter),
+						zombie = DescribeZombie(zombie),
+						error = "The shooter has no launch-projectile verb."
+					};
+				}
+
+				var helperProbe = VerifyRangedProjectilePatchHelpers(verb, shooter, zombie);
+				var oldForcedMissRadius = (float)forcedMissRadiusField.GetValue(verb.verbProps);
+				var oldWarmupTime = (float)warmupTimeField.GetValue(verb.verbProps);
+				var projectilesBefore = map.listerThings.AllThings.OfType<Projectile>().Select(projectile => projectile.ThingID).ToHashSet();
+				Projectile launchedProjectile = null;
+				var castResult = false;
+				object castError = null;
+				try
+				{
+					forcedMissRadiusField.SetValue(verb.verbProps, 9f);
+					warmupTimeField.SetValue(verb.verbProps, 0f);
+					castResult = verb.TryStartCastOn(zombie, surpriseAttack: false, canHitNonTargetPawns: true, preventFriendlyFire: false, nonInterruptingSelfCast: false);
+					launchedProjectile = map.listerThings.AllThings
+						.OfType<Projectile>()
+						.FirstOrDefault(projectile => projectilesBefore.Contains(projectile.ThingID) == false);
+					if (launchedProjectile != null)
+						spawnedThings.Add(launchedProjectile);
+				}
+				catch (Exception ex)
+				{
+					castError = ex.GetBaseException().Message;
+				}
+				finally
+				{
+					forcedMissRadiusField.SetValue(verb.verbProps, oldForcedMissRadius);
+					warmupTimeField.SetValue(verb.verbProps, oldWarmupTime);
+				}
+
+				var destination = launchedProjectile == null ? Vector3.zero : (Vector3)destinationField.GetValue(launchedProjectile);
+				var destinationCell = destination.ToIntVec3();
+				var destinationHitsZombie = launchedProjectile != null && destinationCell == zombie.Position;
+				var intendedTargetIsZombie = launchedProjectile != null && launchedProjectile.intendedTarget.Thing == zombie;
+				var usedTargetIsZombie = launchedProjectile != null && launchedProjectile.usedTarget.Thing == zombie;
+
+				var injuryBeforeImpact = TotalInjurySeverity(zombie);
+				var vanillaWouldMissSeed = FindRandChanceSeed(false, 0.5f);
+				object impactError = null;
+				var randPushed = false;
+				try
+				{
+					if (launchedProjectile != null)
+					{
+						Rand.PushState(vanillaWouldMissSeed);
+						randPushed = true;
+						impactSomething.Invoke(launchedProjectile, Array.Empty<object>());
+						Rand.PopState();
+						randPushed = false;
+					}
+				}
+				catch (Exception ex)
+				{
+					if (randPushed)
+						Rand.PopState();
+					impactError = ex.GetBaseException().Message;
+				}
+				var injuryAfterImpact = TotalInjurySeverity(zombie);
+				var impactDamagedDownedZombie = injuryAfterImpact > injuryBeforeImpact || zombie.Dead;
+
+				return new
+				{
+					success = projectilePatchTargets.Length > 0
+						&& launchPatchTargets.Length > 0
+						&& ObjectSuccess(helperProbe)
+						&& castResult
+						&& castError == null
+						&& launchedProjectile != null
+						&& intendedTargetIsZombie
+						&& usedTargetIsZombie
+						&& destinationHitsZombie
+						&& impactError == null
+						&& impactDamagedDownedZombie,
+					patchTargets = new
+					{
+						projectileImpact = projectilePatchTargets,
+						launchProjectile = launchPatchTargets
+					},
+					shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					distanceSquared = (targetCell - shooterCell).LengthHorizontalSquared,
+					settings = new
+					{
+						ZombieSettings.Values.threatScale,
+						Constants.COLONISTS_HIT_ZOMBIES_CHANCE
+					},
+					shooter = DescribePawn(shooter),
+					zombie = DescribeZombie(zombie),
+					verb = DescribeVerb(verb),
+					helperProbe,
+					forcedMissRadius = new
+					{
+						before = oldForcedMissRadius,
+						probe = 9f,
+						after = (float)forcedMissRadiusField.GetValue(verb.verbProps)
+					},
+					warmupTime = new
+					{
+						before = oldWarmupTime,
+						probe = 0f,
+						after = (float)warmupTimeField.GetValue(verb.verbProps)
+					},
+					cast = new
+					{
+						castResult,
+						castError,
+						projectileDef = launchedProjectile?.def?.defName,
+						projectileThingId = launchedProjectile?.ThingID,
+						usedTargetIsZombie,
+						intendedTargetIsZombie,
+						destination = DescribeVector(destination),
+						destinationCell = launchedProjectile == null ? null : ZombieRuntimeActions.DescribeCell(destinationCell),
+						destinationHitsZombie
+					},
+					impact = new
+					{
+						vanillaWouldMissSeed,
+						impactError,
+						injuryBeforeImpact,
+						injuryAfterImpact,
+						injuryDelta = injuryAfterImpact - injuryBeforeImpact,
+						impactDamagedDownedZombie,
+						zombieDead = zombie.Dead
+					}
+				};
+			}
+			finally
+			{
+				Constants.COLONISTS_HIT_ZOMBIES_CHANCE = oldColonistsHitChance;
+				RestoreZombieSettings(settingsSnapshot);
+			}
+		}
+
+		static object VerifyRangedProjectilePatchHelpers(Verb verb, Pawn shooter, Zombie zombie)
+		{
+			var postureFix = FindNestedPatchMethod("Projectile_ImpactSomething_Patch", "GetPostureFix");
+			var randChance = FindNestedPatchMethod("Projectile_ImpactSomething_Patch", "RandChance");
+			var skipMissing = FindNestedPatchMethod("Verb_LaunchProjectile_TryCastShot_Patch", "SkipMissingShotsAtZombies");
+			if (postureFix == null || randChance == null || skipMissing == null)
+			{
+				return new
+				{
+					success = false,
+					postureFixFound = postureFix != null,
+					randChanceFound = randChance != null,
+					skipMissingFound = skipMissing != null
+				};
+			}
+
+			var zombiePosture = (PawnPosture)postureFix.Invoke(null, new object[] { zombie });
+			var shooterPosture = (PawnPosture)postureFix.Invoke(null, new object[] { shooter });
+			var zombieHalfChance = (bool)randChance.Invoke(null, new object[] { 0.5f, zombie });
+			var nonZombieZeroChance = (bool)randChance.Invoke(null, new object[] { 0f, shooter });
+			var skipMissingAtZombie = (bool)skipMissing.Invoke(null, new object[] { verb, new LocalTargetInfo(zombie) });
+			var skipMissingAtShooter = (bool)skipMissing.Invoke(null, new object[] { verb, new LocalTargetInfo(shooter) });
+
+			return new
+			{
+				success = zombiePosture == PawnPosture.Standing
+					&& shooterPosture == shooter.GetPosture()
+					&& zombieHalfChance
+					&& nonZombieZeroChance == false
+					&& skipMissingAtZombie
+					&& skipMissingAtShooter == false,
+				zombiePosture = zombiePosture.ToString(),
+				shooterPosture = shooterPosture.ToString(),
+				shooterActualPosture = shooter.GetPosture().ToString(),
+				zombieHalfChance,
+				nonZombieZeroChance,
+				skipMissingAtZombie,
+				skipMissingAtShooter
+			};
+		}
+
+		static MethodInfo FindNestedPatchMethod(string nestedTypeName, string methodName)
+		{
+			return typeof(Patches)
+				.GetNestedTypes(BindingFlags.NonPublic)
+				.FirstOrDefault(type => type.Name == nestedTypeName)
+				?.GetMethod(methodName, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+		}
+
+		static int FindRandChanceSeed(bool desiredResult, float chance)
+		{
+			for (var seed = 1; seed < 10000; seed++)
+			{
+				Rand.PushState(seed);
+				var result = Rand.Chance(chance);
+				Rand.PopState();
+				if (result == desiredResult)
+					return seed;
+			}
+			return 1;
 		}
 
 		static object VerifyDownedMeleeAttack(Map map, IntVec3 root, List<Thing> spawnedThings)
