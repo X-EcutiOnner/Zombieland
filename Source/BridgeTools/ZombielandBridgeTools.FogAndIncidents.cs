@@ -1950,6 +1950,7 @@ namespace ZombieLand
 				var speedRatio = normalSpeed == 0f ? 0f : throttledSpeed / normalSpeed;
 				var awakeCapacity = VerifyZombieAwakeCapacity(map, sample, root + new IntVec3(-8, 0, -8));
 				var makeDowned = VerifyMakeDownedPatch(map, root + new IntVec3(-16, 0, -8));
+				var killedCleanup = VerifyRemoveComponentsOnKilledPatch(map, root + new IntVec3(-24, 0, -8));
 				var idleState = VerifyNothingHappeningSpawnGate();
 				var gunshotPheromones = VerifyGunshotPheromoneBump(map, root + new IntVec3(-18, 0, 10));
 				var collisionSuppression = VerifyZombieCollisionSuppression(map, sample);
@@ -1966,6 +1967,7 @@ namespace ZombieLand
 						&& speedRatio > 3.5f
 						&& ObjectSuccess(awakeCapacity)
 						&& ObjectSuccess(makeDowned)
+						&& ObjectSuccess(killedCleanup)
 						&& ObjectSuccess(idleState)
 						&& ObjectSuccess(gunshotPheromones)
 						&& ObjectSuccess(collisionSuppression),
@@ -1983,6 +1985,7 @@ namespace ZombieLand
 					speedRatio,
 					awakeCapacity,
 					makeDowned,
+					killedCleanup,
 					idleState,
 					gunshotPheromones,
 					collisionSuppression,
@@ -2296,6 +2299,85 @@ namespace ZombieLand
 				foreach (var pawn in pawns)
 					if (pawn != null && pawn.Destroyed == false)
 						pawn.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object VerifyRemoveComponentsOnKilledPatch(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("PawnComponentsUtility_RemoveComponentsOnKilled_Patch");
+			var oldKillCircleMultiplier = Constants.KILL_CIRCLE_RADIUS_MULTIPLIER;
+			Pawn human = null;
+			Corpse corpse = null;
+			try
+			{
+				if (TryFindClearSpawnCell(map, root, 18f, out var humanCell, out var humanError) == false)
+					return humanError;
+
+				human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(human, humanCell, map, WipeMode.Vanish);
+				DisablePawnWork(human);
+
+				Constants.KILL_CIRCLE_RADIUS_MULTIPLIER = 2f;
+				var grid = map.GetGrid();
+				var timestamp = Tools.Ticks();
+				var radius = Tools.RadiusForPawn(human) * Constants.KILL_CIRCLE_RADIUS_MULTIPLIER;
+				radius /= ZombieSettings.Values.zombieInstinct.HalfToDoubleValue();
+				var seededCells = GenRadial.RadialCellsAround(human.Position, radius, true)
+					.Where(cell => cell.InBounds(map))
+					.ToArray();
+				foreach (var cell in seededCells)
+					grid.SetTimestamp(cell, timestamp - 1);
+				grid.SetTimestamp(human.Position, timestamp);
+				var seededBefore = seededCells.Count(cell => grid.GetTimestamp(cell) > 0);
+
+				var positionBeforeKill = human.Position;
+				human.Kill(null);
+				corpse = human.Corpse;
+
+				var unclearedAfter = seededCells.Count(cell => grid.GetTimestamp(cell) > 0);
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& seededBefore > 0
+						&& human.Dead
+						&& human.Destroyed
+						&& unclearedAfter == 0,
+					patchTargets,
+					seededBefore,
+					unclearedAfter,
+					radius,
+					pawn = new
+					{
+						thingId = human.ThingID,
+						defName = human.def?.defName,
+						kindDef = human.kindDef?.defName,
+						dead = human.Dead,
+						destroyed = human.Destroyed,
+						spawned = human.Spawned,
+						positionBeforeKill = ZombieRuntimeActions.DescribeCell(positionBeforeKill),
+						mapAfterKillIsNull = human.Map == null,
+						mapHeldAfterKillIsNull = human.MapHeld == null,
+						carryTrackerRemoved = human.carryTracker == null,
+						needsRemoved = human.needs == null,
+						jobsRemoved = human.jobs == null,
+						stancesRemoved = human.stances == null
+					},
+					corpse = corpse == null ? null : new
+					{
+						id = ZombieRuntimeActions.StableThingId(corpse),
+						defName = corpse.def?.defName,
+						spawned = corpse.Spawned,
+						position = ZombieRuntimeActions.DescribeCell(corpse.Position)
+					}
+				};
+			}
+			finally
+			{
+				Constants.KILL_CIRCLE_RADIUS_MULTIPLIER = oldKillCircleMultiplier;
+				if (corpse != null && corpse.Destroyed == false)
+					corpse.Destroy(DestroyMode.Vanish);
+				if (human != null && human.Destroyed == false)
+					human.Destroy(DestroyMode.Vanish);
 			}
 		}
 

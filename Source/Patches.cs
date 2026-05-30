@@ -5343,14 +5343,20 @@ namespace ZombieLand
 		[HarmonyPatch(nameof(PawnComponentsUtility.RemoveComponentsOnKilled))]
 		static class PawnComponentsUtility_RemoveComponentsOnKilled_Patch
 		{
+			static readonly FieldInfo prevMapField = AccessTools.Field(typeof(Pawn), "prevMap");
+
 			static void Postfix(Pawn pawn)
 			{
-				if (pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter || pawn.Map == null)
+				if (pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
+					return;
+
+				var map = pawn.Map ?? pawn.MapHeld ?? prevMapField?.GetValue(pawn) as Map;
+				if (map == null)
 					return;
 
 				if (Constants.KILL_CIRCLE_RADIUS_MULTIPLIER > 0)
 				{
-					var grid = pawn.Map.GetGrid();
+					var grid = map.GetGrid();
 					var timestamp = grid.GetTimestamp(pawn.Position);
 					var radius = Tools.RadiusForPawn(pawn) * Constants.KILL_CIRCLE_RADIUS_MULTIPLIER;
 					radius /= ZombieSettings.Values.zombieInstinct.HalfToDoubleValue();

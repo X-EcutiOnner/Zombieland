@@ -833,6 +833,9 @@ namespace ZombieLand
 		[Tool("zombieland/zombie_death_thought_suppression", Description = "Verify RimWorld death-thought delivery gives colonist death memories but suppresses adult zombie death memories.")]
 		public static object ZombieDeathThoughtSuppression()
 		{
+			var deathThoughtTargets = PatchedMethodsForPatchClass("PawnDiedOrDownedThoughtsUtility_TryGiveThoughts_Patch");
+			var killedChildConstructorTargets = PatchedMethodsForPatchClass("IndividualThoughtToAdd_Constructor_Patch");
+			var killedChildTaleTargets = PatchedMethodsForPatchClass("Thought_Tale_OpinionOffset_Patch");
 			var map = CurrentMap;
 			if (map == null)
 			{
@@ -858,6 +861,8 @@ namespace ZombieLand
 				return humanSpawnError;
 			if (TryFindClearSpawnCell(map, observerCell + new IntVec3(6, 0, 0), 12f, out var zombieCell, out var zombieSpawnError) == false)
 				return zombieSpawnError;
+			if (TryFindClearSpawnCell(map, observerCell + new IntVec3(9, 0, 0), 14f, out var childZombieCell, out var childZombieSpawnError) == false)
+				return childZombieSpawnError;
 
 			var observer = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			GenSpawn.Spawn(observer, observerCell, map, Rot4.South);
@@ -877,6 +882,39 @@ namespace ZombieLand
 					error = "ZombieGenerator.SpawnZombie returned no death-thought test zombie."
 				};
 			}
+			var oldChildChance = ZombieSettings.Values.childChance;
+			Zombie childZombieVictim;
+			try
+			{
+				ZombieSettings.Values.childChance = 1f;
+				Rand.PushState(5378);
+				try
+				{
+					childZombieVictim = ZombieRuntimeActions.SpawnZombie(childZombieCell, map, ZombieType.Normal, true);
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+			}
+			finally
+			{
+				ZombieSettings.Values.childChance = oldChildChance;
+			}
+			if (childZombieVictim == null)
+			{
+				return new
+				{
+					success = false,
+					destroyedZombies,
+					destroyedZombieCorpses,
+					observer = DescribePawn(observer),
+					humanVictim = DescribePawn(humanVictim),
+					zombieVictim = DescribeZombie(zombieVictim),
+					error = "ZombieGenerator.SpawnZombie returned no child death-thought test zombie."
+				};
+			}
+			var childZombieIsChild = childZombieVictim.DevelopmentalStage.Child();
 
 			var memoriesBefore = TotalMemoryCount(observer);
 			var memoryDefsBefore = MemoryDefCounts(observer);
@@ -919,29 +957,118 @@ namespace ZombieLand
 			var memoriesAfterZombieTryGive = TotalMemoryCount(observer);
 			var zombieThoughtDelta = memoriesAfterZombieTryGive - memoriesAfterHumanTryGive;
 			var memoryDefsAfterZombie = MemoryDefCounts(observer);
+			var memoriesBeforeChildTryGive = TotalMemoryCount(observer);
+			var childDamageInfo = new DamageInfo(DamageDefOf.Cut, 1f, instigator: observer);
+			PawnDiedOrDownedThoughtsUtility.TryGiveThoughts(childZombieVictim, childDamageInfo, PawnDiedOrDownedThoughtsKind.Died);
+			var memoriesAfterChildTryGive = TotalMemoryCount(observer);
+			var childThoughtDelta = memoriesAfterChildTryGive - memoriesBeforeChildTryGive;
+			var memoryDefsAfterChild = MemoryDefCounts(observer);
+			var childKilledThoughtMemories = observer.needs?.mood?.thoughts?.memories?.Memories?
+				.Where(memory => memory.def == ThoughtDefOf.KilledChild && memory.otherPawn == childZombieVictim)
+				.ToArray() ?? Array.Empty<Thought_Memory>();
+			var zombieKilledChildMoodFactor = childKilledThoughtMemories.FirstOrDefault()?.moodPowerFactor ?? -1f;
+			var killedChildMoodReduced = Mathf.Abs(zombieKilledChildMoodFactor - 0.5f) < 0.0001f;
+
+			var killedChildTaleThoughtDef = DefDatabase<ThoughtDef>.AllDefsListForReading
+				.FirstOrDefault(def => def.taleDef == TaleDefOf.KilledChild && typeof(Thought_Tale).IsAssignableFrom(def.thoughtClass));
+			var killedChildTaleDef = TaleDefOf.KilledChild;
+			var killedChildBaseOpinion = killedChildTaleThoughtDef?.stages?.FirstOrDefault()?.baseOpinionOffset ?? 0f;
+			var zombieKilledChildTale = killedChildTaleDef == null ? null : new Tale_DoublePawn(childZombieVictim, childZombieVictim)
+			{
+				def = killedChildTaleDef,
+				date = Find.TickManager.TicksAbs
+			};
+			if (zombieKilledChildTale != null)
+				Find.TaleManager.Add(zombieKilledChildTale);
+			var killedChildTaleThought = killedChildTaleThoughtDef == null ? null : ThoughtMaker.MakeThought(killedChildTaleThoughtDef) as Thought_Tale;
+			if (killedChildTaleThought != null)
+			{
+				killedChildTaleThought.pawn = observer;
+				killedChildTaleThought.otherPawn = childZombieVictim;
+			}
+			var zombieKilledChildOpinionOffset = killedChildTaleThought?.OpinionOffset() ?? 0f;
+			var expectedZombieKilledChildOpinionOffset = killedChildBaseOpinion * 0.25f;
+			var killedChildOpinionReduced = killedChildTaleThought != null
+				&& Mathf.Abs(zombieKilledChildOpinionOffset - expectedZombieKilledChildOpinionOffset) < 0.0001f;
+			if (zombieKilledChildTale != null)
+				Find.TaleManager.AllTalesListForReading.Remove(zombieKilledChildTale);
+			var childThoughtSurfaceUnavailable = BodyTypeDefOf.Child == null
+				|| ThoughtDefOf.KilledChild == null
+				|| TaleDefOf.KilledChild == null
+				|| killedChildTaleThoughtDef == null;
+			var childThoughtEvidenceSatisfied = childThoughtSurfaceUnavailable
+				|| (childZombieIsChild
+					&& childThoughtDelta > 0
+					&& killedChildMoodReduced
+					&& killedChildOpinionReduced);
+			var childThoughtSkipReason = childThoughtSurfaceUnavailable
+				? "Child/killed-child thought surface is unavailable in the active RimWorld configuration."
+				: null;
+
+			var observerDescription = DescribePawn(observer);
+			var humanVictimDescription = DescribePawn(humanVictim);
+			var humanCorpseDescription = DescribeCorpse(humanCorpse);
+			var zombieVictimDescription = DescribeZombie(zombieVictim);
+			var zombieCorpseDescription = DescribeCorpse(zombieCorpse);
+			var childZombieDescription = DescribeZombie(childZombieVictim);
+			if (zombieCorpse.Destroyed == false)
+				zombieCorpse.Destroy();
+			if (childZombieVictim.Destroyed == false)
+				childZombieVictim.Destroy();
+			if (humanCorpse != null && humanCorpse.Destroyed == false)
+				humanCorpse.Destroy();
+			if (observer.Destroyed == false)
+				observer.Destroy();
 
 			return new
 			{
-				success = humanThoughtDelta > 0
+				success = deathThoughtTargets.Length > 0
+					&& killedChildConstructorTargets.Length > 0
+					&& killedChildTaleTargets.Length > 0
+					&& humanThoughtDelta > 0
 					&& humanTotalDelta > 0
-					&& zombieThoughtDelta == 0,
+					&& zombieThoughtDelta == 0
+					&& childThoughtEvidenceSatisfied,
+				patchTargets = new
+				{
+					deathThoughts = deathThoughtTargets,
+					killedChildConstructor = killedChildConstructorTargets,
+					killedChildTaleOpinion = killedChildTaleTargets
+				},
 				destroyedZombies,
 				destroyedZombieCorpses,
-				observer = DescribePawn(observer),
-				humanVictim = DescribePawn(humanVictim),
-				humanCorpse = DescribeCorpse(humanCorpse),
-				zombieVictim = DescribeZombie(zombieVictim),
-				zombieCorpse = DescribeCorpse(zombieCorpse),
+				observer = observerDescription,
+				humanVictim = humanVictimDescription,
+				humanCorpse = humanCorpseDescription,
+				zombieVictim = zombieVictimDescription,
+				zombieCorpse = zombieCorpseDescription,
+				childZombieVictim = childZombieDescription,
+				childZombieIsChild,
+				childThoughtSurfaceUnavailable,
+				childThoughtSkipReason,
+				childThoughtEvidenceSatisfied,
 				memoriesBefore,
 				memoriesAfterHumanKill,
 				memoriesAfterHumanTryGive,
 				memoriesAfterZombieTryGive,
+				memoriesBeforeChildTryGive,
+				memoriesAfterChildTryGive,
 				humanThoughtDelta,
 				humanTotalDelta,
 				zombieThoughtDelta,
+				childThoughtDelta,
 				memoryDefsBefore,
 				memoryDefsAfterHuman,
-				memoryDefsAfterZombie
+				memoryDefsAfterZombie,
+				memoryDefsAfterChild,
+				childKilledThoughtMemoryCount = childKilledThoughtMemories.Length,
+				zombieKilledChildMoodFactor,
+				killedChildMoodReduced,
+				killedChildTaleThoughtDef = killedChildTaleThoughtDef?.defName,
+				killedChildBaseOpinion,
+				zombieKilledChildOpinionOffset,
+				expectedZombieKilledChildOpinionOffset,
+				killedChildOpinionReduced
 			};
 		}
 
@@ -1036,6 +1163,9 @@ namespace ZombieLand
 		[Tool("zombieland/zombie_health_needs_upkeep_suppression", Description = "Verify zombie needs/upkeep suppression and alert-tracked infected-colonist health overrides while normal pawns keep vanilla behavior.")]
 		public static object ZombieHealthNeedsUpkeepSuppression()
 		{
+			var allNeedsTargets = PatchedMethodsForPatchClass("Pawn_NeedsTracker_AllNeeds_Patch");
+			var addOrRemoveNeedsTargets = PatchedMethodsForPatchClass("Pawn_NeedsTracker_AddOrRemoveNeedsAsAppropriate_Patch");
+			var needsTickTargets = PatchedMethodsForPatchClass("Pawn_NeedsTracker_NeedsTrackerTickInterval_Patch");
 			var map = CurrentMap;
 			if (map == null)
 			{
@@ -1141,7 +1271,10 @@ namespace ZombieLand
 
 			return new
 			{
-				success = humanNeedsPopulated
+				success = allNeedsTargets.Length > 0
+					&& addOrRemoveNeedsTargets.Length > 0
+					&& needsTickTargets.Length > 0
+					&& humanNeedsPopulated
 					&& zombieForcedNeedVisibleInternally
 					&& zombieNeedsClearedByReconcile
 					&& zombieNeedTickSkipped
@@ -1149,6 +1282,12 @@ namespace ZombieLand
 					&& humanImmunityAdvanced
 					&& zombieImmunitySuppressed
 					&& infectedColonistHealthSuppressed,
+				patchTargets = new
+				{
+					allNeeds = allNeedsTargets,
+					addOrRemoveNeedsAsAppropriate = addOrRemoveNeedsTargets,
+					needsTrackerTickInterval = needsTickTargets
+				},
 				destroyedZombies,
 				human = DescribePawn(human),
 				zombie = DescribeZombie(zombie),

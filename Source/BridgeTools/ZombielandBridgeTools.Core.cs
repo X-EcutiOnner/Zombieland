@@ -69,12 +69,239 @@ namespace ZombieLand
 						&& zombieRace != null
 						&& Mathf.Abs(zombieRace.baseHealthScale - settings.healthFactor) < 0.0001f
 				},
-				timeSpeed = gameTickManager == null ? null : gameTickManager.CurTimeSpeed.ToString()
-			};
-		}
+					timeSpeed = gameTickManager == null ? null : gameTickManager.CurTimeSpeed.ToString()
+				};
+			}
 
-		static object DescribeZombieGrid(Map map, Pawn[] zombies)
-		{
+			[Tool("zombieland/startup_support_state", Description = "Verify startup asset loading and shared Zombieland service hook dispatch without clearing the live game.")]
+			public static object StartupSupportState()
+			{
+				var assetTargets = PatchedMethodsForPatchClass(nameof(Assets));
+				var legacyParseTargets = PatchedMethodsForPatchClass("ParseHelper_FromString_Patch");
+				var mainMenuInitTargets = PatchedMethodsForPatchClass("MainMenuDrawer_Init_Patch");
+				var timeControlTargets = PatchedMethodsForPatchClass(nameof(TimeControlService));
+				var clearMapsTargets = PatchedMethodsForPatchClass(nameof(ClearMapsService));
+				var assetProbe = VerifyStartupAssets();
+				var legacyParseProbe = VerifyLegacyAreaRiskModeParsing();
+				var mainMenuProbe = VerifyMainMenuStartupErrors();
+				var timeControlProbe = VerifyTimeControlService();
+				var clearMapsProbe = VerifyClearMapsService();
+
+				return new
+				{
+					success = assetTargets.Length > 0
+						&& legacyParseTargets.Length > 0
+						&& mainMenuInitTargets.Length > 0
+						&& timeControlTargets.Length > 0
+						&& clearMapsTargets.Length > 0
+						&& ObjectSuccess(assetProbe)
+						&& ObjectSuccess(legacyParseProbe)
+						&& ObjectSuccess(mainMenuProbe)
+						&& ObjectSuccess(timeControlProbe)
+						&& ObjectSuccess(clearMapsProbe),
+					patchTargets = new
+					{
+						assets = assetTargets,
+						legacyParse = legacyParseTargets,
+						mainMenuInit = mainMenuInitTargets,
+						timeControl = timeControlTargets,
+						clearMaps = clearMapsTargets
+					},
+					assets = assetProbe,
+					legacyParse = legacyParseProbe,
+					mainMenuInit = mainMenuProbe,
+					timeControl = timeControlProbe,
+					clearMaps = clearMapsProbe
+				};
+			}
+
+			static object VerifyStartupAssets()
+			{
+				var dustInstantiated = false;
+				string dustError = null;
+				string dustName = null;
+				bool dustHasParticleSystem = false;
+				bool dustHasRenderer = false;
+				GameObject dust = null;
+				try
+				{
+					dust = Assets.NewDust();
+					dustInstantiated = dust != null;
+					dustName = dust?.name;
+					dustHasParticleSystem = dust?.GetComponent<ParticleSystem>() != null;
+					dustHasRenderer = dust?.GetComponent<ParticleSystemRenderer>() != null;
+				}
+				catch (Exception ex)
+				{
+					dustError = ex.GetType().Name + ": " + ex.Message;
+				}
+				finally
+				{
+					if (dust != null)
+						UnityEngine.Object.Destroy(dust);
+				}
+
+				return new
+				{
+					success = Assets.initialized
+						&& Assets.MetaballShader != null
+						&& dustInstantiated
+						&& dustHasParticleSystem
+						&& dustHasRenderer,
+					Assets.initialized,
+					metaballShader = Assets.MetaballShader?.name,
+					dust = new
+					{
+						instantiated = dustInstantiated,
+						name = dustName,
+						hasParticleSystem = dustHasParticleSystem,
+						hasRenderer = dustHasRenderer,
+						error = dustError
+					}
+				};
+			}
+
+			static object VerifyLegacyAreaRiskModeParsing()
+			{
+				object ifInside = null;
+				object ifOutside = null;
+				object currentName = null;
+				string error = null;
+				try
+				{
+					ifInside = ParseHelper.FromString("IfInside", typeof(AreaRiskMode));
+					ifOutside = ParseHelper.FromString("IfOutside", typeof(AreaRiskMode));
+					currentName = ParseHelper.FromString(nameof(AreaRiskMode.ZombieInside), typeof(AreaRiskMode));
+				}
+				catch (Exception ex)
+				{
+					error = ex.GetType().Name + ": " + ex.Message;
+				}
+
+				return new
+				{
+					success = error == null
+						&& ifInside is AreaRiskMode insideMode
+						&& insideMode == AreaRiskMode.ColonistInside
+						&& ifOutside is AreaRiskMode outsideMode
+						&& outsideMode == AreaRiskMode.ColonistOutside
+						&& currentName is AreaRiskMode currentMode
+						&& currentMode == AreaRiskMode.ZombieInside,
+					legacy = new
+					{
+						ifInside = ifInside?.ToString(),
+						expectedIfInside = AreaRiskMode.ColonistInside.ToString(),
+						ifOutside = ifOutside?.ToString(),
+						expectedIfOutside = AreaRiskMode.ColonistOutside.ToString()
+					},
+					current = new
+					{
+						zombieInside = currentName?.ToString()
+					},
+					error
+				};
+			}
+
+			static object VerifyMainMenuStartupErrors()
+			{
+				var errorsField = typeof(Patches).GetField("errors", BindingFlags.Static | BindingFlags.NonPublic);
+				var errorCount = -1;
+				if (errorsField?.GetValue(null) is System.Collections.ICollection errors)
+					errorCount = errors.Count;
+				var errorDialogOpen = Find.WindowStack?.IsOpen(typeof(Dialog_ErrorMessage)) == true;
+
+				return new
+				{
+					success = errorCount == 0 && errorDialogOpen == false,
+					errorCount,
+					errorDialogOpen,
+					windowStackAvailable = Find.WindowStack != null
+				};
+			}
+
+			static object VerifyTimeControlService()
+			{
+				var postfix = typeof(TimeControlService).GetMethod("Postfix", BindingFlags.Static | BindingFlags.NonPublic);
+				var curTimeSpeedField = typeof(TimeControlService).GetField("curTimeSpeed", BindingFlags.Static | BindingFlags.NonPublic);
+				var tickManager = Current.Game?.tickManager;
+				if (postfix == null || curTimeSpeedField == null || tickManager == null)
+				{
+					return new
+					{
+						success = false,
+						reflection = new
+						{
+							postfix = postfix != null,
+							curTimeSpeedField = curTimeSpeedField != null,
+							tickManager = tickManager != null
+						}
+					};
+				}
+
+				var subscriber = new object();
+				var notifications = new List<string>();
+				var originalCurTimeSpeed = curTimeSpeedField.GetValue(null);
+				try
+				{
+					curTimeSpeedField.SetValue(null, null);
+					TimeControlService.Subscribe(subscriber, speed => notifications.Add(speed.ToString()));
+					postfix.Invoke(null, Array.Empty<object>());
+					postfix.Invoke(null, Array.Empty<object>());
+					TimeControlService.Unsubscribe(subscriber);
+				}
+				finally
+				{
+					TimeControlService.Unsubscribe(subscriber);
+					curTimeSpeedField.SetValue(null, originalCurTimeSpeed);
+				}
+
+				return new
+				{
+					success = notifications.Count == 1
+						&& notifications[0] == tickManager.CurTimeSpeed.ToString(),
+					currentTimeSpeed = tickManager.CurTimeSpeed.ToString(),
+					notifications = notifications.ToArray()
+				};
+			}
+
+			static object VerifyClearMapsService()
+			{
+				var prefix = typeof(ClearMapsService).GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+				if (prefix == null)
+				{
+					return new
+					{
+						success = false,
+						reflection = new
+						{
+							prefix = false
+						}
+					};
+				}
+
+				var subscriber = new object();
+				var callbackCount = 0;
+				try
+				{
+					ClearMapsService.Subscribe(subscriber, () => callbackCount++);
+					prefix.Invoke(null, Array.Empty<object>());
+					ClearMapsService.Unsubscribe(subscriber);
+				}
+				finally
+				{
+					ClearMapsService.Unsubscribe(subscriber);
+				}
+
+				return new
+				{
+					success = callbackCount == 1,
+					callbackCount,
+					note = "Invoked the Zombieland prefix directly to avoid clearing the live game."
+				};
+			}
+
+			static object DescribeZombieGrid(Map map, Pawn[] zombies)
+			{
 			if (map == null)
 				return null;
 

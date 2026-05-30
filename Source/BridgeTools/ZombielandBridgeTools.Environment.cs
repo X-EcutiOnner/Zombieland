@@ -402,6 +402,7 @@ namespace ZombieLand
 		[Tool("zombieland/tar_slime_move_cost_contract", Description = "Verify TarSlime applies the Zombieland movement-cost formula to zombies and spitters while ordinary pawns use the non-zombie formula.")]
 		public static object TarSlimeMoveCostContract()
 		{
+			var patchTargets = PatchedMethodsForPatchClass("Pawn_PathFollower_CostToMoveIntoCell_Patch");
 			var map = CurrentMap;
 			if (map == null)
 			{
@@ -498,21 +499,36 @@ namespace ZombieLand
 			var clearCostsDifferFromTar = Mathf.Abs(humanClearCost - humanTarCost) > 0.001f
 				&& Mathf.Abs(zombieClearCost - zombieTarCost) > 0.001f
 				&& Mathf.Abs(spitterClearCost - spitterTarCost) > 0.001f;
+			var tarSlimeId = ZombieRuntimeActions.StableThingId(tarSlime);
+			var humanDescription = DescribePawn(human);
+			var zombieDescription = DescribeZombie(zombie);
+			var spitterDescription = DescribeZombie(spitter);
+
+			if (tarSlime.Destroyed == false)
+				tarSlime.Destroy(DestroyMode.Vanish);
+			if (spitter.Destroyed == false)
+				spitter.Destroy();
+			if (zombie.Destroyed == false)
+				zombie.Destroy();
+			if (human.Destroyed == false)
+				human.Destroy();
 
 			return new
 			{
-				success = humanMatchesTarFormula
+				success = patchTargets.Length > 0
+					&& humanMatchesTarFormula
 					&& zombieMatchesTarFormula
 					&& spitterMatchesTarFormula
 					&& clearCostsDifferFromTar,
+				patchTargets,
 				destroyedZombies,
 				difficulty,
 				clearCell = ZombieRuntimeActions.DescribeCell(clearCell),
 				tarCell = ZombieRuntimeActions.DescribeCell(tarCell),
-				tarSlimeId = ZombieRuntimeActions.StableThingId(tarSlime),
-				human = DescribePawn(human),
-				zombie = DescribeZombie(zombie),
-				spitter = DescribeZombie(spitter),
+				tarSlimeId,
+				human = humanDescription,
+				zombie = zombieDescription,
+				spitter = spitterDescription,
 				humanClearCost,
 				humanTarCost,
 				zombieClearCost,
@@ -531,6 +547,7 @@ namespace ZombieLand
 		[Tool("zombieland/zombie_blood_filth_contract", Description = "Verify zombie blood filth follows the Zombieland setting and tanky armor suppression while humans still use vanilla blood drops.")]
 		public static object ZombieBloodFilthContract()
 		{
+			var patchTargets = PatchedMethodsForPatchClass("Pawn_HealthTracker_DropBloodFilth_Patch");
 			var map = CurrentMap;
 			if (map == null)
 			{
@@ -650,24 +667,44 @@ namespace ZombieLand
 			var humanDisabledStillDropsBlood = humanDisabled.delta > 0;
 			var zombieDisabledDropsNoBlood = zombieDisabled.delta == 0;
 			var spitterDisabledDropsNoBlood = spitterDisabled.delta == 0;
+			var humanDescription = DescribePawn(human);
+			var zombieDescription = DescribeZombie(zombie);
+			var tankyDescription = DescribeZombie(tanky);
+			var tankyArmorDescription = DescribeTankyArmor(tanky);
+			var spitterDescription = DescribeZombie(spitter);
+
+			ClearFilthAt(map, humanCell);
+			ClearFilthAt(map, zombieCell);
+			ClearFilthAt(map, tankyCell);
+			ClearFilthAt(map, spitterCell);
+			if (spitter.Destroyed == false)
+				spitter.Destroy();
+			if (tanky.Destroyed == false)
+				tanky.Destroy();
+			if (zombie.Destroyed == false)
+				zombie.Destroy();
+			if (human.Destroyed == false)
+				human.Destroy();
 
 			return new
 			{
-				success = humanEnabledDropsBlood
+				success = patchTargets.Length > 0
+					&& humanEnabledDropsBlood
 					&& zombieEnabledDropsBlood
 					&& tankyEnabledDropsNoBlood
 					&& spitterEnabledDropsBlood
 					&& humanDisabledStillDropsBlood
 					&& zombieDisabledDropsNoBlood
 					&& spitterDisabledDropsNoBlood,
+				patchTargets,
 				destroyedZombies,
 				originalZombiesDropBlood,
 				tankyArmorForced,
-				human = DescribePawn(human),
-				zombie = DescribeZombie(zombie),
-				tanky = DescribeZombie(tanky),
-				tankyArmor = DescribeTankyArmor(tanky),
-				spitter = DescribeZombie(spitter),
+				human = humanDescription,
+				zombie = zombieDescription,
+				tanky = tankyDescription,
+				tankyArmor = tankyArmorDescription,
+				spitter = spitterDescription,
 				humanEnabled,
 				zombieEnabled,
 				tankyEnabled,

@@ -78,13 +78,23 @@ namespace ZombieLand
 				action = RunAreaWorkflowRootPlayHooks(map);
 			else if (normalizedActionMode == "render-node-graphics")
 				action = RunAreaWorkflowRenderNodeGraphics(map);
+			else if (normalizedActionMode == "effecter-suppression")
+				action = RunAreaWorkflowEffecterSuppression(map);
+			else if (normalizedActionMode == "graphic-multi-texture")
+				action = RunAreaWorkflowGraphicMultiTexture(map);
+			else if (normalizedActionMode == "warmup-scaling")
+				action = RunAreaWorkflowWarmupScaling(map);
+			else if (normalizedActionMode == "zombie-stats")
+				action = RunAreaWorkflowZombieStats(map);
+			else if (normalizedActionMode == "visual-support")
+				action = RunAreaWorkflowVisualSupport(map);
 			else if (normalizedActionMode != "read")
 			{
 				return new
 				{
 					success = false,
 					actionMode,
-					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, or render-node-graphics."
+					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, or visual-support."
 				};
 			}
 			var actionSucceeded = normalizedActionMode == "read"
@@ -1459,6 +1469,76 @@ namespace ZombieLand
 			try
 			{
 				return VerifyAreaWorkflowRenderNodeGraphics(map, new IntVec3(164, 0, 156), spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowEffecterSuppression(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowEffecterSuppression(map, new IntVec3(184, 0, 156), spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowGraphicMultiTexture(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowGraphicMultiTexture(map, new IntVec3(204, 0, 156), spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowWarmupScaling(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowWarmupScaling(map, new IntVec3(184, 0, 156), spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowZombieStats(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowZombieStats(map, new IntVec3(204, 0, 156), spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowVisualSupport(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowVisualSupport(map, new IntVec3(184, 0, 156), spawnedThings);
 			}
 			finally
 			{
@@ -4227,6 +4307,1068 @@ namespace ZombieLand
 			return true;
 		}
 
+		sealed class ProbeSubEffecter : SubEffecter
+		{
+			public int triggerCount;
+			public object lastTargetA;
+			public object lastTargetB;
+			public int lastOverrideSpawnTick;
+
+			public ProbeSubEffecter(Effecter parent) : base(new SubEffecterDef(), parent)
+			{
+			}
+
+			public override void SubTrigger(TargetInfo A, TargetInfo B, int overrideSpawnTick = -1, bool force = false)
+			{
+				triggerCount++;
+				lastTargetA = DescribeTargetInfo(A);
+				lastTargetB = DescribeTargetInfo(B);
+				lastOverrideSpawnTick = overrideSpawnTick;
+			}
+		}
+
+		static object VerifyAreaWorkflowEffecterSuppression(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Effecter_Trigger_Patch");
+			var prefix = FindNestedPatchMethod("Effecter_Trigger_Patch", "Prefix");
+			var triggerMethod = AccessTools.Method(typeof(Effecter), nameof(Effecter.Trigger), new[] { typeof(TargetInfo), typeof(TargetInfo), typeof(int) });
+			var childrenField = AccessTools.Field(typeof(Effecter), "children");
+			if (prefix == null || triggerMethod == null || childrenField == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect all effecter suppression probe members.",
+					reflection = new
+					{
+						prefix = prefix != null,
+						triggerMethod = triggerMethod != null,
+						childrenField = childrenField != null
+					},
+					patchTargets
+				};
+			}
+
+			if (FindDownedCrawlerVisualCells(map, root, out var cells, out var cellError) == false)
+				return cellError;
+
+			var zombie = SpawnTargetZombie(map, cells[0], ZombieType.Normal, "ZL_Area_EffecterZombie", spawnedThings);
+			var ordinaryHuman = SpawnAreaWorkflowPawn(map, "ZL_Area_EffecterHuman", cells[1], Faction.OfPlayer, spawnedThings);
+			if (zombie == null || ordinaryHuman == null)
+			{
+				return new
+				{
+					success = false,
+					zombie = DescribeZombie(zombie),
+					ordinaryHuman = DescribePawn(ordinaryHuman),
+					error = "Could not create effecter suppression fixtures."
+				};
+			}
+
+			var zombieDeflect = RunProbeEffecterCase(childrenField, EffecterDefOf.Deflect_General, zombie);
+			var humanDeflect = RunProbeEffecterCase(childrenField, EffecterDefOf.Deflect_General, ordinaryHuman);
+			var zombieNonDeflect = RunProbeEffecterCase(childrenField, EffecterDefOf.Mine, zombie);
+			var prefixZombieDeflect = (bool)prefix.Invoke(null, new object[] { EffecterDefOf.Deflect_General, new TargetInfo(zombie) });
+			var prefixHumanDeflect = (bool)prefix.Invoke(null, new object[] { EffecterDefOf.Deflect_General, new TargetInfo(ordinaryHuman) });
+			var prefixZombieNonDeflect = (bool)prefix.Invoke(null, new object[] { EffecterDefOf.Mine, new TargetInfo(zombie) });
+
+			return new
+			{
+				success = patchTargets.Length > 0
+					&& ObjectSuccess(zombieDeflect)
+					&& ObjectSuccess(humanDeflect)
+					&& ObjectSuccess(zombieNonDeflect)
+					&& ((EffecterProbeCase)zombieDeflect).triggerCount == 0
+					&& ((EffecterProbeCase)humanDeflect).triggerCount == 1
+					&& ((EffecterProbeCase)zombieNonDeflect).triggerCount == 1
+					&& prefixZombieDeflect == false
+					&& prefixHumanDeflect
+					&& prefixZombieNonDeflect,
+				patchTargets,
+				fixtures = new
+				{
+					zombie = DescribeZombie(zombie),
+					ordinaryHuman = DescribePawn(ordinaryHuman)
+				},
+				actualTriggerCases = new
+				{
+					zombieDeflect,
+					humanDeflect,
+					zombieNonDeflect
+				},
+				prefixBranches = new
+				{
+					zombieDeflect = prefixZombieDeflect,
+					humanDeflect = prefixHumanDeflect,
+					zombieNonDeflect = prefixZombieNonDeflect
+				}
+			};
+		}
+
+		sealed class EffecterProbeCase
+		{
+			public bool success { get; set; }
+			public string effecterDef { get; set; }
+			public object target { get; set; }
+			public int triggerCount { get; set; }
+			public int childCount { get; set; }
+			public object lastTargetA { get; set; }
+			public object lastTargetB { get; set; }
+			public int lastOverrideSpawnTick { get; set; }
+			public string error { get; set; }
+		}
+
+		static EffecterProbeCase RunProbeEffecterCase(FieldInfo childrenField, EffecterDef effecterDef, Thing target)
+		{
+			var effecter = new Effecter(effecterDef);
+			var children = childrenField.GetValue(effecter) as List<SubEffecter>;
+			if (children == null)
+			{
+				return new EffecterProbeCase
+				{
+					success = false,
+					effecterDef = effecterDef?.defName,
+					target = StableId(target),
+					error = "Could not access Effecter.children."
+				};
+			}
+
+			children.Clear();
+			var probe = new ProbeSubEffecter(effecter);
+			children.Add(probe);
+			effecter.Trigger(new TargetInfo(target), TargetInfo.Invalid, 123);
+			return new EffecterProbeCase
+			{
+				success = true,
+				effecterDef = effecterDef?.defName,
+				target = StableId(target),
+				triggerCount = probe.triggerCount,
+				childCount = children.Count,
+				lastTargetA = probe.lastTargetA,
+				lastTargetB = probe.lastTargetB,
+				lastOverrideSpawnTick = probe.lastOverrideSpawnTick
+			};
+		}
+
+		static object DescribeTargetInfo(TargetInfo target)
+		{
+			return new
+			{
+				hasThing = target.HasThing,
+				thing = StableId(target.Thing),
+				cell = target.Cell.IsValid ? ZombieRuntimeActions.DescribeCell(target.Cell) : null,
+				map = target.Map?.uniqueID
+			};
+		}
+
+		static object VerifyAreaWorkflowGraphicMultiTexture(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Graphic_Multi_Init_Patch");
+			var captureTextureError = FindNestedPatchMethod("Graphic_Multi_Init_Patch", "CaptureTextureError");
+			var initMethod = AccessTools.Method(typeof(Graphic_Multi), nameof(Graphic_Multi.Init), new[] { typeof(GraphicRequest) });
+			if (captureTextureError == null || initMethod == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect all Graphic_Multi texture probe members.",
+					reflection = new
+					{
+						captureTextureError = captureTextureError != null,
+						initMethod = initMethod != null
+					},
+					patchTargets
+				};
+			}
+
+			if (FindDownedCrawlerVisualCells(map, root, out var cells, out var cellError) == false)
+				return cellError;
+
+			var human = SpawnAreaWorkflowPawn(map, "ZL_Area_GraphicMultiHuman", cells[0], Faction.OfPlayer, spawnedThings);
+			if (human?.story?.bodyType?.bodyNakedGraphicPath == null)
+			{
+				return new
+				{
+					success = false,
+					human = DescribePawn(human),
+					error = "Could not create a human with a usable body graphic path."
+				};
+			}
+
+			var oldSuppressError = Patches.Graphic_Multi_Init_Patch.suppressError;
+			var oldTextureError = Patches.Graphic_Multi_Init_Patch.textureError;
+			try
+			{
+				Patches.Graphic_Multi_Init_Patch.suppressError = true;
+				Patches.Graphic_Multi_Init_Patch.textureError = false;
+				var missingPath = $"ZombielandTextureProbe/Missing_{GenTicks.TicksGame}_{human.thingIDNumber}";
+				var missingGraphic = new Graphic_Multi();
+				missingGraphic.Init(new GraphicRequest(
+					typeof(Graphic_Multi),
+					missingPath,
+					ShaderDatabase.Cutout,
+					Vector2.one,
+					Color.white,
+					Color.white,
+					null,
+					0,
+					new List<ShaderParameter>(),
+					null));
+				var missingTextureError = Patches.Graphic_Multi_Init_Patch.textureError;
+				var missingMatIsBadMat = ReferenceEquals(missingGraphic.MatSingle, BaseContent.BadMat);
+
+				Patches.Graphic_Multi_Init_Patch.textureError = false;
+				var validPath = human.story.bodyType.bodyNakedGraphicPath;
+				var validGraphic = new Graphic_Multi();
+				validGraphic.Init(new GraphicRequest(
+					typeof(Graphic_Multi),
+					validPath,
+					ShaderDatabase.Cutout,
+					Vector2.one,
+					Color.white,
+					Color.white,
+					null,
+					0,
+					new List<ShaderParameter>(),
+					null));
+				var validTextureError = Patches.Graphic_Multi_Init_Patch.textureError;
+				var validMatIsBadMat = ReferenceEquals(validGraphic.MatSingle, BaseContent.BadMat);
+
+				Patches.Graphic_Multi_Init_Patch.textureError = false;
+				captureTextureError.Invoke(null, new object[] { "suppressed probe" });
+				var directCaptureSuppressedSetsFlag = Patches.Graphic_Multi_Init_Patch.textureError;
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& missingTextureError
+						&& missingMatIsBadMat
+						&& validTextureError == false
+						&& validMatIsBadMat == false
+						&& directCaptureSuppressedSetsFlag,
+					patchTargets,
+					fixture = new
+					{
+						human = DescribePawn(human),
+						validPath,
+						missingPath
+					},
+					missingTexture = new
+					{
+						textureError = missingTextureError,
+						matSingleIsBadMat = missingMatIsBadMat,
+						suppressError = true
+					},
+					validTexture = new
+					{
+						textureError = validTextureError,
+						matSingleIsBadMat = validMatIsBadMat
+					},
+					directCapture = new
+					{
+						suppressedSetsFlag = directCaptureSuppressedSetsFlag,
+						unsuppressedBranchSource = "CaptureTextureError sets textureError and calls Patches.Error(text) only when suppressError == false."
+					}
+				};
+			}
+			finally
+			{
+				Patches.Graphic_Multi_Init_Patch.suppressError = oldSuppressError;
+				Patches.Graphic_Multi_Init_Patch.textureError = oldTextureError;
+			}
+		}
+
+		sealed class WarmupScalingProbeCase
+		{
+			public string name { get; set; }
+			public bool success { get; set; }
+			public string error { get; set; }
+			public object caster { get; set; }
+			public object targetCell { get; set; }
+			public object verb { get; set; }
+			public bool castResult { get; set; }
+			public string stanceType { get; set; }
+			public float warmupTime { get; set; }
+			public float aimingDelayFactor { get; set; }
+			public int gridCount { get; set; }
+			public int divisor { get; set; }
+			public int expectedTicks { get; set; }
+			public int? actualTicks { get; set; }
+			public int? directModifyTicks { get; set; }
+			public bool isRaging { get; set; }
+			public bool wasMapPawnBefore { get; set; }
+		}
+
+		static object VerifyAreaWorkflowWarmupScaling(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Verb_TryStartCastOn_Patch");
+			var modifyTicks = FindNestedPatchMethod("Verb_TryStartCastOn_Patch", "ModifyTicks");
+			var tryStartCastOn = AccessTools.Method(
+				typeof(Verb),
+				nameof(Verb.TryStartCastOn),
+				new[] { typeof(LocalTargetInfo), typeof(LocalTargetInfo), typeof(bool), typeof(bool), typeof(bool), typeof(bool) });
+			var warmupTimeField = AccessTools.Field(typeof(VerbProperties), "warmupTime");
+			var ticksLeftField = AccessTools.Field(typeof(Stance_Busy), "ticksLeft");
+			if (modifyTicks == null || tryStartCastOn == null || warmupTimeField == null || ticksLeftField == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect all warmup-scaling probe members.",
+					reflection = new
+					{
+						modifyTicks = modifyTicks != null,
+						tryStartCastOn = tryStartCastOn != null,
+						warmupTimeField = warmupTimeField != null,
+						ticksLeftField = ticksLeftField != null
+					},
+					patchTargets
+				};
+			}
+
+			if (FindWarmupScalingCells(map, root, out var targetCell, out var casterCells, out var cellError) == false)
+				return cellError;
+
+			var grid = map.GetGrid();
+			var originalGridCounts = new Dictionary<IntVec3, int>();
+			void RecordGridCell(IntVec3 cell)
+			{
+				if (cell.IsValid && originalGridCounts.ContainsKey(cell) == false)
+					originalGridCounts[cell] = grid.GetZombieCount(cell);
+			}
+
+			void SetGridCount(IntVec3 cell, int count)
+			{
+				RecordGridCell(cell);
+				var current = grid.GetZombieCount(cell);
+				if (current != 0)
+					grid.ChangeZombieCount(cell, -current);
+				if (count != 0)
+					grid.ChangeZombieCount(cell, count);
+			}
+
+			try
+			{
+				var human = SpawnAreaWorkflowPawn(map, "ZL_Area_WarmupHuman", casterCells[0], Faction.OfPlayer, spawnedThings);
+				var normal = SpawnTargetZombie(map, casterCells[1], ZombieType.Normal, "ZL_Area_WarmupNormalZombie", spawnedThings);
+				var raging = SpawnTargetZombie(map, casterCells[2], ZombieType.Normal, "ZL_Area_WarmupRagingZombie", spawnedThings);
+				var former = SpawnTargetZombie(map, casterCells[3], ZombieType.Normal, "ZL_Area_WarmupFormerZombie", spawnedThings);
+				if (human == null || normal == null || raging == null || former == null)
+				{
+					return new
+					{
+						success = false,
+						human = DescribePawn(human),
+						normal = DescribeZombie(normal),
+						raging = DescribeZombie(raging),
+						former = DescribeZombie(former),
+						error = "Could not create all warmup-scaling fixtures."
+					};
+				}
+
+				raging.raging = GenTicks.TicksAbs + 60000;
+				former.raging = 0;
+				former.wasMapPawnBefore = true;
+				SetGridCount(normal.Position, 4);
+				SetGridCount(raging.Position, 4);
+				SetGridCount(former.Position, 5);
+
+				var cases = new[]
+				{
+					RunWarmupScalingCase("humanControl", human, targetCell, 1, modifyTicks, warmupTimeField, ticksLeftField),
+					RunWarmupScalingCase("normalZombieNoScale", normal, targetCell, 1, modifyTicks, warmupTimeField, ticksLeftField),
+					RunWarmupScalingCase("ragingZombieGridScale", raging, targetCell, 4, modifyTicks, warmupTimeField, ticksLeftField),
+					RunWarmupScalingCase("formerZombieGridScale", former, targetCell, 5, modifyTicks, warmupTimeField, ticksLeftField)
+				};
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& cases.All(entry => entry.success)
+						&& cases[0].actualTicks == cases[1].actualTicks
+						&& cases[2].actualTicks < cases[1].actualTicks
+						&& cases[3].actualTicks < cases[1].actualTicks,
+					patchTargets,
+					target = new
+					{
+						cell = ZombieRuntimeActions.DescribeCell(targetCell),
+						sourceEvidence = "Verb.TryStartCastOn computes Stance_Warmup ticks from (WarmupTime * AimingDelayFactor).SecondsToTicks()."
+					},
+					cases
+				};
+			}
+			finally
+			{
+				foreach (var pair in originalGridCounts)
+				{
+					var current = grid.GetZombieCount(pair.Key);
+					if (current != 0)
+						grid.ChangeZombieCount(pair.Key, -current);
+					if (pair.Value != 0)
+						grid.ChangeZombieCount(pair.Key, pair.Value);
+				}
+			}
+		}
+
+		static WarmupScalingProbeCase RunWarmupScalingCase(
+			string name,
+			Pawn caster,
+			IntVec3 targetCell,
+			int expectedDivisor,
+			MethodInfo modifyTicks,
+			FieldInfo warmupTimeField,
+			FieldInfo ticksLeftField)
+		{
+			var verb = EquipAreaWorkflowRangedWeapon(caster);
+			if (verb == null)
+			{
+				return new WarmupScalingProbeCase
+				{
+					name = name,
+					success = false,
+					caster = DescribePawn(caster),
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					error = "The caster has no ranged verb for the warmup-scaling probe."
+				};
+			}
+
+			var oldWarmupTime = (float)warmupTimeField.GetValue(verb.verbProps);
+			const float probeWarmupTime = 2f;
+			try
+			{
+				caster.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+				caster.pather?.StopDead();
+				caster.stances?.CancelBusyStanceHard();
+				warmupTimeField.SetValue(verb.verbProps, probeWarmupTime);
+
+				var zombie = caster as Zombie;
+				var gridCount = zombie?.Map?.GetGrid()?.GetZombieCount(zombie.Position) ?? 0;
+				var actualDivisor = zombie != null && (zombie.raging > 0 || zombie.wasMapPawnBefore) && gridCount > 0 ? gridCount : 1;
+				var aimingDelay = caster.GetStatValue(StatDefOf.AimingDelayFactor);
+				var expectedTicks = (verb.WarmupTime * aimingDelay).SecondsToTicks() / actualDivisor;
+				var directModifyTicks = (int)modifyTicks.Invoke(null, new object[] { verb.WarmupTime * aimingDelay, verb });
+				var castResult = verb.TryStartCastOn(new LocalTargetInfo(targetCell), LocalTargetInfo.Invalid, false, true, false, false);
+				var stance = caster.stances?.curStance;
+				var actualTicks = stance is Stance_Warmup ? (int?)ticksLeftField.GetValue(stance) : null;
+
+				return new WarmupScalingProbeCase
+				{
+					name = name,
+					success = castResult
+						&& stance is Stance_Warmup
+						&& actualTicks == expectedTicks
+						&& directModifyTicks == expectedTicks
+						&& actualDivisor == expectedDivisor,
+					caster = DescribePawn(caster),
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					verb = DescribeVerb(verb),
+					castResult = castResult,
+					stanceType = stance?.GetType().Name,
+					warmupTime = verb.WarmupTime,
+					aimingDelayFactor = aimingDelay,
+					gridCount = gridCount,
+					divisor = actualDivisor,
+					expectedTicks = expectedTicks,
+					actualTicks = actualTicks,
+					directModifyTicks = directModifyTicks,
+					isRaging = zombie?.raging > 0,
+					wasMapPawnBefore = zombie?.wasMapPawnBefore ?? false
+				};
+			}
+			catch (Exception ex)
+			{
+				return new WarmupScalingProbeCase
+				{
+					name = name,
+					success = false,
+					caster = DescribePawn(caster),
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					verb = DescribeVerb(verb),
+					error = ex.GetBaseException().Message
+				};
+			}
+			finally
+			{
+				warmupTimeField.SetValue(verb.verbProps, oldWarmupTime);
+				caster.stances?.CancelBusyStanceHard();
+			}
+		}
+
+		static Verb EquipAreaWorkflowRangedWeapon(Pawn pawn)
+		{
+			if (pawn?.equipment == null)
+				return null;
+			pawn.equipment.DestroyAllEquipment(DestroyMode.Vanish);
+			var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
+				?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false)
+				?? DefDatabase<ThingDef>.AllDefs.FirstOrDefault(def => def.IsRangedWeapon);
+			var weapon = weaponDef == null ? null : ThingMaker.MakeThing(weaponDef) as ThingWithComps;
+			if (weapon == null)
+				return null;
+			pawn.equipment.AddEquipment(weapon);
+			return pawn.equipment.PrimaryEq?.PrimaryVerb;
+		}
+
+		static bool FindWarmupScalingCells(Map map, IntVec3 root, out IntVec3 targetCell, out IntVec3[] casterCells, out object error)
+		{
+			targetCell = IntVec3.Invalid;
+			casterCells = Array.Empty<IntVec3>();
+			error = null;
+
+			if (TryFindClearSpawnCell(map, root, 16f, out targetCell, out var targetError) == false)
+			{
+				error = targetError;
+				return false;
+			}
+
+			var target = targetCell;
+			casterCells = GenRadial.RadialCellsAround(target, 14f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell != target)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.DistanceTo(target) >= 7f)
+				.Where(cell => GenSight.LineOfSight(cell, target, map, true))
+				.OrderBy(cell => cell.DistanceToSquared(root))
+				.Take(4)
+				.ToArray();
+			if (casterCells.Length >= 4)
+				return true;
+
+			error = new
+			{
+				success = false,
+				targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+				foundCasterCells = casterCells.Length,
+				error = "Could not find enough line-of-sight caster cells for the warmup-scaling fixture."
+			};
+			return false;
+		}
+
+		sealed class StatProbeCase
+		{
+			public string name { get; set; }
+			public bool success { get; set; }
+			public string stat { get; set; }
+			public float actual { get; set; }
+			public float expected { get; set; }
+			public float tolerance { get; set; }
+			public object pawn { get; set; }
+			public string note { get; set; }
+		}
+
+		static object VerifyAreaWorkflowZombieStats(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("StatExtension_GetStatValue_Patch");
+			var prefix = FindNestedPatchMethod("StatExtension_GetStatValue_Patch", "Prefix");
+			var getStatValue = AccessTools.Method(typeof(StatExtension), nameof(StatExtension.GetStatValue), new[] { typeof(Thing), typeof(StatDef), typeof(bool), typeof(int) });
+			if (prefix == null || getStatValue == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect all zombie stat probe members.",
+					reflection = new
+					{
+						prefix = prefix != null,
+						getStatValue = getStatValue != null
+					},
+					patchTargets
+				};
+			}
+
+			if (FindZombieStatsCells(map, root, out var cells, out var cellError) == false)
+				return cellError;
+
+			var settingsSnapshot = SnapshotZombieSettings();
+			var tickerSnapshot = new
+			{
+				percentZombiesTicked = ZombieTicker.percentZombiesTicked.ToArray(),
+				percentZombiesTickedIndex = ZombieTicker.percentZombiesTickedIndex
+			};
+			var gameTickManager = Find.TickManager;
+			var originalTimeSpeed = gameTickManager.CurTimeSpeed;
+
+			try
+			{
+				ZombieSettings.Values.moveSpeedIdle = 0.25f;
+				ZombieSettings.Values.moveSpeedTracking = 0.75f;
+				ZombieSettings.Values.spitterThreat = 2.25f;
+				ZombieTicker.percentZombiesTicked = Enumerable.Repeat(1f, ZombieTicker.percentZombiesTicked.Length).ToArray();
+				ZombieTicker.percentZombiesTickedIndex = 0;
+				gameTickManager.CurTimeSpeed = TimeSpeed.Normal;
+
+				var human = SpawnAreaWorkflowPawn(map, "ZL_Area_StatsHuman", cells[0], Faction.OfPlayer, spawnedThings);
+				var idleFat = SpawnTargetZombie(map, cells[1], ZombieType.Normal, "ZL_Area_StatsIdleFat", spawnedThings);
+				var trackingThin = SpawnTargetZombie(map, cells[2], ZombieType.Normal, "ZL_Area_StatsTrackingThin", spawnedThings);
+				var formerHulk = SpawnTargetZombie(map, cells[3], ZombieType.Normal, "ZL_Area_StatsFormerHulk", spawnedThings);
+				var tanky = SpawnTargetZombie(map, cells[4], ZombieType.Normal, "ZL_Area_StatsTanky", spawnedThings);
+				var downedRoped = SpawnTargetZombie(map, cells[5], ZombieType.Normal, "ZL_Area_StatsDownedRoped", spawnedThings);
+				var albino = SpawnTargetZombie(map, cells[6], ZombieType.Albino, "ZL_Area_StatsAlbino", spawnedThings);
+				var raging = SpawnTargetZombie(map, cells[7], ZombieType.Normal, "ZL_Area_StatsRaging", spawnedThings);
+				var spitter = SpawnTargetSpitter(map, cells[8], "ZL_Area_StatsSpitter", spawnedThings);
+				if (human == null || idleFat == null || trackingThin == null || formerHulk == null || tanky == null || downedRoped == null || albino == null || raging == null || spitter == null)
+				{
+					return new
+					{
+						success = false,
+						fixtures = new
+						{
+							human = DescribePawn(human),
+							idleFat = DescribeZombie(idleFat),
+							trackingThin = DescribeZombie(trackingThin),
+							formerHulk = DescribeZombie(formerHulk),
+							tanky = DescribeZombie(tanky),
+							downedRoped = DescribeZombie(downedRoped),
+							albino = DescribeZombie(albino),
+							raging = DescribeZombie(raging),
+							spitter = DescribeZombie(spitter)
+						},
+						error = "Could not create all zombie stat fixtures."
+					};
+				}
+
+				idleFat.state = ZombieState.Wandering;
+				idleFat.raging = 0;
+				idleFat.story.bodyType = BodyTypeDefOf.Fat;
+				trackingThin.state = ZombieState.Tracking;
+				trackingThin.raging = 0;
+				trackingThin.story.bodyType = BodyTypeDefOf.Thin;
+				formerHulk.wasMapPawnBefore = true;
+				formerHulk.raging = 0;
+				formerHulk.story.bodyType = BodyTypeDefOf.Hulk;
+				tanky.hasTankyHelmet = 1f;
+				tanky.hasTankySuit = 1f;
+				raging.raging = GenTicks.TicksAbs + 60000;
+				raging.story.bodyType = BodyTypeDefOf.Male;
+				if (TryMakeDownedForCombat(downedRoped, out var downedError) == false)
+				{
+					return new
+					{
+						success = false,
+						downedRoped = DescribeZombie(downedRoped),
+						error = downedError
+					};
+				}
+				downedRoped.ropedBy = human;
+
+				var baseMoveSpeed = ThingDefOf.Human.statBases.First(modifier => modifier.stat == StatDefOf.MoveSpeed).value;
+				var tickRate = Find.TickManager.TickRateMultiplier;
+				var cases = new List<StatProbeCase>
+				{
+					MakeStatCase("idleFatMoveSpeed", idleFat, StatDefOf.MoveSpeed, ZombieSettings.Values.moveSpeedIdle * 0.7f * baseMoveSpeed, "idle Fat zombie uses idle setting, Fat body factor, and human base speed"),
+					MakeStatCase("trackingThinMoveSpeed", trackingThin, StatDefOf.MoveSpeed, ZombieSettings.Values.moveSpeedTracking * 0.8f * baseMoveSpeed, "tracking Thin zombie uses tracking setting and Thin body factor"),
+					MakeStatCase("formerHulkMoveSpeed", formerHulk, StatDefOf.MoveSpeed, ZombieSettings.Values.moveSpeedTracking * 0.8f * baseMoveSpeed * 2f, "former-map-pawn Hulk zombie uses tracking speed, Hulk factor, and former-pawn doubling"),
+					MakeStatCase("tankyMoveSpeed", tanky, StatDefOf.MoveSpeed, 0.004f * baseMoveSpeed * tickRate, "tanky movement ignores ordinary speed settings"),
+					MakeStatCase("downedRopedMoveSpeed", downedRoped, StatDefOf.MoveSpeed, 0.4f * tickRate, "roped health-downed zombie uses the roped crawler speed"),
+					MakeStatCase("formerMeleeHit", formerHulk, StatDefOf.MeleeHitChance, 1f, "former-map-pawn melee hit override"),
+					MakeStatCase("downedMeleeHit", downedRoped, StatDefOf.MeleeHitChance, 0.1f, "downed zombie melee hit override"),
+					MakeStatCase("tankyMeleeHit", tanky, StatDefOf.MeleeHitChance, 0.9f, "tanky helmet/suit melee hit override"),
+					MakeStatCase("trackingMeleeHit", trackingThin, StatDefOf.MeleeHitChance, Constants.ZOMBIE_HIT_CHANCE_TRACKING, "tracking zombie uses tracking hit constant"),
+					MakeStatCase("formerMeleeDodge", formerHulk, StatDefOf.MeleeDodgeChance, 0.9f, "former-map-pawn dodge override"),
+					MakeStatCase("albinoMeleeDodge", albino, StatDefOf.MeleeDodgeChance, 0f, "albino dodge override"),
+					MakeStatCase("normalMeleeDodge", idleFat, StatDefOf.MeleeDodgeChance, 0.02f, "ordinary zombie dodge override"),
+					MakeStatCase("formerPainShock", formerHulk, StatDefOf.PainShockThreshold, 4000f, "former-map-pawn pain shock override"),
+					MakeStatCase("ragingPainShock", raging, StatDefOf.PainShockThreshold, 1000f, "raging pain shock override"),
+					MakeStatCase("tankyPainShock", tanky, StatDefOf.PainShockThreshold, 5000f, "tanky armor pain shock override"),
+					MakeStatCase("thinPainShock", trackingThin, StatDefOf.PainShockThreshold, 0.1f, "Thin body pain shock override"),
+					MakeStatCase("fatPainShock", idleFat, StatDefOf.PainShockThreshold, 10f, "Fat body pain shock override"),
+					MakeStatCase("tankyComfyTemperatureMin", tanky, StatDefOf.ComfyTemperatureMin, -999f, "tanky temperature minimum override"),
+					MakeStatCase("tankyComfyTemperatureMax", tanky, StatDefOf.ComfyTemperatureMax, 999f, "tanky temperature maximum override"),
+					MakeStatCase("spitterIncomingDamageFactor", spitter, StatDefOf.IncomingDamageFactor, 6f - ZombieSettings.Values.spitterThreat, "spitter incoming damage factor follows spitter threat")
+				};
+
+				var smokeSensitivity = DefDatabase<StatDef>.GetNamed("SmokeSensitivity", false);
+				if (smokeSensitivity != null)
+					cases.Add(MakeStatCase("ignoredSmokeSensitivity", idleFat, smokeSensitivity, 0f, "zombies ignore smoke sensitivity stat"));
+				var suppressability = DefDatabase<StatDef>.GetNamed("Suppressability", false);
+				if (suppressability != null)
+					cases.Add(MakeStatCase("ignoredSuppressability", idleFat, suppressability, 0f, "zombies ignore suppressability stat"));
+
+				var humanPrefixArgs = new object[] { human, StatDefOf.MoveSpeed, -12345f };
+				var humanPrefixContinues = (bool)prefix.Invoke(null, humanPrefixArgs);
+				var humanPrefixResultUnchanged = Mathf.Approximately((float)humanPrefixArgs[2], -12345f);
+				var humanMoveSpeed = human.GetStatValue(StatDefOf.MoveSpeed);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& humanPrefixContinues
+						&& humanPrefixResultUnchanged
+						&& humanMoveSpeed > 0f
+						&& cases.All(entry => entry.success),
+					patchTargets,
+					fixtures = new
+					{
+						human = DescribePawn(human),
+						idleFat = DescribeZombie(idleFat),
+						trackingThin = DescribeZombie(trackingThin),
+						formerHulk = DescribeZombie(formerHulk),
+						tanky = DescribeZombie(tanky),
+						downedRoped = DescribeZombie(downedRoped),
+						albino = DescribeZombie(albino),
+						raging = DescribeZombie(raging),
+						spitter = DescribeZombie(spitter)
+					},
+					settings = new
+					{
+						ZombieSettings.Values.moveSpeedIdle,
+						ZombieSettings.Values.moveSpeedTracking,
+						ZombieSettings.Values.spitterThreat,
+						zombieTickerPercent = ZombieTicker.PercentTicking,
+						baseHumanMoveSpeed = baseMoveSpeed,
+						tickRate
+					},
+					humanPassThrough = new
+					{
+						humanPrefixContinues,
+						humanPrefixResultUnchanged,
+						moveSpeed = humanMoveSpeed
+					},
+					cases = cases.ToArray(),
+					optionalStats = new
+					{
+						smokeSensitivityPresent = smokeSensitivity != null,
+						suppressabilityPresent = suppressability != null
+					}
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+				ZombieTicker.percentZombiesTicked = tickerSnapshot.percentZombiesTicked.ToArray();
+				ZombieTicker.percentZombiesTickedIndex = tickerSnapshot.percentZombiesTickedIndex;
+				gameTickManager.CurTimeSpeed = originalTimeSpeed;
+			}
+		}
+
+		static StatProbeCase MakeStatCase(string name, Thing thing, StatDef stat, float expected, string note, float tolerance = 0.0001f)
+		{
+			var actual = thing.GetStatValue(stat);
+			return new StatProbeCase
+			{
+				name = name,
+				success = Mathf.Abs(actual - expected) <= tolerance,
+				stat = stat?.defName,
+				actual = actual,
+				expected = expected,
+				tolerance = tolerance,
+				pawn = thing is Pawn pawn ? DescribePawn(pawn) : StableId(thing),
+				note = note
+			};
+		}
+
+		static bool FindZombieStatsCells(Map map, IntVec3 root, out IntVec3[] cells, out object error)
+		{
+			cells = GenRadial.RadialCellsAround(root, 24f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.OrderBy(cell => cell.DistanceToSquared(root))
+				.Take(9)
+				.ToArray();
+			if (cells.Length >= 9)
+			{
+				error = null;
+				return true;
+			}
+
+			error = new
+			{
+				success = false,
+				root = ZombieRuntimeActions.DescribeCell(root),
+				foundCells = cells.Length,
+				error = "Could not find enough cells for the zombie-stat fixture."
+			};
+			return false;
+		}
+
+			static object VerifyAreaWorkflowVisualSupport(Map map, IntVec3 root, List<Thing> spawnedThings)
+			{
+				var drawTrackerConstructorTargets = PatchedMethodsForPatchClass("Pawn_DrawTracker_Constructor_Patch");
+				var rendererConstructorTargets = PatchedMethodsForPatchClass("PawnRenderer_Constructor_With_Pawn_Patch");
+				var damageNotifyTargets = PatchedMethodsForPatchClass("DamageFlasher_Notify_DamageApplied_Patch");
+				var damageMatTargets = PatchedMethodsForPatchClass("DamageFlasher_GetDamagedMat_Patch");
+			var drawPosTargets = PatchedMethodsForPatchClass("Pawn_DrawTracker_DrawPos_Patch");
+			var tickVisualTargets = PatchedMethodsForPatchClass("Pawn_DrawTrackerDrawTrackerTick_Patch");
+			var dinfoDefField = AccessTools.Field(typeof(ZombieDamageFlasher), nameof(ZombieDamageFlasher.dinfoDef));
+			var jitterOffsetField = AccessTools.Field(typeof(ZombieLeaner), "jitterOffset");
+			var extraOffsetInternalField = AccessTools.Field(typeof(ZombieLeaner), "extraOffsetInternal");
+			var randTickFrequencyField = AccessTools.Field(typeof(ZombieLeaner), "randTickFrequency");
+			var randTickOffsetField = AccessTools.Field(typeof(ZombieLeaner), "randTickOffset");
+			var drawTrackerProcessPostTickVisuals = AccessTools.Method(typeof(Pawn_DrawTracker), nameof(Pawn_DrawTracker.ProcessPostTickVisuals), new[] { typeof(int) });
+			if (dinfoDefField == null || jitterOffsetField == null || extraOffsetInternalField == null || randTickFrequencyField == null || randTickOffsetField == null || drawTrackerProcessPostTickVisuals == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect all visual-support probe members.",
+					reflection = new
+					{
+						dinfoDefField = dinfoDefField != null,
+						jitterOffsetField = jitterOffsetField != null,
+						extraOffsetInternalField = extraOffsetInternalField != null,
+						randTickFrequencyField = randTickFrequencyField != null,
+						randTickOffsetField = randTickOffsetField != null,
+						drawTrackerProcessPostTickVisuals = drawTrackerProcessPostTickVisuals != null
+					}
+				};
+			}
+
+			if (FindVisualSupportCells(map, root, out var cells, out var cellError) == false)
+				return cellError;
+
+			var zombie = SpawnTargetZombie(map, cells[0], ZombieType.Normal, "ZL_Area_VisualSupportZombie", spawnedThings);
+			var human = SpawnAreaWorkflowPawn(map, "ZL_Area_VisualSupportHuman", cells[1], Faction.OfPlayer, spawnedThings);
+			if (zombie == null || human == null)
+			{
+				return new
+				{
+					success = false,
+					zombie = DescribeZombie(zombie),
+					human = DescribePawn(human),
+					error = "Could not create visual-support fixtures."
+				};
+			}
+
+				var damageFlash = VerifyVisualSupportDamageFlash(zombie, human, dinfoDefField);
+				var customPawnState = VerifyVisualSupportCustomPawnState(zombie, human);
+				var leaner = VerifyVisualSupportLeaner(zombie, human, jitterOffsetField, extraOffsetInternalField, randTickFrequencyField, randTickOffsetField, drawTrackerProcessPostTickVisuals);
+
+				return new
+				{
+					success = drawTrackerConstructorTargets.Length > 0
+						&& rendererConstructorTargets.Length > 0
+						&& damageNotifyTargets.Length > 0
+						&& damageMatTargets.Length > 0
+						&& drawPosTargets.Length > 0
+						&& tickVisualTargets.Length > 0
+						&& ObjectSuccess(damageFlash)
+						&& ObjectSuccess(customPawnState)
+						&& ObjectSuccess(leaner),
+					patchTargets = new
+					{
+						drawTrackerConstructor = drawTrackerConstructorTargets,
+						rendererConstructor = rendererConstructorTargets,
+						damageNotify = damageNotifyTargets,
+						damageMaterial = damageMatTargets,
+					drawPos = drawPosTargets,
+					postTickVisuals = tickVisualTargets
+				},
+				fixtures = new
+				{
+					zombie = DescribeZombie(zombie),
+					human = DescribePawn(human)
+					},
+					damageFlash,
+					customPawnState,
+					leaner
+				};
+			}
+
+		static object VerifyVisualSupportDamageFlash(Zombie zombie, Pawn human, FieldInfo dinfoDefField)
+		{
+			var zombieFlasher = zombie?.Drawer?.renderer?.flasher;
+			var humanFlasher = human?.Drawer?.renderer?.flasher;
+			if (zombieFlasher == null || humanFlasher == null)
+			{
+				return new
+				{
+					success = false,
+					zombieFlasher = zombieFlasher?.GetType().Name,
+					humanFlasher = humanFlasher?.GetType().Name,
+					error = "Could not read renderer flashers."
+				};
+			}
+
+			var zombieFlasherIsCustom = zombieFlasher is ZombieDamageFlasher;
+			var humanFlasherIsCustom = humanFlasher is ZombieDamageFlasher;
+			var biteBase = new Material(ShaderDatabase.Cutout) { color = Color.white };
+			var cutBase = new Material(ShaderDatabase.Cutout) { color = Color.white };
+			zombieFlasher.Notify_DamageApplied(new DamageInfo(CustomDefs.ZombieBite, 1f));
+			var capturedBiteDef = dinfoDefField.GetValue(zombieFlasher) as DamageDef;
+			var biteMaterial = zombieFlasher.GetDamagedMat(biteBase);
+			var biteColor = biteMaterial?.color ?? Color.clear;
+
+			humanFlasher.Notify_DamageApplied(new DamageInfo(DamageDefOf.Cut, 1f));
+			var capturedCutDef = dinfoDefField.GetValue(humanFlasher) as DamageDef;
+			var cutMaterial = humanFlasher.GetDamagedMat(cutBase);
+			var cutColor = cutMaterial?.color ?? Color.clear;
+			var expectedBiteColor = new Color(0f, 0.8f, 0f, 1f);
+
+			return new
+			{
+				success = zombieFlasherIsCustom
+					&& humanFlasherIsCustom
+					&& capturedBiteDef == CustomDefs.ZombieBite
+					&& capturedCutDef == DamageDefOf.Cut
+					&& ColorsApproximatelyEqual(biteColor, expectedBiteColor, 0.03f)
+					&& ColorsApproximatelyEqual(cutColor, expectedBiteColor, 0.03f) == false,
+				zombieFlasherType = zombieFlasher.GetType().Name,
+				humanFlasherType = humanFlasher.GetType().Name,
+				capturedBiteDef = capturedBiteDef?.defName,
+				capturedCutDef = capturedCutDef?.defName,
+				biteColor = DescribeColor(biteColor),
+				expectedBiteColor = DescribeColor(expectedBiteColor),
+				cutColor = DescribeColor(cutColor),
+				cutStayedNonGreen = ColorsApproximatelyEqual(cutColor, expectedBiteColor, 0.03f) == false
+				};
+			}
+
+			static object VerifyVisualSupportCustomPawnState(Zombie zombie, Pawn human)
+			{
+				var humanLeaner = human?.Drawer?.leaner;
+				var zombieLeaner = zombie?.Drawer?.leaner;
+				var humanInitial = human?.InfectionState();
+				var zombieState = zombie?.InfectionState();
+				if (human != null)
+					human.SetInfectionState(InfectionState.Infecting);
+				var humanAfterSet = human?.InfectionState();
+				if (human != null)
+					human.SetInfectionState(InfectionState.None);
+				var humanAfterReset = human?.InfectionState();
+
+				return new
+				{
+					success = humanLeaner is CustomPawnState
+						&& zombieLeaner is ZombieLeaner
+						&& humanInitial == InfectionState.None
+						&& humanAfterSet == InfectionState.Infecting
+						&& humanAfterReset == InfectionState.None
+						&& zombieState == InfectionState.Infected,
+					humanLeanerType = humanLeaner?.GetType().Name,
+					zombieLeanerType = zombieLeaner?.GetType().Name,
+					humanStates = new
+					{
+						initial = humanInitial?.ToString(),
+						afterSet = humanAfterSet?.ToString(),
+						afterReset = humanAfterReset?.ToString()
+					},
+					zombieState = zombieState?.ToString()
+				};
+			}
+
+			static object VerifyVisualSupportLeaner(
+				Zombie zombie,
+			Pawn human,
+			FieldInfo jitterOffsetField,
+			FieldInfo extraOffsetInternalField,
+			FieldInfo randTickFrequencyField,
+			FieldInfo randTickOffsetField,
+			MethodInfo drawTrackerProcessPostTickVisuals)
+		{
+			var zombieLeaner = zombie?.Drawer?.leaner as ZombieLeaner;
+			var humanHasZombieLeaner = human?.Drawer?.leaner is ZombieLeaner;
+			if (zombieLeaner == null)
+			{
+				return new
+				{
+					success = false,
+					zombieLeanerType = zombie?.Drawer?.leaner?.GetType().Name,
+					humanLeanerType = human?.Drawer?.leaner?.GetType().Name,
+					error = "Zombie draw tracker does not have a ZombieLeaner."
+				};
+			}
+
+			var originalLeaner = zombie.Drawer.leaner;
+			var forcedOffset = new Vector3(0.21f, 0f, -0.13f);
+			jitterOffsetField.SetValue(zombieLeaner, Vector3.zero);
+			extraOffsetInternalField.SetValue(zombieLeaner, forcedOffset);
+			zombieLeaner.extraOffset = Vector3.zero;
+			var patchedDrawPos = zombie.Drawer.DrawPos;
+			zombie.Drawer.leaner = new PawnLeaner(zombie);
+			var vanillaDrawPos = zombie.Drawer.DrawPos;
+			zombie.Drawer.leaner = originalLeaner;
+				var drawDelta = patchedDrawPos - vanillaDrawPos;
+				var drawPosAppliesOffset = VectorsApproximatelyEqual(drawDelta, forcedOffset, 0.01f);
+
+				randTickFrequencyField.SetValue(zombieLeaner, 1);
+				randTickOffsetField.SetValue(zombieLeaner, 0);
+				jitterOffsetField.SetValue(zombieLeaner, new Vector3(0.11f, 0f, 0.12f));
+				extraOffsetInternalField.SetValue(zombieLeaner, new Vector3(0.22f, 0f, 0.23f));
+				zombieLeaner.extraOffset = Vector3.zero;
+				zombie.state = ZombieState.Emerging;
+				drawTrackerProcessPostTickVisuals.Invoke(zombie.Drawer, new object[] { 1 });
+			var resetOffset = zombieLeaner.ZombieOffset;
+			var postTickReset = VectorsApproximatelyEqual(resetOffset, Vector3.zero, 0.0001f);
+
+			zombie.state = ZombieState.Wandering;
+			jitterOffsetField.SetValue(zombieLeaner, Vector3.zero);
+			extraOffsetInternalField.SetValue(zombieLeaner, Vector3.zero);
+			zombieLeaner.extraOffset = new Vector3(0.4f, 0f, 0.2f);
+			Rand.PushState(191919);
+			drawTrackerProcessPostTickVisuals.Invoke(zombie.Drawer, new object[] { 1 });
+			Rand.PopState();
+			var updatedOffset = zombieLeaner.ZombieOffset;
+			var postTickUpdates = updatedOffset.MagnitudeHorizontalSquared() > 0.001f;
+
+			return new
+			{
+				success = humanHasZombieLeaner == false
+					&& drawPosAppliesOffset
+					&& postTickReset
+					&& postTickUpdates,
+				zombieLeanerType = zombieLeaner.GetType().Name,
+				humanLeanerType = human?.Drawer?.leaner?.GetType().Name,
+				humanHasZombieLeaner,
+				drawPos = new
+				{
+					vanilla = DescribeVector(vanillaDrawPos),
+					patched = DescribeVector(patchedDrawPos),
+					delta = DescribeVector(drawDelta),
+					expectedDelta = DescribeVector(forcedOffset),
+					appliesOffset = drawPosAppliesOffset
+				},
+				postTickReset = new
+				{
+					offset = DescribeVector(resetOffset),
+					reset = postTickReset,
+					state = ZombieState.Emerging.ToString()
+				},
+				postTickUpdate = new
+				{
+					offset = DescribeVector(updatedOffset),
+					updated = postTickUpdates,
+					state = ZombieState.Wandering.ToString()
+				}
+			};
+		}
+
+		static bool FindVisualSupportCells(Map map, IntVec3 root, out IntVec3[] cells, out object error)
+		{
+			cells = GenRadial.RadialCellsAround(root, 12f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.OrderBy(cell => cell.DistanceToSquared(root))
+				.Take(2)
+				.ToArray();
+			if (cells.Length >= 2)
+			{
+				error = null;
+				return true;
+			}
+
+			error = new
+			{
+				success = false,
+				root = ZombieRuntimeActions.DescribeCell(root),
+				foundCells = cells.Length,
+				error = "Could not find enough cells for the visual-support fixture."
+			};
+			return false;
+		}
+
+		static bool VectorsApproximatelyEqual(Vector3 actual, Vector3 expected, float tolerance)
+		{
+			return Mathf.Abs(actual.x - expected.x) <= tolerance
+				&& Mathf.Abs(actual.y - expected.y) <= tolerance
+				&& Mathf.Abs(actual.z - expected.z) <= tolerance;
+		}
+
 		static object VerifyAreaWorkflowAnimalResponse(Map map, IntVec3 root, List<Thing> spawnedThings)
 		{
 			var settingsSnapshot = SnapshotZombieSettings();
@@ -5076,7 +6218,7 @@ namespace ZombieLand
 		static MethodInfo FindNestedPatchMethod(string nestedTypeName, string methodName)
 		{
 			return typeof(Patches)
-				.GetNestedTypes(BindingFlags.NonPublic)
+				.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)
 				.FirstOrDefault(type => type.Name == nestedTypeName)
 				?.GetMethod(methodName, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
 		}
