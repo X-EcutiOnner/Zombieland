@@ -28,6 +28,8 @@ namespace ZombieLand
 		public override void ExposeData()
 		{
 			base.ExposeData();
+			Scribe_References.Look(ref bed, "bed");
+			Scribe_Values.Look(ref waitUntil, "waitUntil", -1);
 		}
 
 		void InitAction()

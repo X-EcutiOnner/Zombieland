@@ -12,6 +12,200 @@ namespace ZombieLand
 {
 	public sealed partial class ZombielandBridgeTools
 	{
+		[Tool("zombieland/zombie_skin_color_contract", Description = "Verify Zombieland pawns short-circuit RimWorld skin-color/gene fallback and report white SkinColorBase while ordinary humans keep vanilla story color.")]
+		public static object ZombieSkinColorContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanError) == false)
+					return humanError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 0), 10f, out var zombieCell, out var zombieError) == false)
+					return zombieError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(0, 0, 3), 10f, out var spitterCell, out var spitterError) == false)
+					return spitterError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 3), 10f, out var blobCell, out var blobError) == false)
+					return blobError;
+
+				var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+				DisablePawnWork(human);
+				spawnedThings.Add(human);
+				var humanControlColor = new Color(0.25f, 0.2f, 0.15f, 1f);
+				if (human.story != null)
+					human.story.SkinColorBase = humanControlColor;
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						error = "ZombieGenerator.SpawnZombie returned no skin-color test zombie."
+					};
+				}
+				spawnedThings.Add(zombie);
+
+				var existingSpitters = CurrentZombies(map).OfType<ZombieSpitter>()
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				ZombieSpitter.Spawn(map, spitterCell);
+				var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+					.FirstOrDefault(candidate => existingSpitters.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+					?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
+				if (spitter != null)
+					spawnedThings.Add(spitter);
+
+				var existingBlobs = CurrentZombies(map).OfType<ZombieBlob>()
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				ZombieBlob.Spawn(map, blobCell);
+				var blob = CurrentZombies(map).OfType<ZombieBlob>()
+					.FirstOrDefault(candidate => existingBlobs.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+					?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(blobCell)).FirstOrDefault();
+				if (blob != null)
+					spawnedThings.Add(blob);
+
+				var spitterStoryInjected = EnsureStoryTrackerForSkinColorProbe(spitter);
+				var blobStoryInjected = EnsureStoryTrackerForSkinColorProbe(blob);
+
+				var humanCase = DescribeSkinColorCase("human", human, humanControlColor, false, false);
+				var zombielandCases = new[]
+				{
+					DescribeSkinColorCase("zombie", zombie, Color.white, true, false),
+					DescribeSkinColorCase("spitter", spitter, Color.white, true, spitterStoryInjected),
+					DescribeSkinColorCase("blob", blob, Color.white, true, blobStoryInjected)
+				};
+
+				return new
+				{
+					success = humanCase.success && zombielandCases.All(result => result.success),
+					humanCase,
+					zombielandCases
+				};
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		[Tool("zombieland/zombie_gene_rejection_contract", Description = "Verify Zombieland pawns reject both RimWorld Pawn_GeneTracker.AddGene overloads while ordinary humans keep the vanilla gene path.")]
+		public static object ZombieGeneRejectionContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanError) == false)
+					return humanError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 0), 10f, out var zombieCell, out var zombieError) == false)
+					return zombieError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(0, 0, 3), 10f, out var spitterCell, out var spitterError) == false)
+					return spitterError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 3), 10f, out var blobCell, out var blobError) == false)
+					return blobError;
+
+				var privateAddGene = typeof(Pawn_GeneTracker).GetMethod(
+					nameof(Pawn_GeneTracker.AddGene),
+					BindingFlags.Instance | BindingFlags.NonPublic,
+					null,
+					new[] { typeof(Gene), typeof(bool) },
+					null);
+				if (privateAddGene == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not resolve private Pawn_GeneTracker.AddGene(Gene, bool)."
+					};
+				}
+
+				var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+				DisablePawnWork(human);
+				spawnedThings.Add(human);
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						error = "ZombieGenerator.SpawnZombie returned no gene test zombie."
+					};
+				}
+				spawnedThings.Add(zombie);
+
+				var existingSpitters = CurrentZombies(map).OfType<ZombieSpitter>()
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				ZombieSpitter.Spawn(map, spitterCell);
+				var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+					.FirstOrDefault(candidate => existingSpitters.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+					?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
+				if (spitter != null)
+					spawnedThings.Add(spitter);
+
+				var existingBlobs = CurrentZombies(map).OfType<ZombieBlob>()
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				ZombieBlob.Spawn(map, blobCell);
+				var blob = CurrentZombies(map).OfType<ZombieBlob>()
+					.FirstOrDefault(candidate => existingBlobs.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+					?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(blobCell)).FirstOrDefault();
+				if (blob != null)
+					spawnedThings.Add(blob);
+
+				var humanCase = DescribeGeneRejectionCase("human", human, false, privateAddGene);
+				var zombielandCases = new[]
+				{
+					DescribeGeneRejectionCase("zombie", zombie, true, privateAddGene),
+					DescribeGeneRejectionCase("spitter", spitter, true, privateAddGene),
+					DescribeGeneRejectionCase("blob", blob, true, privateAddGene)
+				};
+
+				return new
+				{
+					success = humanCase.success && zombielandCases.All(result => result.success),
+					biotechActive = ModsConfig.BiotechActive,
+					humanCase,
+					zombielandCases
+				};
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
 		[Tool("zombieland/fix_broken_chainsaw_job", Description = "Break a spawned chainsaw, run the real FixBrokenChainsaw workgiver/job with a component, and verify repair.")]
 		public static object FixBrokenChainsawJob()
 		{
@@ -1483,6 +1677,176 @@ namespace ZombieLand
 				after = DescribeZombie(tanky),
 				samples
 			};
+		}
+
+		sealed class SkinColorCase
+		{
+			public string name { get; set; }
+			public string pawnId { get; set; }
+			public string type { get; set; }
+			public string defName { get; set; }
+			public bool hasStory { get; set; }
+			public bool storyInjectedForProbe { get; set; }
+			public bool expectWhite { get; set; }
+			public object color { get; set; }
+			public object expectedColor { get; set; }
+			public bool success { get; set; }
+		}
+
+		sealed class GeneRejectionCase
+		{
+			public string name { get; set; }
+			public string pawnId { get; set; }
+			public string type { get; set; }
+			public string defName { get; set; }
+			public bool expectReject { get; set; }
+			public bool hadGeneTracker { get; set; }
+			public bool geneTrackerInjectedForProbe { get; set; }
+			public int initialGeneCount { get; set; }
+			public int afterPublicGeneDefCount { get; set; }
+			public int afterPrivateGeneCount { get; set; }
+			public bool publicGeneDefResultNull { get; set; }
+			public bool privateGeneResultNull { get; set; }
+			public string publicGeneDefError { get; set; }
+			public string privateGeneError { get; set; }
+			public bool success { get; set; }
+		}
+
+		static bool EnsureStoryTrackerForSkinColorProbe(Pawn pawn)
+		{
+			if (pawn == null || pawn.story != null)
+				return false;
+			pawn.story = new Pawn_StoryTracker(pawn);
+			return true;
+		}
+
+		static bool EnsureGeneTrackerForProbe(Pawn pawn)
+		{
+			if (pawn == null || pawn.genes != null)
+				return false;
+			pawn.genes = new Pawn_GeneTracker(pawn);
+			return true;
+		}
+
+		static SkinColorCase DescribeSkinColorCase(string name, Pawn pawn, Color expectedColor, bool expectWhite, bool storyInjectedForProbe)
+		{
+			var hasStory = pawn?.story != null;
+			var color = hasStory ? pawn.story.SkinColorBase : Color.clear;
+			return new SkinColorCase
+			{
+				name = name,
+				pawnId = ZombieRuntimeActions.StableThingId(pawn),
+				type = pawn?.GetType().FullName,
+				defName = pawn?.def?.defName,
+				hasStory = hasStory,
+				storyInjectedForProbe = storyInjectedForProbe,
+				expectWhite = expectWhite,
+				color = DescribeColor(color),
+				expectedColor = DescribeColor(expectedColor),
+				success = pawn != null && hasStory && ColorsApproximatelyEqual(color, expectedColor)
+			};
+		}
+
+		static GeneRejectionCase DescribeGeneRejectionCase(string name, Pawn pawn, bool expectReject, MethodInfo privateAddGene)
+		{
+			var hadGeneTracker = pawn?.genes != null;
+			var geneTrackerInjectedForProbe = EnsureGeneTrackerForProbe(pawn);
+			var initialGeneCount = CountGenes(pawn);
+			var publicGeneDef = MakeProbeGeneDef(name, "public");
+			var privateGeneDef = MakeProbeGeneDef(name, "private");
+
+			Gene publicResult = null;
+			string publicError = null;
+			try
+			{
+				publicResult = pawn?.genes?.AddGene(publicGeneDef, false);
+			}
+			catch (Exception ex)
+			{
+				publicError = DescribeException(ex);
+			}
+			var afterPublicGeneDefCount = CountGenes(pawn);
+
+			var privateGene = MakeProbeGene(privateGeneDef, pawn);
+			var privateResult = InvokePrivateAddGene(privateAddGene, pawn?.genes, privateGene, false, out var privateError);
+			var afterPrivateGeneCount = CountGenes(pawn);
+
+			var publicRejected = publicResult == null && publicError == null && afterPublicGeneDefCount == initialGeneCount;
+			var privateRejected = privateResult == null && privateError == null && afterPrivateGeneCount == afterPublicGeneDefCount;
+			var publicPreserved = publicResult != null && publicError == null && afterPublicGeneDefCount == initialGeneCount + 1;
+			var privatePreserved = privateResult != null && privateError == null && afterPrivateGeneCount == afterPublicGeneDefCount + 1;
+
+			return new GeneRejectionCase
+			{
+				name = name,
+				pawnId = ZombieRuntimeActions.StableThingId(pawn),
+				type = pawn?.GetType().FullName,
+				defName = pawn?.def?.defName,
+				expectReject = expectReject,
+				hadGeneTracker = hadGeneTracker,
+				geneTrackerInjectedForProbe = geneTrackerInjectedForProbe,
+				initialGeneCount = initialGeneCount,
+				afterPublicGeneDefCount = afterPublicGeneDefCount,
+				afterPrivateGeneCount = afterPrivateGeneCount,
+				publicGeneDefResultNull = publicResult == null,
+				privateGeneResultNull = privateResult == null,
+				publicGeneDefError = publicError,
+				privateGeneError = privateError,
+				success = expectReject ? publicRejected && privateRejected : publicPreserved && privatePreserved
+			};
+		}
+
+		static GeneDef MakeProbeGeneDef(string caseName, string overloadName)
+		{
+			return new GeneDef
+			{
+				defName = $"ZL_ProbeGene_{caseName}_{overloadName}_{Guid.NewGuid():N}",
+				label = $"ZL probe gene {caseName} {overloadName}",
+				geneClass = typeof(Gene)
+			};
+		}
+
+		static Gene MakeProbeGene(GeneDef geneDef, Pawn pawn)
+		{
+			return new Gene
+			{
+				def = geneDef,
+				pawn = pawn
+			};
+		}
+
+		static int CountGenes(Pawn pawn)
+		{
+			return pawn?.genes?.GenesListForReading?.Count ?? -1;
+		}
+
+		static Gene InvokePrivateAddGene(MethodInfo privateAddGene, Pawn_GeneTracker tracker, Gene gene, bool addAsXenogene, out string error)
+		{
+			error = null;
+			if (privateAddGene == null || tracker == null)
+			{
+				error = "Missing private AddGene method or gene tracker.";
+				return null;
+			}
+			try
+			{
+				return privateAddGene.Invoke(tracker, new object[] { gene, addAsXenogene }) as Gene;
+			}
+			catch (TargetInvocationException ex)
+			{
+				error = DescribeException(ex.InnerException ?? ex);
+				return null;
+			}
+			catch (Exception ex)
+			{
+				error = DescribeException(ex);
+				return null;
+			}
+		}
+
+		static string DescribeException(Exception ex)
+		{
+			return ex == null ? null : $"{ex.GetType().FullName}: {ex.Message}";
 		}
 
 	}

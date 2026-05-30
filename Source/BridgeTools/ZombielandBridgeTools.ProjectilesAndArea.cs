@@ -1,3 +1,4 @@
+using HarmonyLib;
 using RimBridgeServer.Annotations;
 using RimWorld;
 using System;
@@ -12,6 +13,148 @@ namespace ZombieLand
 {
 	public sealed partial class ZombielandBridgeTools
 	{
+		const string AreaWorkflowPrefix = "ZL_Area_";
+
+		[Tool("zombieland/area_workflow_state", Description = "Set up and inspect a reusable dangerous-area workflow fixture, including the real manage-areas dialog.")]
+		public static object AreaWorkflowState(
+			[ToolParameter(Description = "Create or refresh reusable allowed areas for every Zombieland risk mode.", Required = false, DefaultValue = false)] bool setupFixture = false,
+			[ToolParameter(Description = "Open RimWorld's real Manage Areas dialog after preparing the selected Zombieland area.", Required = false, DefaultValue = false)] bool openManageDialog = false,
+			[ToolParameter(Description = "Optional scenario action: read or behavior.", Required = false, DefaultValue = "read")] string actionMode = "read")
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			object setup = null;
+			if (setupFixture)
+				setup = EnsureAreaWorkflowFixture(map);
+
+			var fixtureAreas = FindAreaWorkflowAreas(map);
+			var selectedArea = fixtureAreas.FirstOrDefault(area => area.mode == AreaRiskMode.ZombieInside).area
+				?? fixtureAreas.FirstOrDefault().area;
+			if (selectedArea == null)
+			{
+				return new
+				{
+					success = false,
+					setupFixture,
+					setup,
+					error = "No Zombieland area workflow fixture exists; rerun with setupFixture=true."
+				};
+			}
+
+			var normalizedActionMode = (actionMode ?? "read").Trim().ToLowerInvariant();
+			object action = null;
+			if (normalizedActionMode == "behavior")
+				action = RunAreaWorkflowBehavior(map, fixtureAreas);
+			else if (normalizedActionMode == "targeting")
+				action = RunAreaWorkflowTargeting(map);
+			else if (normalizedActionMode != "read")
+			{
+				return new
+				{
+					success = false,
+					actionMode,
+					error = "Unsupported area workflow actionMode. Use read, behavior, or targeting."
+				};
+			}
+			var actionSucceeded = normalizedActionMode == "read"
+				|| (bool)(action?.GetType().GetProperty("success")?.GetValue(action) ?? false);
+
+			var canMakeNewAllowed = map.areaManager.CanMakeNewAllowed();
+			var tryMakeNewAllowed = map.areaManager.TryMakeNewAllowed(out Area_Allowed throwawayArea);
+			if (throwawayArea != null && map.areaManager.AllAreas.Contains(throwawayArea))
+				map.areaManager.Remove(throwawayArea);
+
+			var sortBefore = map.areaManager.AllAreas.Select(area => area.Label).ToArray();
+			map.areaManager.SortAreas();
+			var sortAfter = map.areaManager.AllAreas.Select(area => area.Label).ToArray();
+			var sortPreserved = sortBefore.SequenceEqual(sortAfter);
+
+			Dialog_ManageAreas_Patches.selected = selectedArea;
+			Dialog_ManageAreas_Patches.selectedIndex = 999;
+			Dialog_ManageAreas_Patches.scrollPosition = new Vector2(11f, 17f);
+			_ = new Dialog_ManageAreas(map);
+			var constructorReset = Dialog_ManageAreas_Patches.selected == null
+				&& Dialog_ManageAreas_Patches.selectedIndex == -1
+				&& Dialog_ManageAreas_Patches.scrollPosition == Vector2.zero;
+
+			Dialog_ManageAreas_Patches.selected = selectedArea;
+			Dialog_ManageAreas_Patches.selectedIndex = map.areaManager.AllAreas.IndexOf(selectedArea);
+			Dialog_ManageAreas_Patches.scrollPosition = Vector2.zero;
+
+			var selectedMode = Dialog_ManageAreas_Patches.GetMode(selectedArea);
+			var selectedModeText = selectedMode.ToStringHuman();
+			var selectedLabelColor = Dialog_ManageAreas_Patches.AreaLabelColor(selectedArea);
+			var expectedSelectedColor = ExpectedAreaLabelColor(selectedMode);
+			var selectedColorMatchesMode = ColorsApproximatelyEqual(selectedLabelColor, expectedSelectedColor);
+
+			if (openManageDialog && Find.WindowStack != null)
+			{
+				_ = Find.WindowStack.TryRemove(typeof(Dialog_ManageAreas), false);
+				var dialog = new Dialog_ManageAreas(map);
+				Dialog_ManageAreas_Patches.selected = selectedArea;
+				Dialog_ManageAreas_Patches.selectedIndex = map.areaManager.AllAreas.IndexOf(selectedArea);
+				Find.WindowStack.Add(dialog);
+			}
+			var manageDialogOpened = Find.WindowStack?.IsOpen(typeof(Dialog_ManageAreas)) == true;
+
+			var areas = fixtureAreas
+				.Select(pair => new
+				{
+					label = pair.area.Label,
+					mode = pair.mode.ToString(),
+					modeText = pair.mode.ToStringHuman(),
+					labelColor = DescribeColor(Dialog_ManageAreas_Patches.AreaLabelColor(pair.area)),
+					expectedLabelColor = DescribeColor(ExpectedAreaLabelColor(pair.mode)),
+					colorMatchesMode = ColorsApproximatelyEqual(Dialog_ManageAreas_Patches.AreaLabelColor(pair.area), ExpectedAreaLabelColor(pair.mode)),
+					activeCellCount = pair.area.ActiveCells.Count(),
+					index = map.areaManager.AllAreas.IndexOf(pair.area)
+				})
+				.ToArray();
+
+			return new
+			{
+				success = canMakeNewAllowed
+					&& tryMakeNewAllowed
+					&& sortPreserved
+					&& constructorReset
+					&& areas.Length >= 5
+					&& areas.All(area => area.colorMatchesMode)
+					&& selectedColorMatchesMode
+					&& (openManageDialog == false || manageDialogOpened)
+					&& actionSucceeded,
+				setupFixture,
+				setup,
+				openManageDialog,
+				manageDialogOpened,
+				actionMode = normalizedActionMode,
+				actionSucceeded,
+				action,
+				selected = new
+				{
+					label = selectedArea.Label,
+					mode = selectedMode.ToString(),
+					modeText = selectedModeText,
+					labelColor = DescribeColor(selectedLabelColor),
+					expectedLabelColor = DescribeColor(expectedSelectedColor),
+					selectedColorMatchesMode,
+					selectedIndex = Dialog_ManageAreas_Patches.selectedIndex
+				},
+				canMakeNewAllowed,
+				tryMakeNewAllowed,
+				sortPreserved,
+				constructorReset,
+				areas
+			};
+		}
+
 		[Tool("zombieland/spit_zombie_ball", Description = "Put a spitter into its firing state and verify the real job-driver shoot path spawns a ZombieBall projectile.")]
 		public static object SpitZombieBall(
 			[ToolParameter(Description = "Optional spitter id, ThingID, label, or short name. When omitted, a fresh spitter is spawned near map center.", Required = false, DefaultValue = "")] string target = "",
@@ -368,7 +511,7 @@ namespace ZombieLand
 			try
 			{
 				_ = ZombieRuntimeActions.DestroyZombies(map);
-				var colonist = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				var colonist = GenerateAreaWorkflowPawn(Faction.OfPlayer, false);
 				GenSpawn.Spawn(colonist, colonistCell, map, Rot4.South);
 				DisablePawnWork(colonist);
 				spawnedThings.Add(colonist);
@@ -523,6 +666,1754 @@ namespace ZombieLand
 				ZombieAreaManager.pawnsInDanger.Clear();
 				ZombieAreaManager.lastMap = null;
 			}
+		}
+
+		static object EnsureAreaWorkflowFixture(Map map)
+		{
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var cells = GenRadial.RadialCellsAround(root, 4f, true)
+				.Where(cell => cell.InBounds(map))
+				.Take(20)
+				.ToArray();
+
+			var ignore = EnsureAreaWorkflowArea(map, "Ignore", AreaRiskMode.Ignore, new Color(0.45f, 0.45f, 0.45f), cells.Take(4));
+			var colonistInside = EnsureAreaWorkflowArea(map, "ColonistInside", AreaRiskMode.ColonistInside, new Color(0.75f, 0.1f, 0.1f), cells.Skip(4).Take(4));
+			var colonistOutside = EnsureAreaWorkflowArea(map, "ColonistOutside", AreaRiskMode.ColonistOutside, new Color(0.1f, 0.7f, 0.1f), cells.Skip(8).Take(4));
+			var zombieInside = EnsureAreaWorkflowArea(map, "ZombieInside", AreaRiskMode.ZombieInside, new Color(0.9f, 0.45f, 0f), cells.Skip(12).Take(4));
+			var zombieOutside = EnsureAreaWorkflowArea(map, "ZombieOutside", AreaRiskMode.ZombieOutside, new Color(1f, 0.1f, 0.55f), cells.Skip(16).Take(4));
+
+			var fixtureAreas = new[] { ignore, colonistInside, colonistOutside, zombieInside, zombieOutside };
+			Dialog_ManageAreas_Patches.selected = zombieInside;
+			Dialog_ManageAreas_Patches.selectedIndex = map.areaManager.AllAreas.IndexOf(zombieInside);
+			Dialog_ManageAreas_Patches.scrollPosition = Vector2.zero;
+
+			return new
+			{
+				root = ZombieRuntimeActions.DescribeCell(root),
+				labels = fixtureAreas.Select(area => area.Label).ToArray(),
+				activeCellCounts = fixtureAreas.Select(area => area.ActiveCells.Count()).ToArray()
+			};
+		}
+
+		static object RunAreaWorkflowBehavior(Map map, (Area_Allowed area, AreaRiskMode mode)[] fixtureAreas)
+		{
+			var colonistInsideArea = fixtureAreas.FirstOrDefault(pair => pair.mode == AreaRiskMode.ColonistInside).area;
+			var zombieInsideArea = fixtureAreas.FirstOrDefault(pair => pair.mode == AreaRiskMode.ZombieInside).area;
+			if (colonistInsideArea == null || zombieInsideArea == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Area workflow behavior needs ColonistInside and ZombieInside fixture areas."
+				};
+			}
+
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			var oldHighlightDangerousAreas = ZombieSettings.Values.highlightDangerousAreas;
+			try
+			{
+				ZombieSettings.Values.betterZombieAvoidance = true;
+				ZombieSettings.Values.highlightDangerousAreas = true;
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+				DestroyAreaWorkflowPawns(map);
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root + new IntVec3(-4, 0, 0), 12f, out var actorCell, out var actorError) == false)
+					return actorError;
+				var zombieCell = GenRadial.RadialCellsAround(actorCell, 3f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.OrderBy(cell => cell.DistanceToSquared(actorCell))
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+						error = "No nearby clear zombie cell was found for the area workflow behavior fixture."
+					};
+				}
+
+				var actor = GenerateAreaWorkflowPawn(Faction.OfPlayer, false);
+				actor.Name = new NameSingle("ZL_Area_Worker");
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				DisablePawnWork(actor);
+				actor.playerSettings.AreaRestrictionInPawnCurrentMap = colonistInsideArea;
+				var config = ColonistSettings.Values.ConfigFor(actor);
+				if (config != null)
+					config.autoAvoidZombies = true;
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+						error = "ZombieGenerator.SpawnZombie returned no area workflow zombie."
+					};
+				}
+				zombie.Name = new NameSingle("ZL_Area_Zombie");
+				zombie.state = ZombieState.Tracking;
+
+				SetAreaCells(map, colonistInsideArea, actor.Position);
+				SetAreaCells(map, zombieInsideArea, zombie.Position);
+				ZombieSettings.Values.dangerousAreas[colonistInsideArea] = AreaRiskMode.ColonistInside;
+				ZombieSettings.Values.dangerousAreas[zombieInsideArea] = AreaRiskMode.ZombieInside;
+				RunZombieAreaStateUpdater();
+
+				var colonistInDangerArea = ZombieAreaManager.pawnsInDanger.TryGetValue(actor, out var actorDangerArea)
+					&& actorDangerArea == colonistInsideArea;
+				var zombieInDangerArea = ZombieAreaManager.pawnsInDanger.TryGetValue(zombie, out var zombieDangerArea)
+					&& zombieDangerArea == zombieInsideArea;
+				var warningEntries = ZombieAreaManager.pawnsInDanger
+					.Select(pair => new
+					{
+						pawn = DescribePawn(pair.Key),
+						area = pair.Value?.Label
+					})
+					.ToArray();
+
+				var avoidGrid = BuildAvoidGridForZombie(map, zombie);
+				var actorAvoidCost = AvoidCost(avoidGrid, map, actor.Position);
+				var actorShouldAvoid = avoidGrid.ShouldAvoid(map, actor.Position);
+				var normalDanger = DangerUtility.GetDangerFor(actor.Position, actor, map);
+
+				var forcedWait = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				forcedWait.playerForced = true;
+				actor.jobs.StartJob(forcedWait, JobCondition.InterruptForced, null, false, true);
+				var forcedDanger = DangerUtility.GetDangerFor(actor.Position, actor, map);
+				actor.jobs.EndCurrentJob(JobCondition.InterruptForced);
+
+				actor.drafter.Drafted = true;
+				var draftedWait = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				draftedWait.playerForced = false;
+				actor.jobs.StartJob(draftedWait, JobCondition.InterruptForced, null, false, true);
+				for (var tick = 0; tick < 5; tick++)
+					AdvanceGameTicks(1);
+				var draftedJob = actor.CurJobDef?.defName;
+				var draftedInterruptedToFlee = actor.CurJobDef == JobDefOf.Flee;
+				actor.drafter.Drafted = false;
+				actor.jobs.EndCurrentJob(JobCondition.InterruptForced);
+
+				var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				waitJob.playerForced = false;
+				actor.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+				var startedJob = actor.CurJobDef?.defName;
+				var tickHit = -1;
+				var samples = new List<object>();
+				const int maxTicks = 30;
+				for (var tick = 1; tick <= maxTicks; tick++)
+				{
+					AdvanceGameTicks(1);
+					var currentJob = actor.CurJob;
+					if (tick == 1 || tick == maxTicks || currentJob?.def == JobDefOf.Flee)
+					{
+						samples.Add(new
+						{
+							tick,
+							job = actor.CurJobDef?.defName,
+							currentJob?.playerForced,
+							target = currentJob?.targetA.Cell.IsValid == true ? ZombieRuntimeActions.DescribeCell(currentJob.targetA.Cell) : null
+						});
+					}
+					if (currentJob?.def == JobDefOf.Flee)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var fleeJob = actor.CurJob;
+				var fleeDestination = fleeJob?.targetA.Cell ?? IntVec3.Invalid;
+				var fleeDestinationAvoids = fleeDestination.IsValid && avoidGrid.ShouldAvoid(map, fleeDestination) == false;
+				var meleeInterruption = VerifyAreaWorkflowMeleeInterruption(map, actorCell, zombie, avoidGrid);
+
+				return new
+				{
+					success = colonistInDangerArea
+						&& zombieInDangerArea
+						&& actor.playerSettings.AreaRestrictionInPawnCurrentMap == colonistInsideArea
+						&& actorShouldAvoid
+						&& actorAvoidCost > 0
+						&& normalDanger == Danger.Deadly
+						&& forcedDanger != Danger.Deadly
+						&& draftedInterruptedToFlee == false
+						&& startedJob == JobDefOf.Wait_Combat.defName
+						&& tickHit > 0
+						&& fleeJob?.playerForced == true
+						&& fleeDestinationAvoids
+						&& ObjectSuccess(meleeInterruption),
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					assignedArea = actor.playerSettings.AreaRestrictionInPawnCurrentMap?.Label,
+					colonistDangerArea = actorDangerArea?.Label,
+					zombieDangerArea = zombieDangerArea?.Label,
+					warningEntries,
+					avoidance = new
+					{
+						actorAvoidCost,
+						actorShouldAvoid,
+						normalDanger = normalDanger.ToString(),
+						forcedDanger = forcedDanger.ToString()
+					},
+					drafted = new
+					{
+						jobAfterTicks = draftedJob,
+						interruptedToFlee = draftedInterruptedToFlee
+					},
+					undrafted = new
+					{
+						startedJob,
+						tickHit,
+						maxTicks,
+						fleeJob = fleeJob?.def?.defName,
+						fleeJobPlayerForced = fleeJob?.playerForced,
+						fleeDestination = fleeDestination.IsValid ? ZombieRuntimeActions.DescribeCell(fleeDestination) : null,
+						fleeDestinationAvoids,
+						samples
+					},
+					meleeInterruption
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+				ZombieSettings.Values.highlightDangerousAreas = oldHighlightDangerousAreas;
+			}
+		}
+
+		static object VerifyAreaWorkflowMeleeInterruption(Map map, IntVec3 root, Zombie zombie, AvoidGrid avoidGrid)
+		{
+			if (TryFindClearSpawnCell(map, root + new IntVec3(2, 0, 0), 8f, out var meleeCell, out var cellError) == false)
+				return cellError;
+
+			var pawn = GenerateAreaWorkflowPawn(Faction.OfPlayer, true);
+			pawn.Name = new NameSingle("ZL_Area_MeleeInterruption");
+			GenSpawn.Spawn(pawn, meleeCell, map, Rot4.South);
+			DisablePawnWork(pawn);
+			EquipAreaWorkflowMeleeWeapon(pawn);
+			var config = ColonistSettings.Values.ConfigFor(pawn);
+			if (config != null)
+				config.autoAvoidZombies = true;
+
+			var avoidCost = AvoidCost(avoidGrid, map, pawn.Position);
+			var shouldAvoid = avoidGrid.ShouldAvoid(map, pawn.Position);
+			var meleeJob = JobMaker.MakeJob(JobDefOf.AttackMelee, zombie);
+			meleeJob.playerForced = false;
+			pawn.jobs.StartJob(meleeJob, JobCondition.InterruptForced, null, false, true);
+			var startedJob = pawn.CurJobDef?.defName;
+			var tickHit = -1;
+			var samples = new List<object>();
+			for (var tick = 1; tick <= 30; tick++)
+			{
+				AdvanceGameTicks(1);
+				var currentJob = pawn.CurJob;
+				if (tick == 1 || tick == 30 || currentJob?.def == JobDefOf.Flee)
+				{
+					samples.Add(new
+					{
+						tick,
+						job = pawn.CurJobDef?.defName,
+						currentJob?.playerForced,
+						target = currentJob?.targetA.Cell.IsValid == true ? ZombieRuntimeActions.DescribeCell(currentJob.targetA.Cell) : null
+					});
+				}
+				if (currentJob?.def == JobDefOf.Flee)
+				{
+					tickHit = tick;
+					break;
+				}
+			}
+			var fleeJob = pawn.CurJob;
+			var fleeDestination = fleeJob?.targetA.Cell ?? IntVec3.Invalid;
+			var fleeDestinationAvoids = fleeDestination.IsValid && avoidGrid.ShouldAvoid(map, fleeDestination) == false;
+			var result = new
+			{
+				success = shouldAvoid
+					&& avoidCost > 0
+					&& startedJob == JobDefOf.AttackMelee.defName
+					&& tickHit > 0
+					&& fleeJob?.playerForced == true
+					&& fleeDestinationAvoids,
+				pawn = DescribePawn(pawn),
+				target = DescribeZombie(zombie),
+				avoidCost,
+				shouldAvoid,
+				startedJob,
+				tickHit,
+				fleeJob = fleeJob?.def?.defName,
+				fleeJobPlayerForced = fleeJob?.playerForced,
+				fleeDestination = fleeDestination.IsValid ? ZombieRuntimeActions.DescribeCell(fleeDestination) : null,
+				fleeDestinationAvoids,
+				samples
+			};
+			if (pawn.Destroyed == false)
+				pawn.Destroy(DestroyMode.Vanish);
+			return result;
+		}
+
+		static void DestroyAreaWorkflowPawns(Map map)
+		{
+			foreach (var pawn in map.mapPawns.AllPawnsSpawned
+				.Where(pawn => pawn.Name?.ToStringShort?.StartsWith("ZL_Area_", StringComparison.Ordinal) == true)
+				.ToArray())
+			{
+				pawn.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static void SetAreaCells(Map map, Area area, params IntVec3[] activeCells)
+		{
+			foreach (var cell in area.ActiveCells.ToArray())
+				area[cell] = false;
+			foreach (var cell in activeCells)
+				if (cell.InBounds(map))
+					area[cell] = true;
+		}
+
+		static void RunZombieAreaStateUpdater()
+		{
+			ZombieAreaManager.pawnsInDanger.Clear();
+			ZombieAreaManager.lastMap = null;
+			var stateUpdater = typeof(ZombieAreaManager)
+				.GetMethod("StateUpdater", BindingFlags.Static | BindingFlags.NonPublic)
+				.Invoke(null, null) as System.Collections.IEnumerator;
+			ZombieAreaManager.stateUpdater = stateUpdater;
+			for (var i = 0; i < 96; i++)
+			{
+				if (ZombieAreaManager.stateUpdater.MoveNext())
+					continue;
+				ZombieAreaManager.stateUpdater = stateUpdater;
+				break;
+			}
+		}
+
+		static object RunAreaWorkflowTargeting(Map map)
+		{
+			var oldAttackMode = ZombieSettings.Values.attackMode;
+			var oldEnemiesAttackZombies = ZombieSettings.Values.enemiesAttackZombies;
+			var oldAnimalsAttackZombies = ZombieSettings.Values.animalsAttackZombies;
+			var oldDoubleTapRequired = ZombieSettings.Values.doubleTapRequired;
+			var oldBetterAvoidance = ZombieSettings.Values.betterZombieAvoidance;
+			var spawnedThings = new List<Thing>();
+
+			try
+			{
+				ZombieSettings.Values.attackMode = AttackMode.Everything;
+				ZombieSettings.Values.enemiesAttackZombies = true;
+				ZombieSettings.Values.animalsAttackZombies = true;
+				ZombieSettings.Values.doubleTapRequired = true;
+				ZombieSettings.Values.betterZombieAvoidance = false;
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+				DestroyAreaWorkflowPawns(map);
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root + new IntVec3(-10, 0, 0), 16f, out var shooterCell, out var shooterError) == false)
+					return shooterError;
+
+				var targetCells = GenRadial.RadialCellsAround(shooterCell, 14f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(shooterCell) >= 6f)
+					.Where(cell => GenSight.LineOfSight(shooterCell, cell, map, true))
+					.OrderBy(cell => cell.DistanceToSquared(shooterCell))
+					.Take(10)
+					.ToArray();
+				if (targetCells.Length < 8)
+				{
+					return new
+					{
+						success = false,
+						shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
+						targetCellCount = targetCells.Length,
+						error = "Not enough line-of-sight target cells were found for the mixed-targeting fixture."
+					};
+				}
+
+				var player = SpawnArmedAreaWorkflowPawn(map, "ZL_Area_PlayerShooter", shooterCell, Faction.OfPlayer, spawnedThings);
+				var enemy = SpawnArmedAreaWorkflowPawn(map, "ZL_Area_EnemyShooter", shooterCell + new IntVec3(0, 0, -2), Faction.OfAncientsHostile, spawnedThings);
+				var animal = SpawnAreaWorkflowAnimal(map, "ZL_Area_TestAnimal", shooterCell + new IntVec3(0, 0, 2), spawnedThings);
+				if (player == null || enemy == null || animal == null)
+				{
+					return new
+					{
+						success = false,
+						player = DescribePawn(player),
+						enemy = DescribePawn(enemy),
+						animal = DescribePawn(animal),
+						error = "Could not create all mixed-targeting attacker pawns."
+					};
+				}
+
+				var playerVerb = player.equipment?.PrimaryEq?.PrimaryVerb;
+				var enemyVerb = enemy.equipment?.PrimaryEq?.PrimaryVerb;
+				var animalVerb = animal.CurrentEffectiveVerb;
+				if (playerVerb == null || enemyVerb == null || animalVerb == null)
+				{
+					return new
+					{
+						success = false,
+						playerVerb = DescribeVerb(playerVerb),
+						enemyVerb = DescribeVerb(enemyVerb),
+						animalVerb = DescribeVerb(animalVerb),
+						error = "At least one targeting attacker had no effective verb."
+					};
+				}
+
+				var normal = SpawnTargetZombie(map, targetCells[0], ZombieType.Normal, "ZL_Area_NormalTarget", spawnedThings);
+				var roped = SpawnTargetZombie(map, targetCells[1], ZombieType.Normal, "ZL_Area_RopedTarget", spawnedThings);
+				var confused = SpawnTargetZombie(map, targetCells[2], ZombieType.Normal, "ZL_Area_ConfusedTarget", spawnedThings);
+				var electric = SpawnTargetZombie(map, targetCells[3], ZombieType.Electrifier, "ZL_Area_ElectricTarget", spawnedThings);
+				var albino = SpawnTargetZombie(map, targetCells[4], ZombieType.Albino, "ZL_Area_AlbinoTarget", spawnedThings);
+				var suicide = SpawnTargetZombie(map, targetCells[5], ZombieType.SuicideBomber, "ZL_Area_SuicideTarget", spawnedThings);
+				var spitter = SpawnTargetSpitter(map, targetCells[6], "ZL_Area_SpitterTarget", spawnedThings);
+				var blob = SpawnTargetBlob(map, targetCells[7], "ZL_Area_BlobTarget", spawnedThings);
+				if (new Pawn[] { normal, roped, confused, electric, albino, suicide, spitter, blob }.Any(pawn => pawn == null))
+				{
+					return new
+					{
+						success = false,
+						targets = new
+						{
+							normal = DescribeZombie(normal),
+							roped = DescribeZombie(roped),
+							confused = DescribeZombie(confused),
+							electric = DescribeZombie(electric),
+							albino = DescribeZombie(albino),
+							suicide = DescribeZombie(suicide),
+							spitter = DescribeZombie(spitter as ZombieSpitter),
+							blob = DescribeZombie(blob as ZombieBlob)
+						},
+						error = "Could not create all mixed-targeting zombie pawns."
+					};
+				}
+				roped.ropedBy = player;
+				confused.paralyzedUntil = GenTicks.TicksAbs + 2500;
+				RefreshZombieTargetCache(map);
+
+				var allTargets = new List<IAttackTarget> { normal, roped, confused, electric, albino, suicide, spitter, blob };
+				var playerAvailable = InvokeAvailableTargetsPatch(allTargets, player, playerVerb);
+				var playerTargetIds = TargetIds(playerAvailable);
+				var playerBest = AttackTargetFinder.BestAttackTarget(player, TargetScanFlags.NeedLOSToAll | TargetScanFlags.NeedThreat, thing => thing is Zombie, 0f, 20f);
+				var playerRopedBest = BestSpecificTarget(player, roped);
+				var playerConfusedBest = BestSpecificTarget(player, confused);
+
+				ZombieSettings.Values.enemiesAttackZombies = false;
+				var enemyDisabled = InvokeAvailableTargetsPatch(allTargets, enemy, enemyVerb);
+				var enemyDisabledIds = TargetIds(enemyDisabled);
+				var enemyNormalDisabledBest = BestSpecificTarget(enemy, normal);
+				ZombieSettings.Values.enemiesAttackZombies = true;
+				var enemyEnabled = InvokeAvailableTargetsPatch(allTargets, enemy, enemyVerb);
+				var enemyEnabledIds = TargetIds(enemyEnabled);
+				var enemyBest = AttackTargetFinder.BestAttackTarget(enemy, TargetScanFlags.NeedLOSToAll | TargetScanFlags.NeedThreat, thing => thing is Zombie, 0f, 20f);
+				var enemyNormalEnabledBest = BestSpecificTarget(enemy, normal);
+				var enemySpitterBest = BestSpecificTarget(enemy, spitter);
+				var enemyBlobBest = BestSpecificTarget(enemy, blob);
+				var enemyElectricBest = BestSpecificTarget(enemy, electric);
+
+				ZombieSettings.Values.animalsAttackZombies = false;
+				var animalDisabledBest = AttackTargetFinder.BestAttackTarget(animal, TargetScanFlags.NeedThreat, thing => thing is Zombie, 0f, 20f);
+				ZombieSettings.Values.animalsAttackZombies = true;
+				var animalEnabledBest = AttackTargetFinder.BestAttackTarget(animal, TargetScanFlags.NeedThreat, thing => thing is Zombie, 0f, 20f);
+
+				var normalScore = InvokeShootingScorePatch(normal, player, playerVerb);
+				var suicideScore = InvokeShootingScorePatch(suicide, player, playerVerb);
+
+				var oldFriendlyFireRadius = playerVerb.verbProps.ai_AvoidFriendlyFireRadius;
+				float zombieBlastOffset;
+				float colonistBlastOffset;
+				float zombieConeOffset;
+				float colonistConeOffset;
+				try
+				{
+					playerVerb.verbProps.ai_AvoidFriendlyFireRadius = Math.Max(3f, oldFriendlyFireRadius);
+					zombieBlastOffset = InvokeFriendlyFireOffset("FriendlyFireBlastRadiusTargetScoreOffset", normal, player, playerVerb);
+					zombieConeOffset = InvokeFriendlyFireOffset("FriendlyFireConeTargetScoreOffset", normal, player, playerVerb);
+					var friendly = SpawnAreaWorkflowPawn(map, "ZL_Area_FriendlyNearby", normal.Position + IntVec3.East, Faction.OfPlayer, spawnedThings);
+					colonistBlastOffset = InvokeFriendlyFireOffset("FriendlyFireBlastRadiusTargetScoreOffset", normal, player, playerVerb);
+					colonistConeOffset = InvokeFriendlyFireOffset("FriendlyFireConeTargetScoreOffset", normal, player, playerVerb);
+				}
+				finally
+				{
+					playerVerb.verbProps.ai_AvoidFriendlyFireRadius = oldFriendlyFireRadius;
+				}
+
+				var friendlyFirePatchOwners = new[]
+				{
+					PatchOwners("FriendlyFireBlastRadiusTargetScoreOffset"),
+					PatchOwners("FriendlyFireConeTargetScoreOffset")
+				};
+				var friendlyFireHelper = VerifyFriendlyFireHelper(normal, player);
+				var availablePatchOwners = PatchOwners("GetAvailableShootingTargetsByScore");
+				var scorePatchOwners = PatchOwners("GetShootingTargetScore");
+				var directHostility = VerifyAreaWorkflowDirectHostility(map, player, enemy, normal, spitter, blob, shooterCell, spawnedThings);
+				var targetCache = VerifyAreaWorkflowTargetCache(map, normal, spitter, blob, shooterCell, spawnedThings);
+				var availableBranches = VerifyAreaWorkflowAvailableTargetBranches(map, shooterCell, allTargets, normal, roped, confused, electric, albino, spitter, blob, spawnedThings);
+				var waitAutoAttack = VerifyAreaWorkflowWaitAutoAttack(map, shooterCell, spawnedThings);
+				var turretTargeting = VerifyAreaWorkflowTurretTargeting(map, shooterCell, player, spawnedThings);
+				var tarSmokeMeleeTargeting = VerifyAreaWorkflowTarSmokeMeleeTargeting(map, shooterCell, spawnedThings);
+
+				var success = playerTargetIds.Contains(StableId(normal))
+					&& playerTargetIds.Contains(StableId(roped)) == false
+					&& playerTargetIds.Contains(StableId(confused)) == false
+					&& (playerVerb.CanHarmElectricZombies() || playerTargetIds.Contains(StableId(electric)) == false)
+					&& playerRopedBest == null
+					&& playerConfusedBest == null
+					&& enemyDisabledIds.Contains(StableId(normal)) == false
+					&& enemyEnabledIds.Contains(StableId(normal))
+					&& enemyEnabledIds.Contains(StableId(spitter)) == false
+					&& enemyEnabledIds.Contains(StableId(blob)) == false
+					&& enemyEnabledIds.Contains(StableId(albino)) == false
+					&& (enemyVerb.CanHarmElectricZombies() || enemyEnabledIds.Contains(StableId(electric)) == false)
+					&& enemyNormalDisabledBest == null
+					&& ReferenceEquals(enemyNormalEnabledBest?.Thing, normal)
+					&& enemySpitterBest == null
+					&& enemyBlobBest == null
+					&& (enemyVerb.CanHarmElectricZombies() || enemyElectricBest == null)
+					&& animalDisabledBest == null
+					&& ReferenceEquals(animalEnabledBest?.Thing, normal)
+					&& suicideScore > normalScore
+					&& colonistBlastOffset < zombieBlastOffset
+					&& friendlyFirePatchOwners.All(ownerSet => ownerSet.Contains("net.pardeike.zombieland"))
+					&& availablePatchOwners.Contains("net.pardeike.zombieland")
+					&& scorePatchOwners.Contains("net.pardeike.zombieland")
+					&& friendlyFireHelper.zombiesRemoved
+					&& friendlyFireHelper.nonZombiesKept
+					&& ObjectSuccess(directHostility)
+					&& ObjectSuccess(targetCache)
+					&& ObjectSuccess(availableBranches)
+					&& ObjectSuccess(waitAutoAttack)
+					&& ObjectSuccess(turretTargeting)
+					&& ObjectSuccess(tarSmokeMeleeTargeting);
+
+				return new
+				{
+					success,
+					attackers = new
+					{
+						player = DescribePawn(player),
+						enemy = DescribePawn(enemy),
+						animal = DescribePawn(animal),
+						playerVerb = DescribeVerb(playerVerb),
+						enemyVerb = DescribeVerb(enemyVerb),
+						animalVerb = DescribeVerb(animalVerb)
+					},
+					targets = new
+					{
+						normal = DescribeZombie(normal),
+						roped = DescribeZombie(roped),
+						confused = DescribeZombie(confused),
+						electric = DescribeZombie(electric),
+						albino = DescribeZombie(albino),
+						suicide = DescribeZombie(suicide),
+						spitter = DescribeZombie(spitter as ZombieSpitter),
+						blob = DescribeZombie(blob as ZombieBlob)
+					},
+					available = new
+					{
+						player = DescribeTargetPairs(playerAvailable),
+						enemyDisabled = DescribeTargetPairs(enemyDisabled),
+						enemyEnabled = DescribeTargetPairs(enemyEnabled)
+					},
+					bestTargets = new
+					{
+						player = DescribeTarget(playerBest),
+						playerRoped = DescribeTarget(playerRopedBest),
+						playerConfused = DescribeTarget(playerConfusedBest),
+						enemy = DescribeTarget(enemyBest),
+						enemyNormalDisabled = DescribeTarget(enemyNormalDisabledBest),
+						enemyNormalEnabled = DescribeTarget(enemyNormalEnabledBest),
+						enemySpitter = DescribeTarget(enemySpitterBest),
+						enemyBlob = DescribeTarget(enemyBlobBest),
+						enemyElectric = DescribeTarget(enemyElectricBest),
+						animalDisabled = DescribeTarget(animalDisabledBest),
+						animalEnabled = DescribeTarget(animalEnabledBest)
+					},
+					scores = new
+					{
+						normalScore,
+						suicideScore
+					},
+					friendlyFire = new
+					{
+						zombieBlastOffset,
+						colonistBlastOffset,
+						zombieConeOffset,
+						colonistConeOffset,
+						patchOwners = friendlyFirePatchOwners,
+						helper = new
+						{
+							friendlyFireHelper.zombiesRemoved,
+							friendlyFireHelper.nonZombiesKept,
+							kept = friendlyFireHelper.kept
+						}
+					},
+					patchOwners = new
+					{
+						availableTargets = availablePatchOwners,
+						shootingScore = scorePatchOwners
+					},
+					directHostility,
+					targetCache,
+					availableBranches,
+					waitAutoAttack,
+					turretTargeting,
+					tarSmokeMeleeTargeting
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.attackMode = oldAttackMode;
+				ZombieSettings.Values.enemiesAttackZombies = oldEnemiesAttackZombies;
+				ZombieSettings.Values.animalsAttackZombies = oldAnimalsAttackZombies;
+				ZombieSettings.Values.doubleTapRequired = oldDoubleTapRequired;
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static Pawn SpawnAreaWorkflowPawn(Map map, string name, IntVec3 cell, Faction faction, List<Thing> spawnedThings)
+		{
+			var pawn = GenerateAreaWorkflowPawn(faction, false);
+			pawn.Name = new NameSingle(name);
+			GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+			DisablePawnWork(pawn);
+			spawnedThings.Add(pawn);
+			return pawn;
+		}
+
+		static Pawn GenerateAreaWorkflowPawn(Faction faction, bool mustBeCapableOfViolence)
+		{
+			var request = new PawnGenerationRequest(
+				PawnKindDefOf.Colonist,
+				faction,
+				PawnGenerationContext.NonPlayer,
+				forceGenerateNewPawn: true,
+				canGeneratePawnRelations: false,
+				mustBeCapableOfViolence: mustBeCapableOfViolence,
+				colonistRelationChanceFactor: 0f,
+				forceNoIdeo: true,
+				dontGiveWeapon: true,
+				forceNoGear: true);
+			return PawnGenerator.GeneratePawn(request);
+		}
+
+		static Pawn SpawnArmedAreaWorkflowPawn(Map map, string name, IntVec3 cell, Faction faction, List<Thing> spawnedThings)
+		{
+			Pawn pawn = null;
+			for (var attempt = 0; attempt < 20; attempt++)
+			{
+				var candidate = GenerateAreaWorkflowPawn(faction, true);
+				if (candidate.WorkTagIsDisabled(WorkTags.Violent))
+					continue;
+				pawn = candidate;
+				break;
+			}
+			pawn ??= GenerateAreaWorkflowPawn(faction, true);
+			pawn.Name = new NameSingle(name);
+			GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+			DisablePawnWork(pawn);
+			spawnedThings.Add(pawn);
+			pawn.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
+				?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false);
+			var weapon = weaponDef == null ? null : ThingMaker.MakeThing(weaponDef) as ThingWithComps;
+			if (weapon != null)
+				pawn.equipment.AddEquipment(weapon);
+			return pawn;
+		}
+
+		static Pawn SpawnAreaWorkflowMech(Map map, string name, IntVec3 cell, Faction faction, List<Thing> spawnedThings)
+		{
+			var kindDef = PawnKindDefOf.Mech_Scyther
+				?? DefDatabase<PawnKindDef>.AllDefs.FirstOrDefault(def => def.race?.race?.IsMechanoid == true);
+			if (kindDef == null)
+				return null;
+			var request = new PawnGenerationRequest(
+				kindDef,
+				faction,
+				PawnGenerationContext.NonPlayer,
+				forceGenerateNewPawn: true,
+				canGeneratePawnRelations: false,
+				colonistRelationChanceFactor: 0f,
+				forceNoIdeo: true);
+			var pawn = PawnGenerator.GeneratePawn(request);
+			pawn.Name = new NameSingle(name);
+			GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+			spawnedThings.Add(pawn);
+			return pawn;
+		}
+
+		static Pawn SpawnAreaWorkflowAnimal(Map map, string name, IntVec3 cell, List<Thing> spawnedThings)
+		{
+			var kindDef = DefDatabase<PawnKindDef>.GetNamed("Warg", false)
+				?? DefDatabase<PawnKindDef>.GetNamed("Husky", false)
+				?? DefDatabase<PawnKindDef>.AllDefs.FirstOrDefault(def => def.RaceProps?.Animal == true && def.RaceProps.IsFlesh);
+			if (kindDef == null)
+				return null;
+			var pawn = PawnGenerator.GeneratePawn(kindDef, Faction.OfPlayer);
+			pawn.Name = new NameSingle(name);
+			GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+			spawnedThings.Add(pawn);
+			return pawn;
+		}
+
+		static Zombie SpawnTargetZombie(Map map, IntVec3 cell, ZombieType type, string name, List<Thing> spawnedThings)
+		{
+			var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, type, true);
+			if (zombie == null)
+				return null;
+			zombie.Name = new NameSingle(name);
+			zombie.state = ZombieState.Tracking;
+			spawnedThings.Add(zombie);
+			return zombie;
+		}
+
+		static ZombieSpitter SpawnTargetSpitter(Map map, IntVec3 cell, string name, List<Thing> spawnedThings)
+		{
+			var existing = CurrentZombies(map).OfType<ZombieSpitter>().Select(StableId).ToHashSet();
+			ZombieSpitter.Spawn(map, cell);
+			var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+				.FirstOrDefault(candidate => existing.Contains(StableId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
+			if (spitter == null)
+				return null;
+			spitter.Name = new NameSingle(name);
+			spitter.state = SpitterState.Idle;
+			spawnedThings.Add(spitter);
+			return spitter;
+		}
+
+		static ZombieBlob SpawnTargetBlob(Map map, IntVec3 cell, string name, List<Thing> spawnedThings)
+		{
+			var existing = CurrentZombies(map).OfType<ZombieBlob>().Select(StableId).ToHashSet();
+			ZombieBlob.Spawn(map, cell);
+			var blob = CurrentZombies(map).OfType<ZombieBlob>()
+				.FirstOrDefault(candidate => existing.Contains(StableId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
+			if (blob == null)
+				return null;
+			blob.Name = new NameSingle(name);
+			spawnedThings.Add(blob);
+			return blob;
+		}
+
+		static void RefreshZombieTargetCache(Map map)
+		{
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager?.allZombiesCached == null)
+				return;
+			tickManager.allZombiesCached.RemoveWhere(zombie => zombie == null || zombie.Destroyed || zombie.Spawned == false || zombie.Dead);
+			foreach (var zombie in CurrentZombies(map).OfType<Zombie>())
+				_ = tickManager.allZombiesCached.Add(zombie);
+		}
+
+		static List<Pair<IAttackTarget, float>> InvokeAvailableTargetsPatch(List<IAttackTarget> targets, IAttackTargetSearcher searcher, Verb verb)
+		{
+			var rawTargets = targets.ToList();
+			var prefix = typeof(AttackTargetFinder_GetAvailableShootingTargetsByScore_Patch).GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+			prefix?.Invoke(null, new object[] { rawTargets, searcher, verb });
+			var result = rawTargets.Select(target => new Pair<IAttackTarget, float>(target, 0f)).ToList();
+			var postfix = typeof(AttackTargetFinder_GetAvailableShootingTargetsByScore_Patch).GetMethod("Postfix", BindingFlags.Static | BindingFlags.NonPublic);
+			postfix?.Invoke(null, new object[] { result, searcher, verb });
+			return result;
+		}
+
+		static float InvokeShootingScorePatch(IAttackTarget target, IAttackTargetSearcher searcher, Verb verb)
+		{
+			var prefix = typeof(AttackTargetFinder_GetShootingTargetScore_Patch).GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+			var args = new object[] { searcher, target, verb, 0f };
+			var runOriginal = (bool)(prefix?.Invoke(null, args) ?? true);
+			if (runOriginal == false)
+				return (float)args[3];
+			var method = typeof(AttackTargetFinder).GetMethod("GetShootingTargetScore", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+			return method == null ? 0f : (float)method.Invoke(null, new object[] { target, searcher, verb });
+		}
+
+		static IAttackTarget BestSpecificTarget(IAttackTargetSearcher searcher, Thing target)
+		{
+			return AttackTargetFinder.BestAttackTarget(
+				searcher,
+				TargetScanFlags.NeedLOSToAll | TargetScanFlags.NeedThreat,
+				thing => ReferenceEquals(thing, target),
+				0f,
+				20f);
+		}
+
+		static (bool zombiesRemoved, bool nonZombiesKept, object[] kept) VerifyFriendlyFireHelper(Zombie zombie, Pawn nonZombie)
+		{
+			var method = typeof(AttackTargetFinder_FriendlyFire_Patch).GetMethod("RemoveZombies", BindingFlags.Static | BindingFlags.NonPublic);
+			var input = new List<Thing> { zombie, nonZombie };
+			var kept = method?.Invoke(null, new object[] { input }) as List<Thing> ?? new List<Thing>();
+			return (
+				kept.Any(thing => thing is Zombie) == false,
+				kept.Contains(nonZombie),
+				kept.Select(thing => new
+				{
+					id = StableId(thing),
+					defName = thing?.def?.defName,
+					label = thing?.LabelCap
+				}).Cast<object>().ToArray());
+		}
+
+		static object VerifyAreaWorkflowDirectHostility(Map map, Pawn player, Pawn enemy, Zombie normal, ZombieSpitter spitter, ZombieBlob blob, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var settings = ZombieSettings.Values;
+			var oldEnemiesAttackZombies = settings.enemiesAttackZombies;
+			var oldAnimalsAttackZombies = settings.animalsAttackZombies;
+			var oldAttackMode = settings.attackMode;
+			var oldEnemyInfectionState = enemy.InfectionState();
+			var zombieFaction = Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies);
+
+			try
+			{
+				if (TryFindClearSpawnCell(map, root + new IntVec3(4, 0, 4), 10f, out var wildAnimalCell, out var cellError) == false)
+					return cellError;
+
+				if (zombieFaction == null)
+				{
+					return new
+					{
+						success = false,
+						error = "No zombie faction was loaded."
+					};
+				}
+
+				var wildAnimal = SpawnAreaWorkflowAnimal(map, "ZL_Area_WildHostilityAnimal", wildAnimalCell, spawnedThings);
+				if (wildAnimal == null)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not create a non-colony animal for direct hostility checks."
+					};
+				}
+				wildAnimal.SetFaction(null);
+
+				settings.enemiesAttackZombies = false;
+				settings.animalsAttackZombies = false;
+				settings.attackMode = AttackMode.Everything;
+				var playerThing = TryHostileTo(player, normal);
+				var enemyThingDisabled = TryHostileTo(enemy, normal);
+				var animalThingDisabled = TryHostileTo(wildAnimal, normal);
+				var normalThreatToPlayer = GenHostility.IsActiveThreatTo(normal, Faction.OfPlayer, false, false);
+				var normalThreatToNull = GenHostility.IsActiveThreatTo(normal, null, false, false);
+				var normalThreatToEnemyDisabled = GenHostility.IsActiveThreatTo(normal, enemy.Faction, false, false);
+
+				settings.enemiesAttackZombies = true;
+				settings.animalsAttackZombies = true;
+				var enemyThingEnabled = TryHostileTo(enemy, normal);
+				var animalThingEnabled = TryHostileTo(wildAnimal, normal);
+				var enemyFaction = TryHostileTo(enemy, zombieFaction);
+				var spitterToEnemyFaction = TryHostileTo(spitter, enemy.Faction);
+				var blobToEnemyFaction = TryHostileTo(blob, enemy.Faction);
+				var normalThreatToEnemyEverything = GenHostility.IsActiveThreatTo(normal, enemy.Faction, false, false);
+
+				settings.attackMode = AttackMode.OnlyColonists;
+				var normalThreatToEnemyOnlyColonists = GenHostility.IsActiveThreatTo(normal, enemy.Faction, false, false);
+
+				settings.attackMode = AttackMode.Everything;
+				enemy.SetInfectionState(InfectionState.Infecting);
+				var enemyThingInfecting = TryHostileTo(enemy, normal);
+
+				var noErrors = new[]
+				{
+					playerThing,
+					enemyThingDisabled,
+					enemyThingEnabled,
+					animalThingDisabled,
+					animalThingEnabled,
+					enemyFaction,
+					spitterToEnemyFaction,
+					blobToEnemyFaction,
+					enemyThingInfecting
+				}.All(sample => sample.error == null);
+
+				var success = noErrors
+					&& playerThing.value
+					&& enemyThingDisabled.value == false
+					&& enemyThingEnabled.value
+					&& animalThingDisabled.value == false
+					&& animalThingEnabled.value
+					&& enemyFaction.value
+					&& spitterToEnemyFaction.value == false
+					&& blobToEnemyFaction.value == false
+					&& enemyThingInfecting.value == false
+					&& normalThreatToPlayer == false
+					&& normalThreatToNull == false
+					&& normalThreatToEnemyDisabled == false
+					&& normalThreatToEnemyEverything
+					&& normalThreatToEnemyOnlyColonists == false;
+
+				return new
+				{
+					success,
+					noErrors,
+					samples = new
+					{
+						playerThing = DescribeHostility(playerThing),
+						enemyThingDisabled = DescribeHostility(enemyThingDisabled),
+						enemyThingEnabled = DescribeHostility(enemyThingEnabled),
+						animalThingDisabled = DescribeHostility(animalThingDisabled),
+						animalThingEnabled = DescribeHostility(animalThingEnabled),
+						enemyFaction = DescribeHostility(enemyFaction),
+						spitterToEnemyFaction = DescribeHostility(spitterToEnemyFaction),
+						blobToEnemyFaction = DescribeHostility(blobToEnemyFaction),
+						enemyThingInfecting = DescribeHostility(enemyThingInfecting)
+					},
+					activeThreat = new
+					{
+						normalThreatToPlayer,
+						normalThreatToNull,
+						normalThreatToEnemyDisabled,
+						normalThreatToEnemyEverything,
+						normalThreatToEnemyOnlyColonists
+					}
+				};
+			}
+			finally
+			{
+				settings.enemiesAttackZombies = oldEnemiesAttackZombies;
+				settings.animalsAttackZombies = oldAnimalsAttackZombies;
+				settings.attackMode = oldAttackMode;
+				enemy.SetInfectionState(oldEnemyInfectionState);
+			}
+		}
+
+		static object VerifyAreaWorkflowTargetCache(Map map, Zombie normal, ZombieSpitter spitter, ZombieBlob blob, IntVec3 root, List<Thing> spawnedThings)
+		{
+			if (TryFindClearSpawnCell(map, root + new IntVec3(4, 0, -4), 10f, out var hostileCell, out var cellError) == false)
+				return cellError;
+
+			var hostile = SpawnAreaWorkflowPawn(map, "ZL_Area_CacheHostile", hostileCell, Faction.OfAncientsHostile, spawnedThings);
+			var cache = map.attackTargetsCache;
+			cache.UpdateTarget(hostile);
+			cache.UpdateTarget(normal);
+			cache.UpdateTarget(spitter);
+			cache.UpdateTarget(blob);
+
+			var before = cache.TargetsHostileToColony;
+			var containsHostileBefore = before.Contains(hostile);
+			var containsNormalBefore = before.Contains(normal);
+			var containsSpitterBefore = before.Contains(spitter);
+			var containsBlobBefore = before.Contains(blob);
+			var zombielandTargetsBefore = before
+				.Select(target => target.Thing)
+				.Where(thing => thing is Zombie || thing is ZombieSpitter || thing is ZombieBlob)
+				.Select(thing => thing.def?.defName)
+				.Distinct()
+				.OrderBy(defName => defName)
+				.ToArray();
+
+			var hostileDescription = DescribePawn(hostile);
+			hostile.Destroy(DestroyMode.Vanish);
+			cache.UpdateTarget(hostile);
+			var after = cache.TargetsHostileToColony;
+			var containsHostileAfter = after.Contains(hostile);
+
+			return new
+			{
+				success = containsHostileBefore
+					&& containsNormalBefore == false
+					&& containsSpitterBefore == false
+					&& containsBlobBefore == false
+					&& zombielandTargetsBefore.Length == 0
+					&& containsHostileAfter == false,
+				hostile = hostileDescription,
+				before = new
+				{
+					count = before.Count,
+					containsHostile = containsHostileBefore,
+					containsNormal = containsNormalBefore,
+					containsSpitter = containsSpitterBefore,
+					containsBlob = containsBlobBefore,
+					zombielandTargets = zombielandTargetsBefore
+				},
+				after = new
+				{
+					count = after.Count,
+					containsHostile = containsHostileAfter
+				}
+			};
+		}
+
+		static object VerifyAreaWorkflowAvailableTargetBranches(
+			Map map,
+			IntVec3 root,
+			List<IAttackTarget> allTargets,
+			Zombie normal,
+			Zombie roped,
+			Zombie confused,
+			Zombie electric,
+			Zombie albino,
+			ZombieSpitter spitter,
+			ZombieBlob blob,
+			List<Thing> spawnedThings)
+		{
+			if (TryFindClearSpawnCell(map, root + new IntVec3(-4, 0, 4), 12f, out var friendlyHumanCell, out var friendlyHumanCellError) == false)
+				return friendlyHumanCellError;
+			if (TryFindClearSpawnCell(map, root + new IntVec3(-2, 0, 6), 12f, out var playerMechCell, out var playerMechCellError) == false)
+				return playerMechCellError;
+			if (TryFindClearSpawnCell(map, root + new IntVec3(2, 0, 6), 12f, out var friendlyMechCell, out var friendlyMechCellError) == false)
+				return friendlyMechCellError;
+
+			var friendlyHuman = SpawnArmedAreaWorkflowPawn(map, "ZL_Area_FriendlyHumanSearcher", friendlyHumanCell, null, spawnedThings);
+			var playerMech = SpawnAreaWorkflowMech(map, "ZL_Area_PlayerMechSearcher", playerMechCell, Faction.OfPlayer, spawnedThings);
+			var friendlyMech = SpawnAreaWorkflowMech(map, "ZL_Area_FriendlyMechSearcher", friendlyMechCell, null, spawnedThings);
+			if (friendlyHuman == null || playerMech == null || friendlyMech == null)
+			{
+				return new
+				{
+					success = false,
+					friendlyHuman = DescribePawn(friendlyHuman),
+					playerMech = DescribePawn(playerMech),
+					friendlyMech = DescribePawn(friendlyMech),
+					error = "Could not create all available-target branch pawn searchers."
+				};
+			}
+
+			var friendlyHumanVerb = friendlyHuman.equipment?.PrimaryEq?.PrimaryVerb;
+			var playerMechVerb = playerMech.CurrentEffectiveVerb;
+			var friendlyMechVerb = friendlyMech.CurrentEffectiveVerb;
+			if (friendlyHumanVerb == null || playerMechVerb == null || friendlyMechVerb == null)
+			{
+				return new
+				{
+					success = false,
+					friendlyHumanVerb = DescribeVerb(friendlyHumanVerb),
+					playerMechVerb = DescribeVerb(playerMechVerb),
+					friendlyMechVerb = DescribeVerb(friendlyMechVerb),
+					error = "At least one available-target branch searcher had no effective verb."
+				};
+			}
+
+			if (SpawnAreaWorkflowTurretGun(map, root + new IntVec3(4, 0, 6), Faction.OfPlayer, spawnedThings, out var playerTurret, out var playerTurretError) == false)
+				return playerTurretError;
+			if (SpawnAreaWorkflowTurretGun(map, root + new IntVec3(8, 0, 6), Faction.OfAncientsHostile, spawnedThings, out var enemyTurret, out var enemyTurretError) == false)
+				return enemyTurretError;
+
+			var playerTurretVerb = playerTurret.CurrentEffectiveVerb;
+			var enemyTurretVerb = enemyTurret.CurrentEffectiveVerb;
+			if (playerTurretVerb == null || enemyTurretVerb == null)
+			{
+				return new
+				{
+					success = false,
+					playerTurretVerb = DescribeVerb(playerTurretVerb),
+					enemyTurretVerb = DescribeVerb(enemyTurretVerb),
+					error = "At least one available-target branch turret had no effective verb."
+				};
+			}
+
+			var oldAttackMode = ZombieSettings.Values.attackMode;
+			var oldEnemiesAttackZombies = ZombieSettings.Values.enemiesAttackZombies;
+			var oldAnimalsAttackZombies = ZombieSettings.Values.animalsAttackZombies;
+			try
+			{
+				ZombieSettings.Values.attackMode = AttackMode.Everything;
+				ZombieSettings.Values.enemiesAttackZombies = true;
+				ZombieSettings.Values.animalsAttackZombies = true;
+
+				var friendlyHumanIds = TargetIds(InvokeAvailableTargetsPatch(allTargets, friendlyHuman, friendlyHumanVerb));
+				var friendlyMechIds = TargetIds(InvokeAvailableTargetsPatch(allTargets, friendlyMech, friendlyMechVerb));
+				var playerThingIds = TargetIds(InvokeAvailableTargetsPatch(allTargets, playerTurret, playerTurretVerb));
+
+				ZombieSettings.Values.attackMode = AttackMode.OnlyHumans;
+				var playerMechOnlyHumansIds = TargetIds(InvokeAvailableTargetsPatch(allTargets, playerMech, playerMechVerb));
+
+				ZombieSettings.Values.attackMode = AttackMode.Everything;
+				var playerMechEverythingIds = TargetIds(InvokeAvailableTargetsPatch(allTargets, playerMech, playerMechVerb));
+
+				ZombieSettings.Values.enemiesAttackZombies = false;
+				var enemyThingDisabledIds = TargetIds(InvokeAvailableTargetsPatch(allTargets, enemyTurret, enemyTurretVerb));
+
+				ZombieSettings.Values.enemiesAttackZombies = true;
+				var enemyThingEnabledIds = TargetIds(InvokeAvailableTargetsPatch(allTargets, enemyTurret, enemyTurretVerb));
+
+				var cases = new[]
+				{
+					DescribeAvailableBranchCase(
+						"friendlyHumanEverything",
+						friendlyHumanIds,
+						ContainsTarget(friendlyHumanIds, normal)
+							&& ContainsTarget(friendlyHumanIds, roped) == false
+							&& ContainsTarget(friendlyHumanIds, confused) == false
+							&& ContainsTarget(friendlyHumanIds, albino) == false
+							&& ContainsTarget(friendlyHumanIds, spitter) == false
+							&& ContainsTarget(friendlyHumanIds, blob) == false
+							&& (friendlyHumanVerb.CanHarmElectricZombies() || ContainsTarget(friendlyHumanIds, electric) == false),
+						normal, roped, confused, electric, albino, spitter, blob),
+					DescribeAvailableBranchCase(
+						"friendlyMechEverything",
+						friendlyMechIds,
+						ContainsTarget(friendlyMechIds, normal)
+							&& ContainsTarget(friendlyMechIds, roped) == false
+							&& ContainsTarget(friendlyMechIds, confused) == false
+							&& ContainsTarget(friendlyMechIds, albino) == false
+							&& ContainsTarget(friendlyMechIds, spitter) == false
+							&& ContainsTarget(friendlyMechIds, blob) == false
+							&& (friendlyMechVerb.CanHarmElectricZombies() || ContainsTarget(friendlyMechIds, electric) == false),
+						normal, roped, confused, electric, albino, spitter, blob),
+					DescribeAvailableBranchCase(
+						"playerMechOnlyHumans",
+						playerMechOnlyHumansIds,
+						playerMechOnlyHumansIds.Length == 0,
+						normal, roped, confused, electric, albino, spitter, blob),
+					DescribeAvailableBranchCase(
+						"playerMechEverything",
+						playerMechEverythingIds,
+						ContainsTarget(playerMechEverythingIds, normal)
+							&& ContainsTarget(playerMechEverythingIds, roped) == false
+							&& ContainsTarget(playerMechEverythingIds, confused) == false
+							&& ContainsTarget(playerMechEverythingIds, albino)
+							&& ContainsTarget(playerMechEverythingIds, spitter)
+							&& ContainsTarget(playerMechEverythingIds, blob)
+							&& (playerMechVerb.CanHarmElectricZombies() || ContainsTarget(playerMechEverythingIds, electric) == false),
+						normal, roped, confused, electric, albino, spitter, blob),
+					DescribeAvailableBranchCase(
+						"playerThingEverything",
+						playerThingIds,
+						ContainsTarget(playerThingIds, normal)
+							&& ContainsTarget(playerThingIds, roped) == false
+							&& ContainsTarget(playerThingIds, confused) == false
+							&& ContainsTarget(playerThingIds, albino) == false
+							&& ContainsTarget(playerThingIds, spitter)
+							&& ContainsTarget(playerThingIds, blob)
+							&& (playerTurretVerb.CanHarmElectricZombies() || ContainsTarget(playerThingIds, electric) == false),
+						normal, roped, confused, electric, albino, spitter, blob),
+					DescribeAvailableBranchCase(
+						"enemyThingDisabled",
+						enemyThingDisabledIds,
+						enemyThingDisabledIds.Length == 0,
+						normal, roped, confused, electric, albino, spitter, blob),
+					DescribeAvailableBranchCase(
+						"enemyThingEnabled",
+						enemyThingEnabledIds,
+						ContainsTarget(enemyThingEnabledIds, normal)
+							&& ContainsTarget(enemyThingEnabledIds, roped)
+							&& ContainsTarget(enemyThingEnabledIds, confused)
+							&& ContainsTarget(enemyThingEnabledIds, albino) == false
+							&& ContainsTarget(enemyThingEnabledIds, spitter) == false
+							&& ContainsTarget(enemyThingEnabledIds, blob) == false
+							&& (enemyTurretVerb.CanHarmElectricZombies() || ContainsTarget(enemyThingEnabledIds, electric) == false),
+						normal, roped, confused, electric, albino, spitter, blob)
+				};
+
+				return new
+				{
+					success = cases.All(ObjectSuccess),
+					attackers = new
+					{
+						friendlyHuman = DescribePawn(friendlyHuman),
+						friendlyHumanVerb = DescribeVerb(friendlyHumanVerb),
+						playerMech = DescribePawn(playerMech),
+						playerMechVerb = DescribeVerb(playerMechVerb),
+						friendlyMech = DescribePawn(friendlyMech),
+						friendlyMechVerb = DescribeVerb(friendlyMechVerb),
+						playerTurret = DescribeTarget(playerTurret),
+						playerTurretVerb = DescribeVerb(playerTurretVerb),
+						enemyTurret = DescribeTarget(enemyTurret),
+						enemyTurretVerb = DescribeVerb(enemyTurretVerb)
+					},
+					cases
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.attackMode = oldAttackMode;
+				ZombieSettings.Values.enemiesAttackZombies = oldEnemiesAttackZombies;
+				ZombieSettings.Values.animalsAttackZombies = oldAnimalsAttackZombies;
+			}
+		}
+
+		static object DescribeAvailableBranchCase(string label, string[] ids, bool success, params IAttackTarget[] targets)
+		{
+			return new
+			{
+				success,
+				label,
+				ids,
+				contains = targets.ToDictionary(
+					target => StableId(target),
+					target => ids.Contains(StableId(target)))
+			};
+		}
+
+		static bool ContainsTarget(string[] ids, IAttackTarget target)
+		{
+			return ids.Contains(StableId(target));
+		}
+
+		static bool SpawnAreaWorkflowTurretGun(
+			Map map,
+			IntVec3 root,
+			Faction faction,
+			List<Thing> spawnedThings,
+			out Building_TurretGun turret,
+			out object error)
+		{
+			turret = null;
+			error = null;
+
+			var turretDef = DefDatabase<ThingDef>.GetNamed("Turret_MiniTurret", false)
+				?? DefDatabase<ThingDef>.AllDefs.FirstOrDefault(def => def.thingClass != null && typeof(Building_TurretGun).IsAssignableFrom(def.thingClass));
+			if (turretDef == null)
+			{
+				error = new
+				{
+					success = false,
+					error = "No Building_TurretGun ThingDef was available for non-pawn targeting checks."
+				};
+				return false;
+			}
+
+			if (TryFindClearBuildingFootprint(map, turretDef, root, 18f, out var turretCell, out error) == false)
+				return false;
+
+			var turretStuff = turretDef.MadeFromStuff ? GenStuff.DefaultStuffFor(turretDef) ?? ThingDefOf.Steel : null;
+			turret = ThingMaker.MakeThing(turretDef, turretStuff) as Building_TurretGun;
+			if (turret == null)
+			{
+				error = new
+				{
+					success = false,
+					turretDef = turretDef.defName,
+					error = "The selected turret def did not create a Building_TurretGun."
+				};
+				return false;
+			}
+			turret.SetFactionDirect(faction);
+			GenSpawn.Spawn(turret, turretCell, map, Rot4.North, WipeMode.Vanish, false);
+			spawnedThings.Add(turret);
+
+			var power = turret.GetComp<CompPowerTrader>();
+			if (power != null)
+				power.PowerOn = true;
+			return true;
+		}
+
+		static object VerifyAreaWorkflowTarSmokeMeleeTargeting(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			if (TryFindAdjacentPawnPairCells(map, root + new IntVec3(10, 0, 8), out var actorCell, out var targetCell, out var cellError) == false)
+				return cellError;
+
+			ClearGasAt(map, targetCell);
+			var actor = SpawnMeleeAreaWorkflowPawn(map, "ZL_Area_TarSmokeMeleeActor", actorCell, Faction.OfPlayer, spawnedThings);
+			EquipAreaWorkflowMeleeWeapon(actor);
+			var target = SpawnAreaWorkflowPawn(map, "ZL_Area_TarSmokeMeleeTarget", targetCell, Faction.OfAncientsHostile, spawnedThings);
+			var verb = actor.equipment?.PrimaryEq?.PrimaryVerb ?? actor.CurrentEffectiveVerb;
+			if (verb == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					target = DescribePawn(target),
+					error = "The tar-smoke melee actor had no effective melee verb."
+				};
+			}
+
+			var canHitBeforeSmoke = verb.CanHitTargetFrom(actor.Position, target);
+			var gasAtTargetBefore = target.Position.GetGas(map)?.def?.defName;
+			var smoke = GenSpawn.Spawn(ThingMaker.MakeThing(CustomDefs.TarSmoke), target.Position, map);
+			if (smoke != null)
+				spawnedThings.Add(smoke);
+			var gasAtTargetAfter = target.Position.GetGas(map)?.def?.defName;
+			var canHitAfterSmoke = verb.CanHitTargetFrom(actor.Position, target);
+
+			return new
+			{
+				success = verb.IsMeleeAttack
+					&& canHitBeforeSmoke
+					&& gasAtTargetBefore == null
+					&& smoke?.def == CustomDefs.TarSmoke
+					&& gasAtTargetAfter == CustomDefs.TarSmoke.defName
+					&& canHitAfterSmoke,
+				actor = DescribePawn(actor),
+				target = DescribePawn(target),
+				verb = DescribeVerb(verb),
+				actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+				targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+				smoke = ZombieRuntimeActions.StableThingId(smoke),
+				gasAtTargetBefore,
+				gasAtTargetAfter,
+				canHitBeforeSmoke,
+				canHitAfterSmoke
+			};
+		}
+
+		static object VerifyAreaWorkflowTurretTargeting(Map map, IntVec3 root, Pawn roper, List<Thing> spawnedThings)
+		{
+			if (SpawnAreaWorkflowTurretGun(map, root + new IntVec3(0, 0, 12), Faction.OfPlayer, spawnedThings, out var turret, out var turretError) == false)
+				return turretError;
+
+			var verb = turret.CurrentEffectiveVerb;
+			if (verb == null)
+			{
+				return new
+				{
+					success = false,
+					turret = DescribeTarget(turret),
+					error = "The spawned turret had no CurrentEffectiveVerb."
+				};
+			}
+
+			var maxDistance = Math.Min(verb.verbProps.range - 1f, 18f);
+			var targetCells = GenRadial.RadialCellsAround(turret.Position, maxDistance, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.GetEdifice(map) == null)
+				.Where(cell => cell.GetFirstThing<Mineable>(map) == null)
+				.Where(cell => cell.DistanceTo(turret.Position) >= 6f)
+				.Where(cell => GenSight.LineOfSight(turret.Position, cell, map, true))
+				.Where(cell => verb.CanHitTargetFrom(turret.Position, cell))
+				.OrderBy(cell => cell.DistanceToSquared(turret.Position))
+				.Take(6)
+				.ToArray();
+			if (targetCells.Length < 6)
+			{
+				return new
+				{
+					success = false,
+					turret = DescribeTarget(turret),
+					verb = DescribeVerb(verb),
+					targetCellCount = targetCells.Length,
+					error = "Not enough turret-visible target cells were found."
+				};
+			}
+
+			var normal = SpawnTargetZombie(map, targetCells[0], ZombieType.Normal, "ZL_Area_TurretNormal", spawnedThings);
+			var roped = SpawnTargetZombie(map, targetCells[1], ZombieType.Normal, "ZL_Area_TurretRoped", spawnedThings);
+			var confused = SpawnTargetZombie(map, targetCells[2], ZombieType.Normal, "ZL_Area_TurretConfused", spawnedThings);
+			var electric = SpawnTargetZombie(map, targetCells[3], ZombieType.Electrifier, "ZL_Area_TurretElectric", spawnedThings);
+			var spitter = SpawnTargetSpitter(map, targetCells[4], "ZL_Area_TurretSpitter", spawnedThings);
+			var blob = SpawnTargetBlob(map, targetCells[5], "ZL_Area_TurretBlob", spawnedThings);
+			if (new Pawn[] { normal, roped, confused, electric, spitter, blob }.Any(pawn => pawn == null))
+			{
+				return new
+				{
+					success = false,
+					turret = DescribeTarget(turret),
+					targets = new
+					{
+						normal = DescribeZombie(normal),
+						roped = DescribeZombie(roped),
+						confused = DescribeZombie(confused),
+						electric = DescribeZombie(electric),
+						spitter = DescribeZombie(spitter),
+						blob = DescribeZombie(blob)
+					},
+					error = "Could not create all turret-targeting zombie fixtures."
+				};
+			}
+
+			roped.ropedBy = roper;
+			confused.paralyzedUntil = GenTicks.TicksAbs + 2500;
+			electric.electricDisabledUntil = GenTicks.TicksGame - 1;
+			RefreshZombieTargetCache(map);
+
+			var flags = TargetScanFlags.NeedLOSToAll | TargetScanFlags.NeedThreat;
+			var normalBest = BestSpecificTarget(turret, normal);
+			var ropedBest = BestSpecificTarget(turret, roped);
+			var confusedBest = BestSpecificTarget(turret, confused);
+			var electricBest = BestSpecificTarget(turret, electric);
+			var spitterBest = BestSpecificTarget(turret, spitter);
+			var blobBest = BestSpecificTarget(turret, blob);
+			var generalBest = AttackTargetFinder.BestAttackTarget(
+				turret,
+				flags,
+				thing => thing is Zombie || thing is ZombieSpitter || thing is ZombieBlob,
+				0f,
+				Math.Max(20f, verb.verbProps.range));
+			var rejectedIds = new[] { StableId(roped), StableId(confused), StableId(electric) };
+			var generalBestThing = generalBest?.Thing;
+			var generalBestAllowed = generalBestThing switch
+			{
+				Zombie zombie => zombie.IsRopedOrConfused == false && (verb.CanHarmElectricZombies() || zombie.IsActiveElectric == false),
+				ZombieSpitter => true,
+				ZombieBlob => true,
+				_ => false
+			};
+			var potentialIds = map.attackTargetsCache.GetPotentialTargetsFor(turret).Select(StableId).Where(id => id != null).ToArray();
+			var patchOwners = PatchOwners("BestAttackTarget");
+
+			return new
+			{
+				success = patchOwners.Contains("net.pardeike.zombieland")
+					&& verb.CanHarmElectricZombies() == false
+					&& electric.IsActiveElectric
+					&& ReferenceEquals(normalBest?.Thing, normal)
+					&& ropedBest == null
+					&& confusedBest == null
+					&& electricBest == null
+					&& ReferenceEquals(spitterBest?.Thing, spitter)
+					&& ReferenceEquals(blobBest?.Thing, blob)
+					&& generalBestAllowed
+					&& rejectedIds.Contains(StableId(generalBest)) == false,
+				patchOwners,
+				turret = DescribeTarget(turret),
+				verb = DescribeVerb(verb),
+				canHarmElectric = verb.CanHarmElectricZombies(),
+				targets = new
+				{
+					normal = DescribeZombie(normal),
+					roped = DescribeZombie(roped),
+					confused = DescribeZombie(confused),
+					electric = DescribeZombie(electric),
+					spitter = DescribeZombie(spitter),
+					blob = DescribeZombie(blob)
+				},
+				bestTargets = new
+				{
+					normal = DescribeTarget(normalBest),
+					roped = DescribeTarget(ropedBest),
+					confused = DescribeTarget(confusedBest),
+					electric = DescribeTarget(electricBest),
+					spitter = DescribeTarget(spitterBest),
+					blob = DescribeTarget(blobBest),
+					general = DescribeTarget(generalBest),
+					generalAllowed = generalBestAllowed
+				},
+				potentialTargetIds = potentialIds
+			};
+		}
+
+		static object VerifyAreaWorkflowWaitAutoAttack(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var patchOwners = PatchOwners(typeof(JobDriver_Wait), "CheckForAutoAttack");
+			var cases = new List<object>();
+			var caseIndex = 0;
+
+			object RunCase(string label, bool expectDamage, Func<IntVec3, Pawn, Pawn> spawnTarget, Action<Pawn, Pawn> configure = null, bool requireDamage = true)
+			{
+				caseIndex++;
+				if (TryFindAdjacentPawnPairCells(map, root + new IntVec3(caseIndex * 5, 0, 5), out var actorCell, out var targetCell, out var cellError) == false)
+				{
+					return new
+					{
+						success = false,
+						label,
+						error = cellError
+					};
+				}
+
+				var actor = SpawnMeleeAreaWorkflowPawn(map, "ZL_Area_WaitActor_" + label, actorCell, Faction.OfPlayer, spawnedThings);
+				EquipAreaWorkflowMeleeWeapon(actor);
+				var target = spawnTarget(targetCell, actor);
+				if (target != null)
+					spawnedThings.Add(target);
+				if (actor == null || target == null)
+				{
+					return new
+					{
+						success = false,
+						label,
+						actor = DescribePawn(actor),
+						target = DescribeTarget(target),
+						error = "Could not create the Wait_Combat auto-attack fixture."
+					};
+				}
+
+				configure?.Invoke(actor, target);
+				RefreshZombieTargetCache(map);
+				var injuryBefore = TotalInjurySeverity(target);
+				var deadBefore = target.Dead;
+				var samples = new List<object>();
+				var sampledDamage = false;
+				var attacked = false;
+
+				actor.drafter.Drafted = true;
+				var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				waitJob.playerForced = false;
+				waitJob.canUseRangedWeapon = false;
+				actor.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+
+				const int maxTicks = 900;
+				for (var tick = 1; tick <= maxTicks && actor.Destroyed == false && target.Destroyed == false; tick++)
+				{
+					AdvanceGameTicks(1);
+					var actorStance = actor.stances?.curStance?.GetType().Name;
+					var startedAttack = actor.stances?.curStance is Stance_Cooldown;
+					attacked |= startedAttack;
+					if (tick == 1 || tick == 60 || tick == 180 || tick == maxTicks || TotalInjurySeverity(target) > injuryBefore || target.Dead)
+					{
+						if ((TotalInjurySeverity(target) <= injuryBefore && target.Dead == false) || sampledDamage == false)
+						{
+							samples.Add(new
+							{
+								tick,
+								actorJob = actor.CurJobDef?.defName,
+								actorStance,
+								startedAttack,
+								targetInjury = TotalInjurySeverity(target),
+								targetDead = target.Dead
+							});
+							if (TotalInjurySeverity(target) > injuryBefore || target.Dead)
+								sampledDamage = true;
+						}
+					}
+					if (expectDamage && (TotalInjurySeverity(target) > injuryBefore || target.Dead || target.Downed))
+						break;
+					if (expectDamage && requireDamage == false && attacked)
+						break;
+				}
+
+				var injuryAfter = TotalInjurySeverity(target);
+				var damaged = injuryAfter > injuryBefore || (deadBefore == false && target.Dead) || target.Downed;
+				var success = expectDamage
+					? requireDamage ? damaged : damaged || attacked
+					: damaged == false && attacked == false;
+				var result = new
+				{
+					success,
+					label,
+					expectDamage,
+					requireDamage,
+					damaged,
+					attacked,
+					actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					injuryBefore,
+					injuryAfter,
+					injuryDelta = injuryAfter - injuryBefore,
+					deadBefore,
+					deadAfter = target.Dead,
+					downedAfter = target.Downed,
+					actor = DescribePawn(actor),
+					target = DescribeTarget(target),
+					samples = samples.ToArray()
+				};
+
+				if (actor.Destroyed == false)
+					actor.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+				if (actor.Destroyed == false)
+					actor.Destroy(DestroyMode.Vanish);
+				if (target.Destroyed == false)
+					target.Destroy(DestroyMode.Vanish);
+				return result;
+			}
+
+			cases.Add(RunCase("normalZombie", true, (cell, actor) => SpawnTargetZombie(map, cell, ZombieType.Normal, "ZL_Area_WaitNormal", spawnedThings)));
+			cases.Add(RunCase("ropedZombie", false, (cell, actor) => SpawnTargetZombie(map, cell, ZombieType.Normal, "ZL_Area_WaitRoped", spawnedThings), (actor, target) =>
+			{
+				if (target is Zombie zombie)
+					zombie.ropedBy = actor;
+			}));
+			cases.Add(RunCase("confusedZombie", false, (cell, actor) => SpawnTargetZombie(map, cell, ZombieType.Normal, "ZL_Area_WaitConfused", spawnedThings), (actor, target) =>
+			{
+				if (target is Zombie zombie)
+					zombie.paralyzedUntil = GenTicks.TicksAbs + 2500;
+			}));
+			cases.Add(RunCase("spitter", true, (cell, actor) => SpawnTargetSpitter(map, cell, "ZL_Area_WaitSpitter", spawnedThings)));
+			cases.Add(RunCase("blob", true, (cell, actor) => SpawnTargetBlob(map, cell, "ZL_Area_WaitBlob", spawnedThings)));
+			cases.Add(RunCase("hostilePawn", true, (cell, actor) => SpawnMeleeAreaWorkflowPawn(map, "ZL_Area_WaitHostile", cell, Faction.OfAncientsHostile, spawnedThings), requireDamage: false));
+
+			return new
+			{
+				success = patchOwners.Contains("net.pardeike.zombieland") && cases.All(ObjectSuccess),
+				patchOwners,
+				cases = cases.ToArray()
+			};
+		}
+
+		static float InvokeFriendlyFireOffset(string methodName, IAttackTarget target, IAttackTargetSearcher searcher, Verb verb)
+		{
+			var method = typeof(AttackTargetFinder).GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic);
+			return (float)method.Invoke(null, new object[] { target, searcher, verb });
+		}
+
+		static string[] PatchOwners(string methodName)
+		{
+			var method = typeof(AttackTargetFinder).GetMethod(methodName, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+			return PatchOwners(method);
+		}
+
+		static string[] PatchOwners(Type type, string methodName)
+		{
+			var method = type?.GetMethod(methodName, BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+			return PatchOwners(method);
+		}
+
+		static string[] PatchOwners(MethodBase method)
+		{
+			if (method == null)
+				return Array.Empty<string>();
+			var patchInfo = Harmony.GetPatchInfo(method);
+			return (patchInfo?.Prefixes ?? Enumerable.Empty<Patch>())
+				.Concat(patchInfo?.Postfixes ?? Enumerable.Empty<Patch>())
+				.Concat(patchInfo?.Transpilers ?? Enumerable.Empty<Patch>())
+				.Select(patch => patch.owner)
+				.Distinct()
+				.OrderBy(owner => owner)
+				.ToArray() ?? Array.Empty<string>();
+		}
+
+		static Pawn SpawnMeleeAreaWorkflowPawn(Map map, string name, IntVec3 cell, Faction faction, List<Thing> spawnedThings)
+		{
+			Pawn pawn = null;
+			for (var attempt = 0; attempt < 20; attempt++)
+			{
+				var candidate = GenerateAreaWorkflowPawn(faction, true);
+				if (candidate.WorkTagIsDisabled(WorkTags.Violent))
+					continue;
+				pawn = candidate;
+				break;
+			}
+			pawn ??= GenerateAreaWorkflowPawn(faction, true);
+			pawn.Name = new NameSingle(name);
+			GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+			DisablePawnWork(pawn);
+			pawn.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			pawn.inventory?.DestroyAll();
+			spawnedThings.Add(pawn);
+			return pawn;
+		}
+
+		static void EquipAreaWorkflowMeleeWeapon(Pawn pawn)
+		{
+			if (pawn?.equipment == null)
+				return;
+			pawn.equipment.DestroyAllEquipment(DestroyMode.Vanish);
+			var weaponDef = DefDatabase<ThingDef>.GetNamed("MeleeWeapon_Club", false)
+				?? DefDatabase<ThingDef>.GetNamed("MeleeWeapon_Knife", false)
+				?? DefDatabase<ThingDef>.AllDefs.FirstOrDefault(def => def.IsMeleeWeapon);
+			var weaponStuff = weaponDef?.MadeFromStuff == true ? GenStuff.DefaultStuffFor(weaponDef) ?? ThingDefOf.Steel : null;
+			var weapon = weaponDef == null ? null : ThingMaker.MakeThing(weaponDef, weaponStuff) as ThingWithComps;
+			if (weapon != null)
+				pawn.equipment.AddEquipment(weapon);
+		}
+
+		static bool TryFindAdjacentPawnPairCells(Map map, IntVec3 root, out IntVec3 actorCell, out IntVec3 targetCell, out object error)
+		{
+			actorCell = IntVec3.Invalid;
+			targetCell = IntVec3.Invalid;
+			error = null;
+
+			var candidates = GenRadial.RadialCellsAround(root, 12f, true)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.ToArray();
+			foreach (var candidate in candidates)
+			{
+				var adjacent = GenAdj.AdjacentCells
+					.Select(offset => candidate + offset)
+					.FirstOrDefault(cell => cell.InBounds(map)
+						&& cell.Standable(map)
+						&& cell.Fogged(map) == false
+						&& cell.GetFirstPawn(map) == null);
+				if (adjacent.IsValid == false)
+					continue;
+				actorCell = candidate;
+				targetCell = adjacent;
+				return true;
+			}
+
+			error = new
+			{
+				success = false,
+				root = ZombieRuntimeActions.DescribeCell(root),
+				error = "No adjacent clear pawn cells were found for the Wait_Combat auto-attack fixture."
+			};
+			return false;
+		}
+
+		static string StableId(object obj)
+		{
+			return ZombieRuntimeActions.StableThingId((obj as IAttackTarget)?.Thing ?? obj as Thing);
+		}
+
+		static string[] TargetIds(IEnumerable<Pair<IAttackTarget, float>> pairs)
+		{
+			return pairs.Select(pair => StableId(pair.first)).Where(id => id != null).ToArray();
+		}
+
+		static object[] DescribeTargetPairs(IEnumerable<Pair<IAttackTarget, float>> pairs)
+		{
+			return pairs.Select(pair => new
+			{
+				id = StableId(pair.first),
+				thing = DescribeTarget(pair.first),
+				score = pair.second
+			}).Cast<object>().ToArray();
+		}
+
+		static object DescribeTarget(IAttackTarget target)
+		{
+			var thing = target?.Thing;
+			return new
+			{
+				id = StableId(target),
+				defName = thing?.def?.defName,
+				kindDef = (thing as Pawn)?.kindDef?.defName,
+				label = thing?.LabelCap,
+				position = thing?.Spawned == true ? ZombieRuntimeActions.DescribeCell(thing.Position) : null
+			};
+		}
+
+		static Area_Allowed EnsureAreaWorkflowArea(Map map, string suffix, AreaRiskMode mode, Color color, IEnumerable<IntVec3> activeCells)
+		{
+			var label = AreaWorkflowPrefix + suffix;
+			var area = map.areaManager.AllAreas.OfType<Area_Allowed>().FirstOrDefault(candidate => candidate.Label == label);
+			if (area == null)
+			{
+				if (map.areaManager.TryMakeNewAllowed(out area) == false)
+					throw new InvalidOperationException("Could not create area workflow fixture area " + label + ".");
+				area.labelInt = label;
+			}
+			else if (area.Label != label)
+				area.labelInt = label;
+
+			foreach (var cell in area.ActiveCells.ToArray())
+				area[cell] = false;
+			foreach (var cell in activeCells)
+				if (cell.InBounds(map))
+					area[cell] = true;
+
+			area.colorInt = color;
+			area.colorTextureInt = null;
+			area.Drawer.material = null;
+			area.Drawer.SetDirty();
+
+			if (mode == AreaRiskMode.Ignore)
+				_ = ZombieSettings.Values.dangerousAreas.Remove(area);
+			else
+				ZombieSettings.Values.dangerousAreas[area] = mode;
+
+			return area;
+		}
+
+		static (Area_Allowed area, AreaRiskMode mode)[] FindAreaWorkflowAreas(Map map)
+		{
+			return map.areaManager.AllAreas
+				.OfType<Area_Allowed>()
+				.Where(area => area.Label.StartsWith(AreaWorkflowPrefix, StringComparison.Ordinal))
+				.Select(area => (area, Dialog_ManageAreas_Patches.GetMode(area)))
+				.OrderBy(pair => pair.area.Label)
+				.ToArray();
+		}
+
+		static Color ExpectedAreaLabelColor(AreaRiskMode mode)
+		{
+			return mode switch
+			{
+				AreaRiskMode.ColonistInside => Dialog_ManageAreas_Patches.areaNameColonistInside,
+				AreaRiskMode.ColonistOutside => Dialog_ManageAreas_Patches.areaNameColonistOutside,
+				AreaRiskMode.ZombieInside => Dialog_ManageAreas_Patches.areaNameZombieInside,
+				AreaRiskMode.ZombieOutside => Dialog_ManageAreas_Patches.areaNameZombieOutside,
+				_ => Color.white,
+			};
 		}
 
 	}

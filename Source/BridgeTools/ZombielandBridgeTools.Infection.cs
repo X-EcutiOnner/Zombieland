@@ -106,6 +106,134 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/infection_medical_state", Description = "Run compact medical patch contracts for zombie-bite natural healing, ShouldRemove persistence, and remove-body-part surgery targeting.")]
+		public static object InfectionMedicalState()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var spawnedPawns = new List<Pawn>();
+			var oldInfectionChance = ZombieSettings.Values.zombieBiteInfectionChance;
+			try
+			{
+				ZombieSettings.Values.zombieBiteInfectionChance = 1f;
+				if (TryFindClearSpawnCell(map, new IntVec3(map.Size.x / 2, 0, map.Size.z / 2), 16f, out var patientCell, out var spawnError) == false)
+					return spawnError;
+
+				var patient = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(patient, patientCell, map, WipeMode.Vanish);
+				DisablePawnWork(patient);
+				spawnedPawns.Add(patient);
+
+				if (ZombieRuntimeActions.AddZombieBite(patient, "harmful", out var hiddenBite, out var error) == false)
+					return InfectionMedicalFailure(patient, null, error);
+				ForceHiddenBite(hiddenBite);
+				if (ZombieRuntimeActions.AddZombieBite(patient, "harmless", out var harmlessBite, out error) == false)
+					return InfectionMedicalFailure(patient, null, error);
+				if (ZombieRuntimeActions.AddZombieBite(patient, "harmful", out var infectableBite, out error) == false)
+					return InfectionMedicalFailure(patient, null, error);
+				if (ZombieRuntimeActions.AddZombieBite(patient, "final", out var infectingBite, out error) == false)
+					return InfectionMedicalFailure(patient, null, error);
+
+				var ordinaryCut = CreateOrdinaryCut(patient);
+				var animalCase = CreateAnimalBiteCase(map, patient.Position, spawnedPawns);
+
+				var healCases = new[]
+				{
+					DescribeNaturalHealingCase("hidden", hiddenBite),
+					DescribeNaturalHealingCase("harmless", harmlessBite),
+					DescribeNaturalHealingCase("infectable", infectableBite),
+					DescribeNaturalHealingCase("infecting", infectingBite),
+					DescribeNaturalHealingCase("ordinaryCut", ordinaryCut)
+				};
+				var animalHealCase = animalCase.bite == null ? null : DescribeNaturalHealingCase("animalZombieBite", animalCase.bite);
+
+				hiddenBite.Severity = 0f;
+				harmlessBite.Severity = 0f;
+				infectableBite.Severity = 0f;
+				infectingBite.Severity = 0f;
+				if (ordinaryCut != null)
+					ordinaryCut.Severity = 0f;
+
+				var removalCases = new[]
+				{
+					DescribeShouldRemoveCase("hidden", hiddenBite),
+					DescribeShouldRemoveCase("harmless", harmlessBite),
+					DescribeShouldRemoveCase("infectable", infectableBite),
+					DescribeShouldRemoveCase("infecting", infectingBite),
+					DescribeShouldRemoveCase("ordinaryCut", ordinaryCut)
+				};
+
+				var removePartWorker = RecipeDefOf.RemoveBodyPart.Worker;
+				var parts = removePartWorker.GetPartsToApplyOn(patient, RecipeDefOf.RemoveBodyPart).ToArray();
+				var bittenParts = new[] { hiddenBite, harmlessBite, infectableBite, infectingBite }
+					.Select(bite => bite.Part)
+					.Where(part => part != null)
+					.Distinct()
+					.ToArray();
+				var duplicateParts = parts
+					.Where(part => part != null)
+					.GroupBy(part => part)
+					.Where(group => group.Count() > 1)
+					.Select(group => DescribeBodyPart(group.Key))
+					.ToArray();
+				var missingBittenParts = bittenParts
+					.Where(part => parts.Contains(part) == false)
+					.Select(DescribeBodyPart)
+					.ToArray();
+
+				var naturalHealingValid = healCases.First(c => c.name == "hidden").canHealNaturally == false
+					&& healCases.First(c => c.name == "harmless").canHealNaturally
+					&& healCases.First(c => c.name == "infectable").canHealNaturally == false
+					&& healCases.First(c => c.name == "infecting").canHealNaturally == false
+					&& healCases.First(c => c.name == "ordinaryCut").canHealNaturally
+					&& (animalHealCase == null || animalHealCase.canHealNaturally);
+				var shouldRemoveValid = removalCases.First(c => c.name == "hidden").shouldRemove == false
+					&& removalCases.First(c => c.name == "harmless").shouldRemove
+					&& removalCases.First(c => c.name == "infectable").shouldRemove == false
+					&& removalCases.First(c => c.name == "infecting").shouldRemove == false
+					&& removalCases.First(c => c.name == "ordinaryCut").shouldRemove;
+				var removeBodyPartValid = bittenParts.Length > 0
+					&& missingBittenParts.Length == 0
+					&& duplicateParts.Length == 0;
+
+				return new
+				{
+					success = naturalHealingValid && shouldRemoveValid && removeBodyPartValid,
+					patient = DescribePawn(patient),
+					infection = ZombieRuntimeActions.DescribePawnInfection(patient),
+					naturalHealingValid,
+					shouldRemoveValid,
+					removeBodyPartValid,
+					healCases,
+					animalHealCase,
+					animalCase = animalCase.description,
+					removalCases,
+					removeBodyPart = new
+					{
+						totalPartCount = parts.Length,
+						bittenParts = bittenParts.Select(DescribeBodyPart).ToArray(),
+						missingBittenParts,
+						duplicateParts,
+						firstParts = parts.Take(12).Select(DescribeBodyPart).ToArray()
+					}
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.zombieBiteInfectionChance = oldInfectionChance;
+				foreach (var pawn in spawnedPawns.Where(pawn => pawn != null && pawn.Destroyed == false).ToArray())
+					pawn.Destroy(DestroyMode.Vanish);
+			}
+		}
+
 		[Tool("zombieland/cure_zombie_infection_recipe", Description = "Apply the real cure-infection recipe worker with 100% serum and verify the cured corpse no longer queues conversion.")]
 		public static object CureZombieInfectionRecipe()
 		{
@@ -221,10 +349,151 @@ namespace ZombieLand
 				queuedBeforeRot,
 				queuedAfterRot
 			};
-		}
+			}
 
-		[Tool("zombieland/convert_pawn_to_zombie", Description = "Convert a spawned non-zombie pawn to a Zombieland zombie and return before/after state for smoke tests.")]
-		public static object ConvertPawnToZombie(
+			sealed class MedicalHealCase
+			{
+				public string name { get; set; }
+				public string hediffDef { get; set; }
+				public string part { get; set; }
+				public float severity { get; set; }
+				public string infectionState { get; set; }
+				public bool canHealNaturally { get; set; }
+			}
+
+			sealed class MedicalRemovalCase
+			{
+				public string name { get; set; }
+				public string hediffDef { get; set; }
+				public string part { get; set; }
+				public float severity { get; set; }
+				public string infectionState { get; set; }
+				public bool shouldRemove { get; set; }
+			}
+
+			static object InfectionMedicalFailure(Pawn patient, Pawn animal, string error)
+			{
+				return new
+				{
+					success = false,
+					patient = DescribePawn(patient),
+					animal = DescribePawn(animal),
+					error
+				};
+			}
+
+			static void ForceHiddenBite(Hediff_Injury_ZombieBite bite)
+			{
+				var infector = bite?.TendDuration?.ZombieInfector;
+				if (infector == null)
+					return;
+
+				infector.infectionKnownDelay = GenTicks.TicksAbs + GenDate.TicksPerHour;
+				infector.infectionStartTime = infector.infectionKnownDelay + GenDate.TicksPerHour;
+				infector.infectionEndTime = infector.infectionStartTime + GenDate.TicksPerHour;
+			}
+
+			static Hediff_Injury CreateOrdinaryCut(Pawn pawn)
+			{
+				var part = pawn.health.hediffSet
+					.GetNotMissingParts(BodyPartHeight.Undefined, BodyPartDepth.Outside)
+					.Where(part => part.def.IsSolid(part, pawn.health.hediffSet.hediffs) == false)
+					.FirstOrDefault();
+				if (part == null)
+					return null;
+
+				var cut = (Hediff_Injury)HediffMaker.MakeHediff(HediffDefOf.Cut, pawn, part);
+				cut.Severity = 2f;
+				pawn.health.AddHediff(cut, part, new DamageInfo(DamageDefOf.Cut, 2f));
+				return cut;
+			}
+
+			static (Hediff_Injury_ZombieBite bite, object description) CreateAnimalBiteCase(Map map, IntVec3 near, List<Pawn> spawnedPawns)
+			{
+				var animalKind = DefDatabase<PawnKindDef>.AllDefs
+					.FirstOrDefault(kind => kind.race?.race?.Animal == true && kind.race.race.IsFlesh);
+				if (animalKind == null)
+				{
+					return (null, new
+					{
+						success = false,
+						reason = "No flesh animal pawn kind was available."
+					});
+				}
+				if (TryFindClearSpawnCell(map, near + new IntVec3(3, 0, 0), 10f, out var animalCell, out var cellError) == false)
+				{
+					return (null, new
+					{
+						success = false,
+						reason = "No animal spawn cell was available.",
+						cellError
+					});
+				}
+
+				var animal = PawnGenerator.GeneratePawn(animalKind);
+				GenSpawn.Spawn(animal, animalCell, map, WipeMode.Vanish);
+				spawnedPawns.Add(animal);
+				var part = animal.health.hediffSet
+					.GetNotMissingParts(BodyPartHeight.Undefined, BodyPartDepth.Outside)
+					.Where(part => part.def.IsSolid(part, animal.health.hediffSet.hediffs) == false)
+					.FirstOrDefault();
+				if (part == null)
+				{
+					return (null, new
+					{
+						success = false,
+						animal = DescribePawn(animal),
+						reason = "The animal had no valid non-solid bite part."
+					});
+				}
+
+				var bite = (Hediff_Injury_ZombieBite)HediffMaker.MakeHediff(HediffDef.Named("ZombieBite"), animal, part);
+				bite.Severity = 2f;
+				animal.health.AddHediff(bite, part, new DamageInfo(CustomDefs.ZombieBite, 2f));
+				return (bite, new
+				{
+					success = true,
+					animal = DescribePawn(animal),
+					part = DescribeBodyPart(part),
+					infectionState = bite.TendDuration?.GetInfectionState().ToString()
+				});
+			}
+
+			static MedicalHealCase DescribeNaturalHealingCase(string name, Hediff_Injury hediff)
+			{
+				var bite = hediff as Hediff_Injury_ZombieBite;
+				return new MedicalHealCase
+				{
+					name = name,
+					hediffDef = hediff?.def?.defName,
+					part = DescribeBodyPart(hediff?.Part),
+					severity = hediff?.Severity ?? 0f,
+					infectionState = bite?.TendDuration?.GetInfectionState().ToString(),
+					canHealNaturally = hediff != null && HediffUtility.CanHealNaturally(hediff)
+				};
+			}
+
+			static MedicalRemovalCase DescribeShouldRemoveCase(string name, Hediff_Injury hediff)
+			{
+				var bite = hediff as Hediff_Injury_ZombieBite;
+				return new MedicalRemovalCase
+				{
+					name = name,
+					hediffDef = hediff?.def?.defName,
+					part = DescribeBodyPart(hediff?.Part),
+					severity = hediff?.Severity ?? 0f,
+					infectionState = bite?.TendDuration?.GetInfectionState().ToString(),
+					shouldRemove = hediff?.ShouldRemove ?? false
+				};
+			}
+
+			static string DescribeBodyPart(BodyPartRecord part)
+			{
+				return part == null ? null : $"{part.def?.defName}:{part.Label}";
+			}
+
+			[Tool("zombieland/convert_pawn_to_zombie", Description = "Convert a spawned non-zombie pawn to a Zombieland zombie and return before/after state for smoke tests.")]
+			public static object ConvertPawnToZombie(
 			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
 			[ToolParameter(Description = "Pass true to force conversion even if the pawn normally would not convert.", Required = false, DefaultValue = true)] bool force = true)
 		{

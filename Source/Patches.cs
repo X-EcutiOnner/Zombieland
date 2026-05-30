@@ -320,9 +320,42 @@ namespace ZombieLand
 		//
 		[HarmonyPatch(typeof(GlobalControlsUtility))]
 		[HarmonyPatch(nameof(GlobalControlsUtility.DoDate))]
-		class GlobalControlsUtility_DoDate_Patch
+		internal static class GlobalControlsUtility_DoDate_Patch
 		{
-			static Color percentageBackground = new(1, 1, 1, 0.1f);
+			internal const float ReadoutHeight = 24f;
+			internal const float RightMargin = 7f;
+			internal const int ThreatForecastTooltipWindowId = 564534346;
+			internal const int ThreatForecastTooltipWidth = 720;
+			internal const int ThreatForecastTooltipHeight = 320;
+
+			static readonly Color percentageBackground = new(1, 1, 1, 0.1f);
+
+			internal static string FormatThreatForecast(float f1, float f2)
+			{
+				var n1 = Mathf.FloorToInt(f1 * 100);
+				var n2 = Mathf.FloorToInt(f2 * 100);
+				if (n1 == n2)
+					return string.Format("{0:D0}%", n1) + " " + "ThreatLevel".Translate();
+				return string.Format("{0:D0}-{1:D0}%", n1, n2) + " " + "ThreatLevel".Translate();
+			}
+
+			internal static Rect GetRightAlignedReadoutRect(float leftX, float width, float curBaseY, string text)
+			{
+				var zlRect = new Rect(leftX, curBaseY - ReadoutHeight, width, ReadoutHeight);
+				Text.Font = GameFont.Small;
+				var len = Text.CalcSize(text);
+				zlRect.xMin = zlRect.xMax - Math.Min(leftX, len.x + RightMargin);
+				return zlRect;
+			}
+
+			internal static Rect GetThreatForecastTooltipRect(Rect zlRect)
+			{
+				return new Rect(
+					zlRect.xMin - 10 - ThreatForecastTooltipWidth,
+					zlRect.yMax - ThreatForecastTooltipHeight,
+					ThreatForecastTooltipWidth,
+					ThreatForecastTooltipHeight);
+			}
 
 			static void Postfix(float leftX, float width, ref float curBaseY)
 			{
@@ -333,7 +366,6 @@ namespace ZombieLand
 				if (map.IsBlacklisted())
 					return;
 
-				const float rightMargin = 7f;
 				if (ZombieSettings.Values.showZombieStats)
 				{
 					var tickManager = map.GetComponent<TickManager>();
@@ -343,16 +375,12 @@ namespace ZombieLand
 					if (count > 0)
 					{
 						var zombieCountString = count + " Zombies";
-
-						var zlRect = new Rect(leftX, curBaseY - 24f, width, 24f);
-						Text.Font = GameFont.Small;
-						var len = Text.CalcSize(zombieCountString);
-						zlRect.xMin = zlRect.xMax - Math.Min(leftX, len.x + rightMargin);
+						var zlRect = GetRightAlignedReadoutRect(leftX, width, curBaseY, zombieCountString);
 
 						GUI.BeginGroup(zlRect);
 						Text.Anchor = TextAnchor.UpperRight;
 						var rect = zlRect.AtZero();
-						rect.xMax -= rightMargin;
+						rect.xMax -= RightMargin;
 						var percentRect = rect;
 						percentRect.width *= ZombieTicker.PercentTicking;
 						percentRect.xMin -= 2;
@@ -376,22 +404,10 @@ namespace ZombieLand
 
 					if (ZombieSettings.Values.useDynamicThreatLevel)
 					{
-						static string Format(float f1, float f2)
-						{
-							var n1 = Mathf.FloorToInt(f1 * 100);
-							var n2 = Mathf.FloorToInt(f2 * 100);
-							if (n1 == n2)
-								return string.Format("{0:D0}%", n1) + " " + "ThreatLevel".Translate();
-							return string.Format("{0:D0}-{1:D0}%", n1, n2) + " " + "ThreatLevel".Translate();
-						}
-
 						var zombieWeather = map.GetComponent<ZombieWeather>();
 						var (f1, f2) = zombieWeather.GetFactorRangeFor();
-						var zombieWeatherString = Format(f1, f2);
-						var zlRect = new Rect(leftX, curBaseY - 24f, width, 24f);
-						Text.Font = GameFont.Small;
-						var len = Text.CalcSize(zombieWeatherString);
-						zlRect.xMin = zlRect.xMax - Math.Min(leftX, len.x + rightMargin);
+						var zombieWeatherString = FormatThreatForecast(f1, f2);
+						var zlRect = GetRightAlignedReadoutRect(leftX, width, curBaseY, zombieWeatherString);
 
 						var over = Mouse.IsOver(zlRect);
 						if (over)
@@ -404,17 +420,15 @@ namespace ZombieLand
 						GUI.BeginGroup(zlRect);
 						Text.Anchor = TextAnchor.UpperRight;
 						var rect = zlRect.AtZero();
-						rect.xMax -= rightMargin;
+						rect.xMax -= RightMargin;
 						Widgets.Label(rect, zombieWeatherString);
 						Text.Anchor = TextAnchor.UpperLeft;
 						GUI.EndGroup();
 
 						if (over)
 						{
-							var winWidth = 720;
-							var winHeight = 320;
-							var bgRect = new Rect(zlRect.xMin - 10 - winWidth, zlRect.yMax - winHeight, winWidth, winHeight);
-							Find.WindowStack.ImmediateWindow(564534346, bgRect, WindowLayer.Super, ZombieWeather.GenerateTooltipDrawer(bgRect.AtZero()), false, false, 1f);
+							var bgRect = GetThreatForecastTooltipRect(zlRect);
+							Find.WindowStack.ImmediateWindow(ThreatForecastTooltipWindowId, bgRect, WindowLayer.Super, ZombieWeather.GenerateTooltipDrawer(bgRect.AtZero()), false, false, 1f);
 						}
 
 						curBaseY -= zlRect.height;
@@ -898,7 +912,7 @@ namespace ZombieLand
 			}
 		}
 
-		// smart melee skips bites 
+		// smart melee skips bites
 		//
 		[HarmonyPatch(typeof(Verb_MeleeAttack))]
 		[HarmonyPatch(nameof(Verb_MeleeAttack.TryCastShot))]
@@ -1098,14 +1112,24 @@ namespace ZombieLand
 
 			static MethodBase TargetMethod()
 			{
-				var method = typeof(JobDriver_AttackStatic).InnerMethodsStartingWith("<MakeNewToils>b__1").First();
+				var method = typeof(JobDriver_AttackStatic)
+					.InnerMethodsStartingWith("<MakeNewToils>b__")
+					.FirstOrDefault(method =>
+					{
+						var parameters = method.GetParameters();
+						return parameters.Length == 1 && parameters[0].ParameterType == typeof(int);
+					});
 				if (method != null)
 				{
-					var f_this = AccessTools.GetDeclaredFields(method.DeclaringType).First();
-					_this = AccessTools.FieldRefAccess<object, JobDriver_AttackStatic>(f_this);
+					var f_this = AccessTools.GetDeclaredFields(method.DeclaringType)
+						.FirstOrDefault(field => field.FieldType == typeof(JobDriver_AttackStatic));
+					if (f_this != null)
+						_this = AccessTools.FieldRefAccess<object, JobDriver_AttackStatic>(f_this);
+					else
+						Error($"Cannot find Verse.AI.JobDriver_AttackStatic display-class this field for {method.FullDescription()}");
 				}
 				else
-					Error($"Cannot find field Verse.AI.JobDriver_AttackStatic.*.<MakeNewToils>b__1");
+					Error($"Cannot find Verse.AI.JobDriver_AttackStatic.MakeNewToils tickIntervalAction delegate");
 
 				return method;
 			}
@@ -1550,8 +1574,8 @@ namespace ZombieLand
 				if (p == null || p.Map == null || p.Drafted || __instance == null)
 					return;
 
-				if (__instance.FreePassage)
-					return;
+				// Do not call FreePassage here. In RimWorld 1.6 it can reach WillCloseSoon,
+				// which scans nearby pawns and calls PawnCanOpen recursively.
 
 				if (p.CurJob?.playerForced ?? false)
 					return;
@@ -2248,6 +2272,7 @@ namespace ZombieLand
 			};
 
 			static readonly HashSet<IntVec3> exclude = new(Tools.GetCircle(2));
+
 			static void Prefix(Thing __instance, IntVec3 value)
 			{
 				if (__instance is not Pawn pawn)
@@ -3616,18 +3641,18 @@ namespace ZombieLand
 			public static bool suppressError = false;
 			public static bool textureError = false;
 
-			static void Error(string text)
+			static void CaptureTextureError(string text)
 			{
 				textureError = true;
 				if (suppressError == false)
-					Error(text);
+					Patches.Error(text);
 			}
 
 			[HarmonyPriority(Priority.First)]
 			static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
 			{
-				var m1 = SymbolExtensions.GetMethodInfo(() => Error(""));
-				var m2 = SymbolExtensions.GetMethodInfo(() => Error(""));
+				var m1 = SymbolExtensions.GetMethodInfo(() => Log.Error(""));
+				var m2 = SymbolExtensions.GetMethodInfo(() => CaptureTextureError(""));
 				return Transpilers.MethodReplacer(instructions, m1, m2);
 			}
 		}
@@ -4055,8 +4080,10 @@ namespace ZombieLand
 			[HarmonyPriority(Priority.Last)]
 			static IEnumerable<BodyPartRecord> Postfix(IEnumerable<BodyPartRecord> parts, Pawn pawn, RecipeDef recipe)
 			{
+				var yielded = new HashSet<BodyPartRecord>();
 				foreach (var part in parts)
-					yield return part;
+					if (part != null && yielded.Add(part))
+						yield return part;
 				if (recipe != RecipeDefOf.RemoveBodyPart)
 					yield break;
 
@@ -4064,7 +4091,8 @@ namespace ZombieLand
 				pawn.health.hediffSet.GetHediffs(ref tmpHediffInjuryZombieBite);
 				var bites = tmpHediffInjuryZombieBite.Select(bite => bite.Part);
 				foreach (var bite in bites)
-					yield return bite;
+					if (bite != null && yielded.Add(bite))
+						yield return bite;
 			}
 		}
 
@@ -5126,7 +5154,7 @@ namespace ZombieLand
 				// if (maps != null)
 				// 	foreach (var map in maps)
 				// 		map?.GetComponent<TickManager>()?.MapRemoved();
-				// 
+				//
 				// MemoryUtility.ClearAllMapsAndWorld();
 			}
 		}

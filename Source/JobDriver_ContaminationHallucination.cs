@@ -29,12 +29,14 @@ namespace ZombieLand
 		public override void ExposeData()
 		{
 			base.ExposeData();
+			Scribe_Values.Look(ref destination, "destination", IntVec3.Invalid);
+			Scribe_Values.Look(ref ghostVec, "ghostVec", Vector3.zero);
 		}
 
 		void InitAction()
 		{
 			ghostVec = pawn.DrawPos + Vector3Utility.FromAngleFlat(Rand.Range(0, 360)) * 3;
-			ghost = MoteMaker.MakeStaticMote(ghostVec, Map, CustomDefs.Ghost, 1f, false);
+			ghost = MoteMaker.MakeStaticMote(ghostVec, Map, CustomDefs.Ghost, 1f, true);
 			UpdateDestination();
 		}
 
@@ -58,11 +60,14 @@ namespace ZombieLand
 		void TickAction()
 		{
 			if (ghost == null || ghost.Destroyed)
-				ghost = MoteMaker.MakeStaticMote(ghostVec, Map, CustomDefs.Ghost, 1f, false);
+				ghost = MoteMaker.MakeStaticMote(ghostVec, Map, CustomDefs.Ghost, 1f, true);
 
 			ghostVec += (pawn.DrawPos - ghostVec) / 50f;
-			ghost.exactPosition = ghostVec;
-			ghost.Maintain();
+			if (ghost != null)
+			{
+				ghost.exactPosition = ghostVec;
+				ghost.Maintain();
+			}
 
 			if (pawn.IsHashIntervalTick(30) == false)
 				return;
@@ -74,14 +79,12 @@ namespace ZombieLand
 		{
 			base.Notify_PatherArrived();
 			destination = IntVec3.Invalid;
-			UpdateDestination();
 		}
 
 		public override void Notify_PatherFailed()
 		{
 			base.Notify_PatherFailed();
 			destination = IntVec3.Invalid;
-			UpdateDestination();
 		}
 	}
 }

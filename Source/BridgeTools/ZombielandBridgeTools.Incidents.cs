@@ -1,3 +1,4 @@
+using HarmonyLib;
 using RimBridgeServer.Annotations;
 using RimWorld;
 using System;
@@ -12,6 +13,65 @@ namespace ZombieLand
 {
 	public sealed partial class ZombielandBridgeTools
 	{
+		sealed class ThreatForecastSnapshot
+		{
+			public float currentThreat { get; set; }
+			public float rangeMin { get; set; }
+			public float rangeMax { get; set; }
+			public string forecastLabel { get; set; }
+			public object[] samples { get; set; }
+		}
+
+		sealed class RaidWorkerTryExecuteProbe
+		{
+			public string caseName { get; set; }
+			public string mapId { get; set; }
+			public int incidentSize { get; set; }
+			public object spot { get; set; }
+			public bool useAlert { get; set; }
+			public bool ignoreLimit { get; set; }
+			public string zombieType { get; set; }
+			public string observedSpawnHowType { get; set; }
+			public bool forcedResult { get; set; }
+		}
+
+		sealed class ForecastTooltipPreviewWindow : Window
+		{
+			public const string StableTitle = "Zombieland Forecast Tooltip Preview";
+
+			readonly string forecastLabel;
+
+			public override Vector2 InitialSize => new(780f, 410f);
+
+			public ForecastTooltipPreviewWindow(string forecastLabel)
+			{
+				this.forecastLabel = forecastLabel;
+				doCloseButton = true;
+				doCloseX = true;
+				forcePause = false;
+				absorbInputAroundWindow = false;
+				preventCameraMotion = false;
+				closeOnClickedOutside = false;
+				draggable = true;
+				resizeable = false;
+			}
+
+			public override void DoWindowContents(Rect inRect)
+			{
+				Text.Font = GameFont.Small;
+				Text.Anchor = TextAnchor.UpperLeft;
+				GUI.color = Color.white;
+				Widgets.Label(new Rect(0f, 0f, inRect.width, 28f), StableTitle + ": " + forecastLabel);
+				var drawRect = new Rect(0f, 36f, Patches.GlobalControlsUtility_DoDate_Patch.ThreatForecastTooltipWidth, Patches.GlobalControlsUtility_DoDate_Patch.ThreatForecastTooltipHeight);
+				ZombieWeather.GenerateTooltipDrawer(drawRect)();
+				Text.Anchor = TextAnchor.UpperLeft;
+				GUI.color = Color.white;
+			}
+		}
+
+		static readonly List<RaidWorkerTryExecuteProbe> raidWorkerTryExecuteProbes = new();
+		static string activeRaidWorkerTryExecuteCase;
+
 		static bool MatchesRequestedZombieType(Zombie zombie, ZombieType type)
 		{
 			if (zombie == null)
@@ -36,6 +96,1396 @@ namespace ZombieLand
 					&& zombie.isDarkSlimer == false
 					&& zombie.isHealer == false,
 				_ => false,
+			};
+		}
+
+		[Tool("zombieland/incident_threat_state", Description = "Set up or read a reusable incident/threat fixture, and run scenario-level incident wave, spawn mix, infection, forecast, and spawn-mode checks.")]
+		public static object IncidentThreatState(
+			[ToolParameter(Description = "Create a reusable capable-colony incident fixture before reading state.", Required = false, DefaultValue = false)] bool setupFixture = false,
+			[ToolParameter(Description = "Optional action to run before readback: read, scheduledWave, spawnMatrix, threatForecast, forecastUi, spawnModes, raidWorker, zeroThreat, or all.", Required = false, DefaultValue = "read")] string actionMode = "read",
+			[ToolParameter(Description = "Ticks to advance before reading final state; clamped to 0..5000.", Required = false, DefaultValue = 0)] int advanceTicks = 0)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			object setup = null;
+			if (setupFixture)
+			{
+				if (TrySetupIncidentThreatFixture(map, out setup, out var setupError) == false)
+					return setupError;
+			}
+
+			var normalizedActionMode = (actionMode ?? "read").Trim().ToLowerInvariant();
+			if (TryRunIncidentThreatAction(map, normalizedActionMode, out var action, out var actionError) == false)
+			{
+				return new
+				{
+					success = false,
+					error = actionError,
+					actionMode
+				};
+			}
+			var actionSucceeded = normalizedActionMode == "read"
+				|| (bool)(action?.GetType().GetProperty("success")?.GetValue(action) ?? false);
+
+			var clampedAdvanceTicks = Mathf.Clamp(advanceTicks, 0, 5000);
+			if (clampedAdvanceTicks > 0)
+				AdvanceGameTicks(clampedAdvanceTicks);
+
+			var state = DescribeIncidentThreatState(map);
+			var tickManagerPresent = map.GetComponent<TickManager>() != null;
+			return new
+			{
+				success = (setupFixture == false || (bool)(setup?.GetType().GetProperty("success")?.GetValue(setup) ?? false))
+					&& actionSucceeded
+					&& tickManagerPresent,
+				setupFixture,
+				setup,
+				actionMode = normalizedActionMode,
+				actionSucceeded,
+				action,
+				advancedTicks = clampedAdvanceTicks,
+				state
+			};
+		}
+
+		static bool TryRunIncidentThreatAction(Map map, string actionMode, out object result, out string error)
+		{
+			result = null;
+			error = null;
+			switch (actionMode)
+			{
+				case "read":
+					return true;
+				case "scheduledwave":
+					result = RunScheduledIncidentWave(map);
+					return true;
+				case "spawnmatrix":
+					result = RunIncidentSpawnMatrix(map);
+					return true;
+				case "threatforecast":
+					result = RunThreatForecastContract(map);
+					return true;
+				case "forecastui":
+					result = RunThreatForecastUiContract(map, true);
+					return true;
+				case "spawnmodes":
+					result = RunSpawnModeContracts(map);
+					return true;
+				case "raidworker":
+					result = RunRaidWorkerContract(map);
+					return true;
+				case "zerothreat":
+					result = RunZeroThreatDeathContract(map);
+					return true;
+				case "all":
+					result = RunIncidentThreatAll(map);
+					return true;
+				default:
+					error = "actionMode must be one of: read, scheduledWave, spawnMatrix, threatForecast, forecastUi, spawnModes, raidWorker, zeroThreat, all.";
+					return false;
+			}
+		}
+
+		static bool TrySetupIncidentThreatFixture(Map map, out object setup, out object error)
+		{
+			setup = null;
+			error = null;
+			var destroyedZombies = ZombieRuntimeActions.DestroyZombies(map);
+			if (TryEnsureCapableIncidentColonists(map, 3, out var colonists, out error) == false)
+				return false;
+			var allOverMapSpawnField = PrepareAllOverMapIncidentSpawnField(map);
+			var allOverMapSpawnFieldSucceeded = (bool)(allOverMapSpawnField.GetType().GetProperty("success")?.GetValue(allOverMapSpawnField) ?? false);
+
+			var tickManager = map.GetComponent<TickManager>();
+			setup = new
+			{
+				success = tickManager != null && colonists.Length >= 3 && allOverMapSpawnFieldSucceeded,
+				destroyedZombies,
+				allOverMapSpawnField,
+				colonists = colonists.Select(DescribePawn).ToArray(),
+				incidentState = DescribeIncidentThreatState(map),
+				note = "Save this as ZL_Incident_Threat_base.rws before running action modes if a durable fixture is needed."
+			};
+			return true;
+		}
+
+		static object PrepareAllOverMapIncidentSpawnField(Map map)
+		{
+			var soil = TerrainDefOf.Soil ?? DefDatabase<TerrainDef>.GetNamed("Soil", false);
+			if (soil == null)
+			{
+				return new
+				{
+					success = false,
+					error = "TerrainDef Soil was not found."
+				};
+			}
+
+			var center = new IntVec3(map.Size.x / 2, 0, Mathf.Min(map.Size.z - 24, map.Size.z / 2 + 24));
+			var radius = Math.Max(Constants.SPAWN_INCIDENT_RADIUS + 6, 24);
+			var changed = 0;
+			var skippedEdifice = 0;
+			for (var x = center.x - radius; x <= center.x + radius; x++)
+			{
+				for (var z = center.z - radius; z <= center.z + radius; z++)
+				{
+					var cell = new IntVec3(x, 0, z);
+					if (cell.InBounds(map) == false)
+						continue;
+					if (cell.GetEdifice(map) != null)
+					{
+						skippedEdifice++;
+						continue;
+					}
+					if (map.terrainGrid.TerrainAt(cell) != soil)
+					{
+						map.terrainGrid.SetTerrain(cell, soil);
+						changed++;
+					}
+				}
+			}
+
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+			Tools.nextPlayerReachableRegionsUpdate = 0;
+			var diagnostics = DescribeSpawnCandidateDiagnostics(map, SpawnHowType.AllOverTheMap);
+			var validSpotCount = (int)(diagnostics.GetType().GetProperty("validSpotCount")?.GetValue(diagnostics) ?? 0);
+			return new
+			{
+				success = validSpotCount > 0,
+				center = ZombieRuntimeActions.DescribeCell(center),
+				radius,
+				changed,
+				skippedEdifice,
+				diagnostics
+			};
+		}
+
+		static bool TryEnsureCapableIncidentColonists(Map map, int minimumCapable, out Pawn[] colonists, out object error)
+		{
+			error = null;
+			var created = new List<Pawn>();
+			var existing = map.mapPawns.FreeHumanlikesSpawnedOfFaction(Faction.OfPlayer).ToList();
+			foreach (var pawn in existing)
+				PrepareIncidentColonist(pawn);
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			while (Tools.ColonistsInfo(map).Item1 < minimumCapable && created.Count < 8)
+			{
+				if (TryFindClearSpawnCell(map, root + new IntVec3(created.Count * 2, 0, 0), 32f, out var cell, out error) == false)
+				{
+					colonists = existing.Concat(created).ToArray();
+					return false;
+				}
+
+				var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+				PrepareIncidentColonist(pawn);
+				created.Add(pawn);
+			}
+
+			colonists = map.mapPawns.FreeHumanlikesSpawnedOfFaction(Faction.OfPlayer).ToArray();
+			if (Tools.ColonistsInfo(map).Item1 >= minimumCapable)
+				return true;
+
+			error = new
+			{
+				success = false,
+				error = "Could not prepare enough capable incident colonists.",
+				requestedCapable = minimumCapable,
+				colonists = colonists.Select(DescribePawn).ToArray(),
+				colonistInfo = DescribeColonistInfo(map)
+			};
+			return false;
+		}
+
+		static void PrepareIncidentColonist(Pawn pawn)
+		{
+			if (pawn == null)
+				return;
+
+			DisablePawnWork(pawn);
+			pawn.drafter.Drafted = false;
+			pawn.equipment?.DestroyAllEquipment(DestroyMode.Vanish);
+			var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
+				?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false);
+			if (weaponDef != null && pawn.equipment != null)
+			{
+				var weapon = ThingMaker.MakeThing(weaponDef) as ThingWithComps;
+				if (weapon != null)
+					pawn.equipment.AddEquipment(weapon);
+			}
+		}
+
+		static object RunIncidentThreatAll(Map map)
+		{
+			var spawnMatrix = RunIncidentSpawnMatrix(map);
+			var threatForecast = RunThreatForecastContract(map);
+			var forecastUi = RunThreatForecastUiContract(map, false);
+			var spawnModes = RunSpawnModeContracts(map);
+			var raidWorker = RunRaidWorkerContract(map);
+			var zeroThreat = RunZeroThreatDeathContract(map);
+			var scheduledWave = RunScheduledIncidentWave(map);
+			var spawnSuccess = (bool)(spawnMatrix?.GetType().GetProperty("success")?.GetValue(spawnMatrix) ?? false);
+			var forecastSuccess = (bool)(threatForecast?.GetType().GetProperty("success")?.GetValue(threatForecast) ?? false);
+			var forecastUiSuccess = (bool)(forecastUi?.GetType().GetProperty("success")?.GetValue(forecastUi) ?? false);
+			var spawnModesSuccess = (bool)(spawnModes?.GetType().GetProperty("success")?.GetValue(spawnModes) ?? false);
+			var raidWorkerSuccess = (bool)(raidWorker?.GetType().GetProperty("success")?.GetValue(raidWorker) ?? false);
+			var zeroThreatSuccess = (bool)(zeroThreat?.GetType().GetProperty("success")?.GetValue(zeroThreat) ?? false);
+			var scheduledSuccess = (bool)(scheduledWave?.GetType().GetProperty("success")?.GetValue(scheduledWave) ?? false);
+			return new
+			{
+				success = scheduledSuccess && spawnSuccess && forecastSuccess && forecastUiSuccess && spawnModesSuccess && raidWorkerSuccess && zeroThreatSuccess,
+				spawnMatrix,
+				threatForecast,
+				forecastUi,
+				spawnModes,
+				raidWorker,
+				zeroThreat,
+				scheduledWave
+			};
+		}
+
+		static object RunScheduledIncidentWave(Map map)
+		{
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland TickManager is attached to the current map."
+				};
+			}
+
+			if (TryEnsureCapableIncidentColonists(map, 3, out var colonists, out var colonistError) == false)
+				return colonistError;
+
+			var spawnEventProcess = typeof(ZombiesRising).GetMethod("SpawnEventProcess", BindingFlags.Static | BindingFlags.NonPublic);
+			var lastIncidentField = typeof(IncidentInfo).GetField("lastIncident", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (spawnEventProcess == null || lastIncidentField == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find SpawnEventProcess or IncidentInfo.lastIncident by reflection.",
+					spawnEventProcessFound = spawnEventProcess != null,
+					lastIncidentFieldFound = lastIncidentField != null
+				};
+			}
+
+			var settingsSnapshot = SnapshotZombieSettings();
+			var originalInfo = tickManager.incidentInfo;
+			var oldSpawnHowType = ZombieSettings.Values.spawnHowType;
+			var initialIds = CurrentZombies(map)
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			var beforeLetters = (Find.LetterStack?.LettersListForReading ?? new List<Letter>())
+				.ToHashSet();
+
+			try
+			{
+				ApplyZombieSettingsOverride(settings =>
+				{
+					settings.spawnWhenType = SpawnWhenType.AllTheTime;
+					settings.spawnHowType = SpawnHowType.FromTheEdges;
+					settings.useDynamicThreatLevel = false;
+					settings.daysBeforeZombiesCome = 0;
+					settings.maximumNumberOfZombies = 500;
+					settings.baseNumberOfZombiesinEvent = 4;
+					settings.colonyMultiplier = 1f;
+					settings.extraDaysBetweenEvents = 0;
+					settings.threatScale = Math.Max(settings.threatScale, 1f);
+				});
+
+				var info = new IncidentInfo
+				{
+					parameters = new IncidentParameters
+					{
+						daysStretched = -10f,
+						scaleFactor = 1f
+					}
+				};
+				lastIncidentField.SetValue(info, -GenDate.TicksPerDay * 100);
+				tickManager.incidentInfo = info;
+
+				Rand.PushState(8101);
+				var scheduled = false;
+				try
+				{
+					scheduled = ZombiesRising.ZombiesForNewIncident(tickManager);
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				var parameters = tickManager.incidentInfo.parameters;
+				var scheduledLastIncident = (int)lastIncidentField.GetValue(tickManager.incidentInfo);
+				var cellValidator = Tools.ZombieSpawnLocator(map, true);
+				var spot = ZombiesRising.GetValidSpot(map, IntVec3.Invalid, cellValidator);
+				var iterator = scheduled && spot.IsValid
+					? spawnEventProcess.Invoke(null, new object[] { map, parameters.incidentSize, spot, cellValidator, true, false, ZombieType.Random }) as System.Collections.IEnumerator
+					: null;
+				var steps = 0;
+				if (iterator != null)
+				{
+					while (steps < 8192 && iterator.MoveNext())
+						steps++;
+				}
+
+				var newZombies = CurrentZombies(map)
+					.OfType<Zombie>()
+					.Where(zombie => initialIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+					.ToArray();
+				var newLetters = (Find.LetterStack?.LettersListForReading ?? new List<Letter>())
+					.Where(letter => beforeLetters.Contains(letter) == false)
+					.ToArray();
+				var expectedLabel = "LetterLabelZombiesRising".Translate().ToString();
+				var matchingThreatLetters = newLetters
+					.Where(letter => letter?.def == LetterDefOf.ThreatSmall && letter.Label == expectedLabel)
+					.ToArray();
+				var maxAfter = tickManager.GetMaxZombieCount();
+				var canHaveMoreAfter = tickManager.CanHaveMoreZombies();
+
+				return new
+				{
+					success = scheduled
+						&& parameters.skipReason == "-"
+						&& parameters.incidentSize > 0
+						&& spot.IsValid
+						&& iterator != null
+						&& steps < 8192
+						&& newZombies.Length > 0
+						&& newZombies.Length <= parameters.incidentSize
+						&& tickManager.ZombieCount() <= maxAfter
+						&& matchingThreatLetters.Length == 1,
+					sourcePath = "ZombiesRising.ZombiesForNewIncident scheduler result executed through the same SpawnEventProcess wave path",
+					scheduled,
+					spot = spot.IsValid ? ZombieRuntimeActions.DescribeCell(spot) : null,
+					steps,
+					parameters = DescribeIncidentParameters(parameters),
+					scheduledLastIncident,
+					currentTicks = GenTicks.TicksAbs,
+					colonists = colonists.Select(DescribePawn).ToArray(),
+					newZombieCount = newZombies.Length,
+					zombieCountAfter = tickManager.ZombieCount(),
+					maxZombieCountAfter = maxAfter,
+					canHaveMoreAfter,
+					zombies = newZombies.Select(DescribeZombie).ToArray(),
+					letters = newLetters.Select(DescribeLetter).ToArray(),
+					matchingThreatLetterCount = matchingThreatLetters.Length
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.spawnHowType = oldSpawnHowType;
+				RestoreZombieSettings(settingsSnapshot);
+				tickManager.incidentInfo = originalInfo;
+			}
+		}
+
+		static object RunIncidentSpawnMatrix(Map map)
+		{
+			var alertWave = IncidentAlertWaveContract();
+			var specialTypes = IncidentSpecialTypeSpawnContract();
+			var infectedHooks = InfectedIncidentHooksContract();
+			var zombieFaction = ZombieFactionPawnGenerationContract();
+			var alertSuccess = (bool)(alertWave?.GetType().GetProperty("success")?.GetValue(alertWave) ?? false);
+			var specialSuccess = (bool)(specialTypes?.GetType().GetProperty("success")?.GetValue(specialTypes) ?? false);
+			var infectedSuccess = (bool)(infectedHooks?.GetType().GetProperty("success")?.GetValue(infectedHooks) ?? false);
+			var factionSuccess = (bool)(zombieFaction?.GetType().GetProperty("success")?.GetValue(zombieFaction) ?? false);
+			return new
+			{
+				success = alertSuccess && specialSuccess && infectedSuccess && factionSuccess,
+				alertWave,
+				specialTypes,
+				infectedHooks,
+				zombieFaction
+			};
+		}
+
+		static object RunThreatForecastContract(Map map)
+		{
+			var weather = map.GetComponent<ZombieWeather>();
+			if (weather == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No ZombieWeather component is attached to the current map."
+				};
+			}
+
+			var settingsSnapshot = SnapshotZombieSettings();
+			try
+			{
+				ApplyZombieSettingsOverride(settings =>
+				{
+					settings.useDynamicThreatLevel = true;
+					settings.daysBeforeZombiesCome = 0;
+					settings.threatScale = Math.Max(settings.threatScale, 1f);
+					settings.zombiesDieOnZeroThreat = true;
+				});
+
+				var dynamic = DescribeThreatForecast(map);
+				ApplyZombieSettingsOverride(settings => settings.useDynamicThreatLevel = false);
+				var disabledThreat = ZombieWeather.GetThreatLevel(map);
+				var disabled = DescribeThreatForecast(map);
+				return new
+				{
+					success = dynamic.currentThreat >= 0f
+						&& dynamic.currentThreat <= 1f
+						&& dynamic.rangeMin >= 0f
+						&& dynamic.rangeMax <= 1f
+						&& dynamic.forecastLabel.Contains("ThreatLevel".Translate().ToString())
+						&& disabledThreat == 1f,
+					dynamic,
+					disabled,
+					disabledThreat,
+					zombiesDieOnZeroThreat = ZombieSettings.Values.zombiesDieOnZeroThreat,
+					sourcePath = "GlobalControlsUtility.DoDate forecast label uses ZombieWeather.GetFactorRangeFor; tooltip drawer uses ZombieWeather.GenerateTooltipDrawer"
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+			}
+		}
+
+		static object RunThreatForecastUiContract(Map map, bool openPreviewWindow)
+		{
+			var weather = map.GetComponent<ZombieWeather>();
+			var tickManager = map.GetComponent<TickManager>();
+			if (weather == null || tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No ZombieWeather or Zombieland TickManager component is attached to the current map.",
+					weatherPresent = weather != null,
+					tickManagerPresent = tickManager != null
+				};
+			}
+
+			var settingsSnapshot = SnapshotZombieSettings();
+			var initialIds = CurrentZombies(map)
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			Zombie spawnedZombie = null;
+			try
+			{
+				ApplyZombieSettingsOverride(settings =>
+				{
+					settings.showZombieStats = true;
+					settings.useDynamicThreatLevel = true;
+					settings.daysBeforeZombiesCome = 0;
+					settings.threatScale = Math.Max(settings.threatScale, 1f);
+				});
+
+				if (TryFindClearSpawnCell(map, new IntVec3(map.Size.x / 2, 0, map.Size.z / 2), 24f, out var zombieCell, out var zombieCellError) == false)
+					return zombieCellError;
+
+				spawnedZombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true) as Zombie;
+				var zombieCount = tickManager.ZombieCount();
+				var zombieCountString = zombieCount + " Zombies";
+				var (rangeMin, rangeMax) = weather.GetFactorRangeFor();
+				var forecastLabel = Patches.GlobalControlsUtility_DoDate_Patch.FormatThreatForecast(rangeMin, rangeMax);
+
+				var width = 220f;
+				var leftX = Math.Max(0f, UI.screenWidth - width - 10f);
+				var curBaseY = Math.Max(420f, UI.screenHeight - 10f);
+				var dateRect = new Rect(leftX, curBaseY - DateReadout.Height, width, DateReadout.Height);
+				var afterDateBaseY = curBaseY - dateRect.height;
+				var zombieCountRect = Patches.GlobalControlsUtility_DoDate_Patch.GetRightAlignedReadoutRect(leftX, width, afterDateBaseY, zombieCountString);
+				var afterZombieCountBaseY = afterDateBaseY - zombieCountRect.height;
+				var forecastRect = Patches.GlobalControlsUtility_DoDate_Patch.GetRightAlignedReadoutRect(leftX, width, afterZombieCountBaseY, forecastLabel);
+				var tooltipRect = Patches.GlobalControlsUtility_DoDate_Patch.GetThreatForecastTooltipRect(forecastRect);
+				var readoutsDoNotOverlap = dateRect.Overlaps(zombieCountRect) == false
+					&& dateRect.Overlaps(forecastRect) == false
+					&& zombieCountRect.Overlaps(forecastRect) == false;
+				var readoutsOnScreen = RectWithinScreen(dateRect)
+					&& RectWithinScreen(zombieCountRect)
+					&& RectWithinScreen(forecastRect);
+				var tooltipOnScreen = RectWithinScreen(tooltipRect);
+				var tooltipDrawerAvailable = ZombieWeather.GenerateTooltipDrawer(tooltipRect.AtZero()) != null;
+
+				var previewWindowOpened = false;
+				if (openPreviewWindow && Find.WindowStack != null)
+				{
+					_ = Find.WindowStack.TryRemove(typeof(ForecastTooltipPreviewWindow), false);
+					Find.WindowStack.Add(new ForecastTooltipPreviewWindow(forecastLabel));
+					previewWindowOpened = Find.WindowStack.IsOpen(typeof(ForecastTooltipPreviewWindow));
+				}
+
+				return new
+				{
+					success = spawnedZombie != null
+						&& zombieCount > 0
+						&& forecastLabel.Contains("ThreatLevel".Translate().ToString())
+						&& readoutsDoNotOverlap
+						&& readoutsOnScreen
+						&& tooltipOnScreen
+						&& tooltipDrawerAvailable
+						&& (openPreviewWindow == false || previewWindowOpened),
+					sourcePath = "GlobalControlsUtility.DoDate postfix geometry + ZombieWeather.GenerateTooltipDrawer preview window",
+					openPreviewWindow,
+					previewWindowOpened,
+					previewWindowTitle = ForecastTooltipPreviewWindow.StableTitle,
+					screen = new
+					{
+						width = UI.screenWidth,
+						height = UI.screenHeight
+					},
+					settings = new
+					{
+						ZombieSettings.Values.showZombieStats,
+						ZombieSettings.Values.useDynamicThreatLevel
+					},
+					zombieCount,
+					zombieCountString,
+					spawnedZombie = DescribeZombie(spawnedZombie),
+					forecast = new
+					{
+						rangeMin,
+						rangeMax,
+						forecastLabel,
+						threatLabel = "ThreatLevel".Translate().ToString()
+					},
+					geometry = new
+					{
+						leftX,
+						width,
+						curBaseY,
+						dateRect = DescribeRect(dateRect),
+						zombieCountRect = DescribeRect(zombieCountRect),
+						forecastRect = DescribeRect(forecastRect),
+						tooltipRect = DescribeRect(tooltipRect),
+						readoutsDoNotOverlap,
+						readoutsOnScreen,
+						tooltipOnScreen
+					},
+					tooltip = new
+					{
+						drawerAvailable = tooltipDrawerAvailable,
+						windowId = Patches.GlobalControlsUtility_DoDate_Patch.ThreatForecastTooltipWindowId,
+						width = Patches.GlobalControlsUtility_DoDate_Patch.ThreatForecastTooltipWidth,
+						height = Patches.GlobalControlsUtility_DoDate_Patch.ThreatForecastTooltipHeight,
+						expectedLabels = new[]
+						{
+							"ThreatForecast".Translate().ToString(),
+							"Next14Days".Translate().ToString(),
+							"Next4Quadrums".Translate().ToString()
+						}
+					}
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+				if (spawnedZombie != null)
+				{
+					_ = tickManager.allZombiesCached?.Remove(spawnedZombie);
+					_ = tickManager.hummingZombies?.Remove(spawnedZombie);
+					_ = tickManager.tankZombies?.Remove(spawnedZombie);
+				}
+				foreach (var zombie in CurrentZombies(map).Where(zombie => initialIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false).ToArray())
+				{
+					_ = tickManager.allZombiesCached?.Remove(zombie as Zombie);
+					if (zombie.Destroyed == false)
+						zombie.Destroy(DestroyMode.Vanish);
+				}
+			}
+		}
+
+		static object RunSpawnModeContracts(Map map)
+		{
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland TickManager is attached to the current map."
+				};
+			}
+
+			if (TryEnsureCapableIncidentColonists(map, 3, out _, out var colonistError) == false)
+				return colonistError;
+
+			var settingsSnapshot = SnapshotZombieSettings();
+			var oldMapSpawnedTicks = tickManager.mapSpawnedTicks;
+			var initialThingIds = map.listerThings.AllThings
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			var destroyedBefore = ZombieRuntimeActions.DestroyZombies(map);
+			try
+			{
+				var allOverMapSpawnField = PrepareAllOverMapIncidentSpawnField(map);
+				var darkSpawnField = PrepareDarkIncidentSpawnField(map);
+				var allTimeAllOver = RunAmbientSpawnCase(
+					map,
+					tickManager,
+					"all_time_all_over_soft_ground",
+					SpawnWhenType.AllTheTime,
+					SpawnHowType.AllOverTheMap,
+					zombie => zombie != null
+						&& zombie.Position.InBounds(map)
+						&& map.terrainGrid.TerrainAt(zombie.Position) == TerrainDefOf.Soil
+						&& map.terrainGrid.CanRemoveTopLayerAt(zombie.Position) == false,
+					"Ambient all-over spawning must use valid non-floor soft ground.");
+				var allTimeEdges = RunAmbientSpawnCase(
+					map,
+					tickManager,
+					"all_time_from_edges",
+					SpawnWhenType.AllTheTime,
+					SpawnHowType.FromTheEdges,
+					zombie => zombie != null
+						&& (zombie.Position.x == 0
+							|| zombie.Position.z == 0
+							|| zombie.Position.x == map.Size.x - 1
+							|| zombie.Position.z == map.Size.z - 1
+							|| (zombie.Position.GetRoom(map)?.TouchesMapEdge ?? false)),
+					"Ambient edge spawning must use an edge-reachable region.");
+				var whenDark = RunAmbientSpawnCase(
+					map,
+					tickManager,
+					"when_dark_all_over",
+					SpawnWhenType.WhenDark,
+					SpawnHowType.AllOverTheMap,
+					zombie => zombie != null && map.IsDark(zombie.Position),
+					"Dark-only spawning must use a cell with PsychGlow.Dark.");
+				var eventOnly = RunAmbientSpawnCase(
+					map,
+					tickManager,
+					"in_events_only_blocks_ambient",
+					SpawnWhenType.InEventsOnly,
+					SpawnHowType.AllOverTheMap,
+					zombie => zombie == null,
+					"Event-only spawning must block ambient population growth.",
+					expectSpawn: false);
+
+				var fogDoor = FoggedDoorSpawnsRoomZombies();
+				var fogRemoval = FogBlockerRemovalSpawnsRoomZombies();
+				var fogReplacement = FogBlockerReplacementDoesNotSpawnRoomZombies();
+				var ambientCases = new[] { allTimeAllOver, allTimeEdges, whenDark, eventOnly };
+				var fogCases = new[] { fogDoor, fogRemoval, fogReplacement };
+				return new
+				{
+					success = ObjectSuccess(allOverMapSpawnField)
+						&& ObjectSuccess(darkSpawnField)
+						&& ambientCases.All(ObjectSuccess)
+						&& fogCases.All(ObjectSuccess),
+					sourcePath = "TickManager.IncreaseZombiePopulation + Tools.ZombieSpawnLocator + fog-room spawn hooks",
+					destroyedBefore,
+					fixtures = new
+					{
+						allOverMapSpawnField,
+						darkSpawnField
+					},
+					ambientCases,
+					fogCases
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+				tickManager.mapSpawnedTicks = oldMapSpawnedTicks;
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+				CleanupThingsCreatedAfter(map, initialThingIds);
+			}
+		}
+
+		static int CleanupThingsCreatedAfter(Map map, HashSet<string> initialThingIds)
+		{
+			var destroyed = 0;
+			foreach (var thing in map.listerThings.AllThings.ToArray())
+			{
+				if (thing == null || thing.Destroyed)
+					continue;
+				var id = ZombieRuntimeActions.StableThingId(thing);
+				if (initialThingIds.Contains(id))
+					continue;
+				thing.Destroy(DestroyMode.Vanish);
+				destroyed++;
+			}
+			if (destroyed > 0)
+			{
+				map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+				Tools.nextPlayerReachableRegionsUpdate = 0;
+			}
+			return destroyed;
+		}
+
+		static object RunRaidWorkerContract(Map map)
+		{
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var zombieFaction = Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies);
+			var worker = IncidentDefOf.RaidEnemy?.Worker as IncidentWorker_Raid;
+			var raidWorkerMethod = typeof(IncidentWorker_Raid).GetMethod("TryExecuteWorker", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+			var tryExecuteMethod = typeof(ZombiesRising).GetMethod(nameof(ZombiesRising.TryExecute), BindingFlags.Static | BindingFlags.Public);
+			var probePrefix = typeof(ZombielandBridgeTools).GetMethod(nameof(RaidWorkerTryExecutePrefix), BindingFlags.Static | BindingFlags.NonPublic);
+			if (zombieFaction == null || worker == null || raidWorkerMethod == null || tryExecuteMethod == null || probePrefix == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not resolve zombie faction, raid worker, raid worker method, or TryExecute probe method.",
+					zombieFactionFound = zombieFaction != null,
+					workerType = worker?.GetType().FullName,
+					raidWorkerMethodFound = raidWorkerMethod != null,
+					tryExecuteMethodFound = tryExecuteMethod != null,
+					probePrefixFound = probePrefix != null
+				};
+			}
+
+			var patchInfo = Harmony.GetPatchInfo(raidWorkerMethod);
+			var prefixOwners = patchInfo?.Prefixes?.Select(patch => patch.owner).ToArray() ?? Array.Empty<string>();
+			var zPatch = prefixOwners.Contains("net.pardeike.zombieland");
+			if (zPatch == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Zombieland raid worker prefix is not installed on IncidentWorker_Raid.TryExecuteWorker.",
+					prefixOwners
+				};
+			}
+
+			var settingsSnapshot = SnapshotZombieSettings();
+			var initialThingIds = map.listerThings.AllThings
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			var beforeLetters = (Find.LetterStack?.LettersListForReading ?? new List<Letter>())
+				.ToHashSet();
+			var harmony = new Harmony("net.pardeike.zombieland.bridge.raidworker.probe");
+			raidWorkerTryExecuteProbes.Clear();
+			activeRaidWorkerTryExecuteCase = null;
+			try
+			{
+				var allOverMapSpawnField = PrepareAllOverMapIncidentSpawnField(map);
+				harmony.Patch(tryExecuteMethod, prefix: new HarmonyMethod(probePrefix) { priority = Priority.First });
+
+				var edgeWalkIn = RunRaidWorkerCase(
+					worker,
+					raidWorkerMethod,
+					map,
+					zombieFaction,
+					"edge_walk_in",
+					PawnsArrivalModeDefOf.EdgeWalkIn,
+					SpawnHowType.AllOverTheMap,
+					SpawnHowType.FromTheEdges,
+					83101);
+				var centerDrop = RunRaidWorkerCase(
+					worker,
+					raidWorkerMethod,
+					map,
+					zombieFaction,
+					"center_drop",
+					PawnsArrivalModeDefOf.CenterDrop,
+					SpawnHowType.FromTheEdges,
+					SpawnHowType.AllOverTheMap,
+					83102);
+
+				var newZombies = CurrentZombies(map)
+					.Where(zombie => initialThingIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+					.ToArray();
+				var newLetters = (Find.LetterStack?.LettersListForReading ?? new List<Letter>())
+					.Where(letter => beforeLetters.Contains(letter) == false)
+					.ToArray();
+				return new
+				{
+					success = ObjectSuccess(allOverMapSpawnField)
+						&& ObjectSuccess(edgeWalkIn)
+						&& ObjectSuccess(centerDrop)
+						&& newZombies.Length == 0
+						&& newLetters.Length == 0,
+					sourcePath = "IncidentWorker_Raid.TryExecuteWorker prefix -> ZombiesRising.TryExecute, with temporary bridge probe preventing coroutine side effects",
+					prefixOwners,
+					fixtures = new
+					{
+						allOverMapSpawnField
+					},
+					cases = new[] { edgeWalkIn, centerDrop },
+					newZombieCount = newZombies.Length,
+					newLetterCount = newLetters.Length
+				};
+			}
+			finally
+			{
+				harmony.Unpatch(tryExecuteMethod, HarmonyPatchType.Prefix, harmony.Id);
+				activeRaidWorkerTryExecuteCase = null;
+				raidWorkerTryExecuteProbes.Clear();
+				RestoreZombieSettings(settingsSnapshot);
+				CleanupThingsCreatedAfter(map, initialThingIds);
+			}
+		}
+
+		static object RunRaidWorkerCase(
+			IncidentWorker_Raid worker,
+			MethodInfo raidWorkerMethod,
+			Map map,
+			Faction zombieFaction,
+			string caseName,
+			PawnsArrivalModeDef arrivalMode,
+			SpawnHowType sentinelMode,
+			SpawnHowType expectedObservedMode,
+			int seed)
+		{
+			var spawnCenter = IntVec3.Invalid;
+			var parms = new IncidentParms
+			{
+				target = map,
+				faction = zombieFaction,
+				points = 8f,
+				raidArrivalMode = arrivalMode,
+				raidStrategy = RaidStrategyDefOf.ImmediateAttack,
+				spawnCenter = spawnCenter
+			};
+			var beforeProbeCount = raidWorkerTryExecuteProbes.Count;
+			var beforeMode = sentinelMode;
+			ZombieSettings.Values.spawnHowType = beforeMode;
+			activeRaidWorkerTryExecuteCase = caseName;
+			object rawResult = null;
+			Exception invocationException = null;
+			Rand.PushState(seed);
+			try
+			{
+				rawResult = raidWorkerMethod.Invoke(worker, new object[] { parms });
+			}
+			catch (TargetInvocationException ex)
+			{
+				invocationException = ex.InnerException ?? ex;
+			}
+			catch (Exception ex)
+			{
+				invocationException = ex;
+			}
+			finally
+			{
+				Rand.PopState();
+				activeRaidWorkerTryExecuteCase = null;
+			}
+
+			var afterMode = ZombieSettings.Values.spawnHowType;
+			var probes = raidWorkerTryExecuteProbes
+				.Skip(beforeProbeCount)
+				.ToArray();
+			var probe = probes.SingleOrDefault();
+			return new
+			{
+				success = invocationException == null
+					&& rawResult is bool result
+					&& result == false
+					&& probes.Length == 1
+					&& probe.observedSpawnHowType == expectedObservedMode.ToString()
+					&& probe.incidentSize == Mathf.FloorToInt(parms.points)
+					&& probe.useAlert == false
+					&& probe.ignoreLimit == false
+					&& afterMode == beforeMode,
+				caseName,
+				arrivalMode = arrivalMode?.defName,
+				arrivalWalkIn = arrivalMode?.walkIn,
+				points = parms.points,
+				vanillaTryExecuteWorkerResult = rawResult,
+				expectedResult = false,
+				beforeSpawnHowType = beforeMode.ToString(),
+				afterSpawnHowType = afterMode.ToString(),
+				expectedObservedSpawnHowType = expectedObservedMode.ToString(),
+				probeCount = probes.Length,
+				probe,
+				exception = invocationException?.ToString()
+			};
+		}
+
+		static bool RaidWorkerTryExecutePrefix(
+			Map map,
+			int incidentSize,
+			IntVec3 spot,
+			bool useAlert,
+			bool ignoreLimit,
+			ZombieType zombieType,
+			ref bool __result)
+		{
+			__result = true;
+			raidWorkerTryExecuteProbes.Add(new RaidWorkerTryExecuteProbe
+			{
+				caseName = activeRaidWorkerTryExecuteCase,
+				mapId = map?.uniqueID.ToString(),
+				incidentSize = incidentSize,
+				spot = spot.IsValid ? ZombieRuntimeActions.DescribeCell(spot) : null,
+				useAlert = useAlert,
+				ignoreLimit = ignoreLimit,
+				zombieType = zombieType.ToString(),
+				observedSpawnHowType = ZombieSettings.Values.spawnHowType.ToString(),
+				forcedResult = __result
+			});
+			return false;
+		}
+
+		static object RunAmbientSpawnCase(
+			Map map,
+			TickManager tickManager,
+			string name,
+			SpawnWhenType spawnWhenType,
+			SpawnHowType spawnHowType,
+			Func<Zombie, bool> spawnedZombieValidator,
+			string expectation,
+			bool expectSpawn = true)
+		{
+			_ = ZombieRuntimeActions.DestroyZombies(map);
+			var beforeIds = CurrentZombies(map)
+				.Select(ZombieRuntimeActions.StableThingId)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			ApplyZombieSettingsOverride(settings =>
+			{
+				settings.spawnWhenType = spawnWhenType;
+				settings.spawnHowType = spawnHowType;
+				settings.useDynamicThreatLevel = false;
+				settings.daysBeforeZombiesCome = 0;
+				settings.maximumNumberOfZombies = 500;
+				settings.colonyMultiplier = 1f;
+			});
+			tickManager.mapSpawnedTicks = 0;
+			SetPopulationSpawnCounter(tickManager, -1);
+
+			Rand.PushState(50101 + name.GetHashCode());
+			try
+			{
+				tickManager.IncreaseZombiePopulation();
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			var newZombies = CurrentZombies(map)
+				.OfType<Zombie>()
+				.Where(zombie => beforeIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+				.ToArray();
+			var spawnedZombie = newZombies.FirstOrDefault();
+			var validatorMatched = spawnedZombieValidator(spawnedZombie);
+			return new
+			{
+				name,
+				success = expectSpawn
+					? newZombies.Length == 1 && validatorMatched
+					: newZombies.Length == 0 && validatorMatched,
+				expectation,
+				expectSpawn,
+				spawnWhenType = spawnWhenType.ToString(),
+				spawnHowType = spawnHowType.ToString(),
+				spawnedCount = newZombies.Length,
+				spawned = DescribeZombie(spawnedZombie),
+				spawnCell = spawnedZombie == null ? null : DescribeSpawnCandidateCell(map, spawnedZombie.Position),
+				validatorMatched
+			};
+		}
+
+		static object PrepareDarkIncidentSpawnField(Map map)
+		{
+			var soil = TerrainDefOf.Soil ?? DefDatabase<TerrainDef>.GetNamed("Soil", false);
+			if (soil == null)
+			{
+				return new
+				{
+					success = false,
+					error = "TerrainDef Soil was not found."
+				};
+			}
+
+			var center = new IntVec3(map.Size.x / 2, 0, Mathf.Min(map.Size.z - 16, map.Size.z / 2 + 36));
+			var radius = 10;
+			var changedTerrain = 0;
+			var changedRoof = 0;
+			for (var x = center.x - radius; x <= center.x + radius; x++)
+			{
+				for (var z = center.z - radius; z <= center.z + radius; z++)
+				{
+					var cell = new IntVec3(x, 0, z);
+					if (cell.InBounds(map) == false || cell.GetEdifice(map) != null)
+						continue;
+					if (map.terrainGrid.TerrainAt(cell) != soil)
+					{
+						map.terrainGrid.SetTerrain(cell, soil);
+						changedTerrain++;
+					}
+					if (map.roofGrid.RoofAt(cell) != RoofDefOf.RoofConstructed)
+					{
+						map.roofGrid.SetRoof(cell, RoofDefOf.RoofConstructed);
+						changedRoof++;
+					}
+				}
+			}
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+			Tools.nextPlayerReachableRegionsUpdate = 0;
+
+			var oldSpawnWhenType = ZombieSettings.Values.spawnWhenType;
+			var oldSpawnHowType = ZombieSettings.Values.spawnHowType;
+			try
+			{
+				ZombieSettings.Values.spawnWhenType = SpawnWhenType.WhenDark;
+				ZombieSettings.Values.spawnHowType = SpawnHowType.AllOverTheMap;
+				var cellValidator = Tools.ZombieSpawnLocator(map);
+				var reachableCells = Tools.PlayerReachableRegions(map)
+					.SelectMany(region => region.Cells)
+					.Distinct()
+					.ToList();
+				var darkValidCells = reachableCells
+					.Where(cell => cellValidator(cell))
+					.ToArray();
+				return new
+				{
+					success = darkValidCells.Length > 0,
+					center = ZombieRuntimeActions.DescribeCell(center),
+					radius,
+					changedTerrain,
+					changedRoof,
+					darkValidCellCount = darkValidCells.Length,
+					sampleDarkCells = darkValidCells.Take(8).Select(cell => DescribeSpawnCandidateCell(map, cell)).ToArray()
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.spawnWhenType = oldSpawnWhenType;
+				ZombieSettings.Values.spawnHowType = oldSpawnHowType;
+			}
+		}
+
+		static object RunZeroThreatDeathContract(Map map)
+		{
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No Zombieland TickManager is attached to the current map."
+				};
+			}
+
+			var settingsSnapshot = SnapshotZombieSettings();
+			var spawnedZombies = new List<Zombie>();
+			try
+			{
+				ApplyZombieSettingsOverride(settings =>
+				{
+					settings.useDynamicThreatLevel = true;
+					settings.daysBeforeZombiesCome = Mathf.CeilToInt(GenDate.DaysPassedFloat) + 10;
+					settings.zombiesDieOnZeroThreat = true;
+				});
+				var threatLevel = ZombieWeather.GetThreatLevel(map);
+				var enabled = RunZeroThreatZombieTickSample(map, 88031, true, threatLevel, spawnedZombies);
+
+				ApplyZombieSettingsOverride(settings => settings.zombiesDieOnZeroThreat = false);
+				var disabled = RunZeroThreatZombieTickSample(map, 88031, false, threatLevel, spawnedZombies);
+
+				return new
+				{
+					success = threatLevel <= 0.002f
+						&& ObjectSuccess(enabled)
+						&& ObjectSuccess(disabled),
+					sourcePath = "Zombie.CustomTick zero-threat damage branch",
+					threatLevel,
+					enabled,
+					disabled
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+				foreach (var zombie in spawnedZombies.Distinct())
+				{
+					_ = tickManager.allZombiesCached?.Remove(zombie);
+					if (zombie.Corpse != null && zombie.Corpse.Destroyed == false)
+						zombie.Corpse.Destroy(DestroyMode.Vanish);
+					if (zombie.Destroyed == false)
+						zombie.Destroy(DestroyMode.Vanish);
+				}
+			}
+		}
+
+		static object RunZeroThreatZombieTickSample(Map map, int seed, bool expectDamage, float threatLevel, List<Zombie> spawnedZombies)
+		{
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root + new IntVec3(expectDamage ? -8 : 8, 0, 0), 24f, out var cell, out var cellError) == false)
+				return cellError;
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+			if (zombie != null)
+				spawnedZombies.Add(zombie);
+			var injuryBefore = TotalInjurySeverity(zombie);
+			var deadAtTick = -1;
+			var injuryAfter = injuryBefore;
+			Rand.PushState(seed);
+			try
+			{
+				for (var tick = 0; tick < 60000; tick++)
+				{
+					zombie.CustomTick(threatLevel);
+					injuryAfter = TotalInjurySeverity(zombie);
+					if (zombie.Dead)
+					{
+						deadAtTick = tick;
+						break;
+					}
+				}
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			var damaged = injuryAfter > injuryBefore + 0.001f;
+			return new
+			{
+				success = expectDamage
+					? damaged
+					: damaged == false && zombie.Dead == false,
+				expectDamage,
+				cell = ZombieRuntimeActions.DescribeCell(cell),
+				injuryBefore,
+				injuryAfter,
+				damageDelta = injuryAfter - injuryBefore,
+				dead = zombie.Dead,
+				deadAtTick,
+				zombie = DescribeZombie(zombie)
+			};
+		}
+
+		static bool ObjectSuccess(object result)
+		{
+			return result?.GetType().GetProperty("success")?.GetValue(result) is true;
+		}
+
+		static bool RectWithinScreen(Rect rect)
+		{
+			return rect.width > 0f
+				&& rect.height > 0f
+				&& rect.xMin >= 0f
+				&& rect.yMin >= 0f
+				&& rect.xMax <= UI.screenWidth
+				&& rect.yMax <= UI.screenHeight;
+		}
+
+		static object DescribeRect(Rect rect)
+		{
+			return new
+			{
+				x = rect.x,
+				y = rect.y,
+				width = rect.width,
+				height = rect.height,
+				xMin = rect.xMin,
+				xMax = rect.xMax,
+				yMin = rect.yMin,
+				yMax = rect.yMax
+			};
+		}
+
+		static void SetPopulationSpawnCounter(TickManager tickManager, int value)
+		{
+			var field = typeof(TickManager).GetField("populationSpawnCounter", BindingFlags.Instance | BindingFlags.NonPublic);
+			field?.SetValue(tickManager, value);
+		}
+
+		static ThreatForecastSnapshot DescribeThreatForecast(Map map)
+		{
+			var weather = map.GetComponent<ZombieWeather>();
+			var currentThreat = ZombieWeather.GetThreatLevel(map);
+			var (rangeMin, rangeMax) = weather.GetFactorRangeFor();
+			return new ThreatForecastSnapshot
+			{
+				currentThreat = currentThreat,
+				rangeMin = rangeMin,
+				rangeMax = rangeMax,
+				forecastLabel = FormatThreatForecast(rangeMin, rangeMax),
+				samples = Enumerable.Range(0, 9)
+					.Select(index =>
+					{
+						var ticks = GenTicks.TicksAbs + index * GenDate.TicksPerDay / 2;
+						return new
+						{
+							offsetTicks = ticks - GenTicks.TicksAbs,
+							threat = weather.GetFactorForTicks(ticks)
+						};
+					})
+					.ToArray()
+			};
+		}
+
+		static string FormatThreatForecast(float min, float max)
+		{
+			var n1 = Mathf.FloorToInt(min * 100);
+			var n2 = Mathf.FloorToInt(max * 100);
+			if (n1 == n2)
+				return string.Format("{0:D0}%", n1) + " " + "ThreatLevel".Translate();
+			return string.Format("{0:D0}-{1:D0}%", n1, n2) + " " + "ThreatLevel".Translate();
+		}
+
+		static object DescribeIncidentThreatState(Map map)
+		{
+			var tickManager = map.GetComponent<TickManager>();
+			var lastIncidentField = typeof(IncidentInfo).GetField("lastIncident", BindingFlags.Instance | BindingFlags.NonPublic);
+			var lastIncident = tickManager?.incidentInfo == null || lastIncidentField == null
+				? (int?)null
+				: (int)lastIncidentField.GetValue(tickManager.incidentInfo);
+			var weather = map.GetComponent<ZombieWeather>();
+			return new
+			{
+				tickManagerPresent = tickManager != null,
+				ticksGame = Find.TickManager.TicksGame,
+				ticksAbs = GenTicks.TicksAbs,
+				settings = new
+				{
+					ZombieSettings.Values.spawnWhenType,
+					ZombieSettings.Values.spawnHowType,
+					ZombieSettings.Values.useDynamicThreatLevel,
+					ZombieSettings.Values.zombiesDieOnZeroThreat,
+					ZombieSettings.Values.daysBeforeZombiesCome,
+					ZombieSettings.Values.maximumNumberOfZombies,
+					ZombieSettings.Values.baseNumberOfZombiesinEvent,
+					ZombieSettings.Values.colonyMultiplier,
+					ZombieSettings.Values.threatScale
+				},
+				colonists = DescribeColonistInfo(map),
+				zombies = new
+				{
+					count = tickManager?.ZombieCount() ?? -1,
+					liveCount = tickManager?.LiveZombieCount() ?? -1,
+					maxCount = tickManager?.GetMaxZombieCount() ?? -1,
+					canHaveMore = tickManager?.CanHaveMoreZombies() ?? false,
+					spawning = ZombieGenerator.ZombiesSpawning
+				},
+				incident = new
+				{
+					lastIncident,
+					parameters = tickManager?.incidentInfo?.parameters == null
+						? null
+						: DescribeIncidentParameters(tickManager.incidentInfo.parameters)
+				},
+				threat = weather == null ? null : DescribeThreatForecast(map),
+				spawnDiagnostics = new
+				{
+					fromEdges = DescribeSpawnCandidateDiagnostics(map, SpawnHowType.FromTheEdges),
+					allOverTheMap = DescribeSpawnCandidateDiagnostics(map, SpawnHowType.AllOverTheMap)
+				},
+				letters = (Find.LetterStack?.LettersListForReading ?? new List<Letter>())
+					.Select(DescribeLetter)
+					.ToArray()
+			};
+		}
+
+		static object DescribeSpawnCandidateDiagnostics(Map map, SpawnHowType spawnHowType)
+		{
+			var oldSpawnHowType = ZombieSettings.Values.spawnHowType;
+			try
+			{
+				ZombieSettings.Values.spawnHowType = spawnHowType;
+				var cellValidator = Tools.ZombieSpawnLocator(map, true);
+				var spotValidator = ZombiesRising.SpotValidator(cellValidator);
+				var reachableRegions = Tools.PlayerReachableRegions(map) ?? new List<Region>();
+				var consideredRegions = spawnHowType == SpawnHowType.FromTheEdges
+					? reachableRegions.Where(region => region.touchesMapEdge).ToList()
+					: reachableRegions.ToList();
+				var consideredCells = consideredRegions
+					.SelectMany(region => region.Cells)
+					.Distinct()
+					.ToList();
+				var validCells = consideredCells
+					.Where(cell => cellValidator(cell))
+					.ToList();
+				var validSpots = consideredCells
+					.Where(cell => spotValidator(cell))
+					.ToList();
+
+				IntVec3 randomCell;
+				IntVec3 getValidSpot;
+				Rand.PushState(91273);
+				try
+				{
+					randomCell = Tools.RandomSpawnCell(map, spawnHowType == SpawnHowType.FromTheEdges, spotValidator);
+					getValidSpot = ZombiesRising.GetValidSpot(map, IntVec3.Invalid, cellValidator);
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				return new
+				{
+					spawnHowType = spawnHowType.ToString(),
+					reachableRegionCount = reachableRegions.Count,
+					edgeReachableRegionCount = reachableRegions.Count(region => region.touchesMapEdge),
+					consideredRegionCount = consideredRegions.Count,
+					consideredCellCount = consideredCells.Count,
+					validCellCount = validCells.Count,
+					validSpotCount = validSpots.Count,
+					sampleValidCells = validCells.Take(8).Select(cell => DescribeSpawnCandidateCell(map, cell)).ToArray(),
+					sampleValidSpots = validSpots.Take(8).Select(cell => DescribeSpawnCandidateCell(map, cell)).ToArray(),
+					randomCell = randomCell.IsValid ? DescribeSpawnCandidateCell(map, randomCell) : null,
+					getValidSpot = getValidSpot.IsValid ? DescribeSpawnCandidateCell(map, getValidSpot) : null
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.spawnHowType = oldSpawnHowType;
+			}
+		}
+
+		static object DescribeSpawnCandidateCell(Map map, IntVec3 cell)
+		{
+			var terrainGrid = map.terrainGrid;
+			var terrain = terrainGrid.TerrainAt(cell);
+			var room = cell.GetRoom(map);
+			return new
+			{
+				cell = ZombieRuntimeActions.DescribeCell(cell),
+				terrain = terrain?.defName,
+				canRemoveTopLayer = terrainGrid.CanRemoveTopLayerAt(cell),
+				standable = cell.Standable(map),
+				fogged = cell.Fogged(map),
+				roomFogged = room?.Fogged,
+				roomTouchesMapEdge = room?.TouchesMapEdge,
+				edifice = cell.GetEdifice(map)?.def?.defName
+			};
+		}
+
+		static object DescribeColonistInfo(Map map)
+		{
+			var (capable, incapable) = Tools.ColonistsInfo(map);
+			var total = map.mapPawns.FreeHumanlikesSpawnedOfFaction(Faction.OfPlayer).Count();
+			return new
+			{
+				capable,
+				incapable,
+				total,
+				minimumCapable = (total + 1) / 3
+			};
+		}
+
+		static object DescribeLetter(Letter letter)
+		{
+			return letter == null ? null : new
+			{
+				label = letter.Label,
+				defName = letter.def?.defName,
+				letter.arrivalTick
 			};
 		}
 
@@ -213,7 +1663,8 @@ namespace ZombieLand
 							name,
 							success = false,
 							spawnHowType = spawnHowType.ToString(),
-							error = "No valid event spawn spot was found."
+							error = "No valid event spawn spot was found.",
+							diagnostics = DescribeSpawnCandidateDiagnostics(map, spawnHowType)
 						};
 					}
 

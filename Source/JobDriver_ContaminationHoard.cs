@@ -19,6 +19,7 @@ namespace ZombieLand
 
 		public List<IntVec3> storage = new();
 		public HashSet<Thing> rejectedThings = new();
+		public Building_Bed bed;
 		public Room room;
 		public Thing thing;
 		public IntVec3 cell = IntVec3.Invalid;
@@ -39,6 +40,32 @@ namespace ZombieLand
 		public override void ExposeData()
 		{
 			base.ExposeData();
+			Scribe_Collections.Look(ref storage, "storage", LookMode.Value);
+			Scribe_References.Look(ref bed, "bed");
+			Scribe_References.Look(ref thing, "thing");
+			Scribe_Values.Look(ref cell, "cell", IntVec3.Invalid);
+			Scribe_Values.Look(ref state, "state", State.findThing);
+
+			var rejectedThingsList = rejectedThings?
+				.Where(thing => thing != null && thing.Spawned && thing.Destroyed == false)
+				.ToList();
+			Scribe_Collections.Look(ref rejectedThingsList, "rejectedThings", LookMode.Reference);
+			if (Scribe.mode == LoadSaveMode.PostLoadInit)
+			{
+				storage ??= new List<IntVec3>();
+				rejectedThings = rejectedThingsList?.Where(rejected => rejected != null).ToHashSet() ?? new HashSet<Thing>();
+				EnsureRoom();
+			}
+		}
+
+		void EnsureRoom()
+		{
+			if (room != null || Map == null)
+				return;
+			bed ??= Map.listerBuildings?.allBuildingsColonist
+				.OfType<Building_Bed>()
+				.FirstOrDefault(bed => bed.GetAssignedPawn() == pawn);
+			room = bed?.GetRoom(RegionType.Set_All);
 		}
 
 		Thing FindNextThing()
@@ -58,9 +85,9 @@ namespace ZombieLand
 
 		void InitAction()
 		{
-			var ownedBed = Map.listerBuildings.allBuildingsColonist.OfType<Building_Bed>()
+			bed = Map.listerBuildings.allBuildingsColonist.OfType<Building_Bed>()
 				.FirstOrDefault(bed => bed.GetAssignedPawn() == pawn);
-			room = ownedBed?.GetRoom(RegionType.Set_All);
+			room = bed?.GetRoom(RegionType.Set_All);
 			if (room == null)
 			{
 				EndJobWith(JobCondition.Succeeded);
@@ -79,6 +106,8 @@ namespace ZombieLand
 
 		void TickAction()
 		{
+			EnsureRoom();
+
 			if (state == State.findThing)
 			{
 				cell = storage.RandomElement();
@@ -89,8 +118,31 @@ namespace ZombieLand
 					EndJobWith(JobCondition.Succeeded);
 					return;
 				}
-				pawn.pather.StartPath(thing.Position, PathEndMode.ClosestTouch);
 				state = State.moveToThing;
+			}
+
+			if (state == State.moveToThing)
+			{
+				if (thing == null || thing.Destroyed)
+				{
+					state = State.findThing;
+					return;
+				}
+				if (pawn.pather.Moving == false)
+					pawn.pather.StartPath(thing.Position, PathEndMode.ClosestTouch);
+				return;
+			}
+
+			if (state == State.moveToStorage)
+			{
+				if (pawn.carryTracker.CarriedThing == null)
+				{
+					thing = null;
+					state = State.findThing;
+					return;
+				}
+				if (pawn.pather.Moving == false)
+					pawn.pather.StartPath(cell, PathEndMode.ClosestTouch);
 			}
 		}
 
@@ -105,10 +157,7 @@ namespace ZombieLand
 					int num = pawn.carryTracker.AvailableStackSpace(thing.def);
 					int num2 = Mathf.Min(num, thing.stackCount);
 					if (pawn.carryTracker.TryStartCarry(thing, num2, true) > 0)
-					{
-						pawn.pather.StartPath(cell, PathEndMode.ClosestTouch);
 						state = State.moveToStorage;
-					}
 					else
 						state = State.findThing;
 					break;
@@ -133,7 +182,6 @@ namespace ZombieLand
 				if (thing != null)
 					rejectedThings.Add(thing);
 				thing = null;
-				pawn.pather.StopDead();
 				state = State.findThing;
 				return;
 			}
@@ -142,7 +190,6 @@ namespace ZombieLand
 			{
 				_ = pawn.carryTracker.TryDropCarriedThing(pawn.Position, ThingPlaceMode.Near, out _);
 				thing = null;
-				pawn.pather.StopDead();
 				state = State.findThing;
 				return;
 			}

@@ -46,6 +46,8 @@ namespace ZombieLand
 		static float ClearAndDestroyContents(ThingOwner self, DestroyMode mode)
 		{
 			var contamination = self.Sum(thing => thing.GetContamination());
+			if (contamination <= 0 && self.owner is Frame frame)
+				contamination = frame.GetContamination();
 			self.ClearAndDestroyContents(mode);
 			return contamination;
 		}

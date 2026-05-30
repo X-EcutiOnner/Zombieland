@@ -67,11 +67,11 @@ namespace ZombieLand
 
 		public float Get(Thing thing, bool includeHoldings = true)
 		{
-			if (thing is Mineable mineable)
+			if (UsesCellBackedContamination(thing))
 			{
-				var map = mineable.Map;
+				var map = thing.Map;
 				if (map != null)
-					return grounds[map.Index][mineable.Position];
+					return grounds[map.Index][thing.Position];
 			}
 
 			var sum = 0f;
@@ -89,11 +89,11 @@ namespace ZombieLand
 
 		public void Set(Thing thing, float contamination)
 		{
-			if (thing is Mineable mineable)
+			if (UsesCellBackedContamination(thing))
 			{
-				var map = mineable.Map;
+				var map = thing.Map;
 				if (map != null)
-					grounds[map.Index][mineable.Position] = Mathf.Clamp01(contamination);
+					grounds[map.Index][thing.Position] = Mathf.Clamp01(contamination);
 				return;
 			}
 
@@ -154,7 +154,7 @@ namespace ZombieLand
 			var thing = info.thingInt;
 
 			IntVec3 cell;
-			if (thing is Mineable)
+			if (UsesCellBackedContamination(thing))
 			{
 				map ??= thing.Map;
 				cell = thing.Position;
@@ -274,12 +274,12 @@ namespace ZombieLand
 
 		public void Remove(Thing thing)
 		{
-			if (thing is Mineable mineable)
+			if (UsesCellBackedContamination(thing))
 			{
-				var map = mineable.Map;
+				var map = thing.Map;
 				if (map != null)
 				{
-					grounds[map.Index][mineable.Position] = 0;
+					grounds[map.Index][thing.Position] = 0;
 					return;
 				}
 			}
@@ -335,7 +335,7 @@ namespace ZombieLand
 			if (currentDrawerMap == null || (DebugViewSettings.drawFog && currentDrawerMap.fogGrid.IsFogged(index)))
 				return false;
 			return currentDrawerMap.thingGrid.thingGrid[index]
-				.Where(t => t is not Mineable)
+				.Where(t => UsesCellBackedContamination(t) == false)
 				.Sum(t => contaminations.TryGetValue(t.thingIDNumber, 0)) > 0;
 		}
 
@@ -344,7 +344,9 @@ namespace ZombieLand
 			if (currentDrawerMap == null)
 				return Color.clear;
 			var things = currentDrawerMap.thingGrid.ThingsListAtFast(index);
-			var allContamination = things.Sum(t => contaminations.TryGetValue(t.thingIDNumber, 0));
+			var allContamination = things
+				.Where(t => UsesCellBackedContamination(t) == false)
+				.Sum(t => contaminations.TryGetValue(t.thingIDNumber, 0));
 			var a = GenMath.LerpDoubleClamped(0, 1, 0, 0.8f, Mathf.Pow(allContamination, 0.7f));
 			return ContaminationGrid.color.ToTransparent(a);
 		}
@@ -377,6 +379,9 @@ namespace ZombieLand
 			Quest quest = QuestUtility.GenerateQuestAndMakeAvailable(CustomDefs.Decontamination, new Slate());
 			QuestUtility.SendLetterQuestAvailable(quest);
 		}
+
+		static bool UsesCellBackedContamination(Thing thing)
+			=> thing != null && (thing is Mineable || thing.GetType() == typeof(Thing) && thing.Spawned);
 	}
 
 	public class ContaminationGrid : ICellBoolGiver

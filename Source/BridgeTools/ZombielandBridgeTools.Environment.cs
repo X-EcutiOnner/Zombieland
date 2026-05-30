@@ -94,10 +94,143 @@ namespace ZombieLand
 				zombieRecordsNotMutated,
 				zombieRecordsHidden
 			};
-		}
+			}
 
-		[Tool("zombieland/zombie_clamor_suppression", Description = "Verify all GenClamor overloads suppress zombie-originated clamors while ordinary pawn clamors still reach nearby hearers.")]
-		public static object ZombieClamorSuppression()
+			[Tool("zombieland/ambient_temperature_contract", Description = "Verify Zombieland pawns and zombie corpses report normal ambient temperature while ordinary spawned things keep vanilla map temperature.")]
+			public static object AmbientTemperatureContract()
+			{
+				var map = CurrentMap;
+				if (map == null)
+				{
+					return new
+					{
+						success = false,
+						error = "No current map is loaded."
+					};
+				}
+
+				var spawnedThings = new List<Thing>();
+				try
+				{
+					_ = ZombieRuntimeActions.DestroyZombies(map);
+					foreach (var corpse in map.listerThings.AllThings.OfType<ZombieCorpse>().ToArray())
+						corpse.Destroy();
+
+					var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+					if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanError) == false)
+						return humanError;
+					if (TryFindClearSpawnCell(map, humanCell + new IntVec3(2, 0, 0), 8f, out var humanCorpseCell, out var humanCorpseError) == false)
+						return humanCorpseError;
+					if (TryFindClearSpawnCell(map, humanCell + new IntVec3(4, 0, 0), 10f, out var zombieCell, out var zombieError) == false)
+						return zombieError;
+					if (TryFindClearSpawnCell(map, humanCell + new IntVec3(6, 0, 0), 12f, out var zombieCorpseCell, out var zombieCorpseError) == false)
+						return zombieCorpseError;
+					if (TryFindClearSpawnCell(map, humanCell + new IntVec3(0, 0, 3), 8f, out var spitterCell, out var spitterError) == false)
+						return spitterError;
+					if (TryFindClearSpawnCell(map, humanCell + new IntVec3(2, 0, 3), 8f, out var blobCell, out var blobError) == false)
+						return blobError;
+
+					var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+					GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+					DisablePawnWork(human);
+					spawnedThings.Add(human);
+
+					var humanCorpsePawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+					GenSpawn.Spawn(humanCorpsePawn, humanCorpseCell, map, Rot4.South);
+					DisablePawnWork(humanCorpsePawn);
+					spawnedThings.Add(humanCorpsePawn);
+					if (ZombieRuntimeActions.KillPawnToCorpse(humanCorpsePawn, out var humanCorpse, out var corpseError) == false)
+					{
+						return new
+						{
+							success = false,
+							error = corpseError,
+							humanCorpsePawn = DescribePawn(humanCorpsePawn)
+						};
+					}
+					if (humanCorpse != null)
+						spawnedThings.Add(humanCorpse);
+
+					var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+					if (zombie == null)
+					{
+						return new
+						{
+							success = false,
+							error = "ZombieGenerator.SpawnZombie returned no ambient-temperature test zombie."
+						};
+					}
+					spawnedThings.Add(zombie);
+
+					var zombieForCorpse = ZombieRuntimeActions.SpawnZombie(zombieCorpseCell, map, ZombieType.Normal, true);
+					if (zombieForCorpse == null)
+					{
+						return new
+						{
+							success = false,
+							error = "ZombieGenerator.SpawnZombie returned no ambient-temperature corpse zombie."
+						};
+					}
+					spawnedThings.Add(zombieForCorpse);
+					zombieForCorpse.Kill(null);
+					var zombieCorpse = zombieForCorpse.Corpse as ZombieCorpse
+						?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(zombieCorpseCell)).FirstOrDefault();
+					if (zombieCorpse != null)
+						spawnedThings.Add(zombieCorpse);
+
+					var existingSpitters = CurrentZombies(map).OfType<ZombieSpitter>()
+						.Select(ZombieRuntimeActions.StableThingId)
+						.ToHashSet(StringComparer.OrdinalIgnoreCase);
+					ZombieSpitter.Spawn(map, spitterCell);
+					var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+						.FirstOrDefault(candidate => existingSpitters.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+						?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
+					if (spitter != null)
+						spawnedThings.Add(spitter);
+
+					var existingBlobs = CurrentZombies(map).OfType<ZombieBlob>()
+						.Select(ZombieRuntimeActions.StableThingId)
+						.ToHashSet(StringComparer.OrdinalIgnoreCase);
+					ZombieBlob.Spawn(map, blobCell);
+					var blob = CurrentZombies(map).OfType<ZombieBlob>()
+						.FirstOrDefault(candidate => existingBlobs.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+						?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(blobCell)).FirstOrDefault();
+					if (blob != null)
+						spawnedThings.Add(blob);
+
+					var ordinaryCases = new[]
+					{
+						DescribeAmbientTemperature("human", human, map, false),
+						DescribeAmbientTemperature("humanCorpse", humanCorpse, map, false)
+					};
+					var zombielandCases = new[]
+					{
+						DescribeAmbientTemperature("zombie", zombie, map, true),
+						DescribeAmbientTemperature("zombieCorpse", zombieCorpse, map, true),
+						DescribeAmbientTemperature("spitter", spitter, map, true),
+						DescribeAmbientTemperature("blob", blob, map, true)
+					};
+
+					return new
+					{
+						success = ordinaryCases.All(c => c.success) && zombielandCases.All(c => c.success),
+						mapTemperature = new
+						{
+							outdoorTemp = map.mapTemperature.OutdoorTemp
+						},
+						ordinaryCases,
+						zombielandCases
+					};
+				}
+				finally
+				{
+					foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+						thing.Destroy(DestroyMode.Vanish);
+				}
+			}
+
+			[Tool("zombieland/zombie_clamor_suppression", Description = "Verify all GenClamor overloads suppress zombie-originated clamors while ordinary pawn clamors still reach nearby hearers.")]
+			public static object ZombieClamorSuppression()
 		{
 			var map = CurrentMap;
 			if (map == null)
@@ -1259,6 +1392,43 @@ namespace ZombieLand
 				afterAttachIsOnFire,
 				afterRemoveHasFire,
 				afterRemoveIsOnFire
+			};
+		}
+
+		sealed class AmbientTemperatureCase
+		{
+			public string name { get; set; }
+			public string thingId { get; set; }
+			public string thingType { get; set; }
+			public string defName { get; set; }
+			public object position { get; set; }
+			public float ambientTemperature { get; set; }
+			public float cellTemperature { get; set; }
+			public bool expectNormal { get; set; }
+			public bool success { get; set; }
+		}
+
+		static AmbientTemperatureCase DescribeAmbientTemperature(string name, Thing thing, Map map, bool expectNormal)
+		{
+			var ambientTemperature = thing?.AmbientTemperature ?? float.NaN;
+			var cellTemperature = thing != null && thing.Spawned
+				? GenTemperature.GetTemperatureForCell(thing.Position, map)
+				: float.NaN;
+			var success = thing != null
+				&& (expectNormal
+					? Mathf.Abs(ambientTemperature - 21f) <= 0.001f
+					: Mathf.Abs(ambientTemperature - cellTemperature) <= 0.001f);
+			return new AmbientTemperatureCase
+			{
+				name = name,
+				thingId = ZombieRuntimeActions.StableThingId(thing),
+				thingType = thing?.GetType().FullName,
+				defName = thing?.def?.defName,
+				position = thing == null || thing.Spawned == false ? null : ZombieRuntimeActions.DescribeCell(thing.Position),
+				ambientTemperature = ambientTemperature,
+				cellTemperature = cellTemperature,
+				expectNormal = expectNormal,
+				success = success
 			};
 		}
 

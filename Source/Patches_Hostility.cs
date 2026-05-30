@@ -189,13 +189,13 @@ namespace ZombieLand
 			{
 				if (target.Thing is not Pawn pawn)
 					return false;
-				if (removeSpitter && pawn is ZombieBlob)
+				if (removeAllZombies && (pawn is Zombie || pawn is ZombieSpitter || pawn is ZombieBlob))
+					return true;
+				if (removeSpitter && (pawn is ZombieSpitter || pawn is ZombieBlob))
 					return true;
 				if (pawn is not Zombie zombie)
 					return false;
 				var downed = zombie.Downed;
-				if (removeAllZombies)
-					return true;
 				if (removeHarmlessZombies && (downed || zombie.isAlbino))
 					return true;
 				var farAway = attacker.Position.DistanceToSquared(zombie.Position) > 81;
@@ -406,7 +406,7 @@ namespace ZombieLand
 									return true;
 								})
 								.OrderBy(zombiePrioritySorter).FirstOrDefault();
-							return;
+							thing = __result as Thing;
 						}
 					}
 				}
@@ -612,6 +612,15 @@ namespace ZombieLand
 				targets = new HashSet<IAttackTarget>();
 				playerHostilesWithoutZombies.Add(map, targets);
 			}
+			targets.RemoveWhere(target =>
+			{
+				var thing = target?.Thing;
+				return thing == null
+					|| thing.Destroyed
+					|| thing.Spawned == false
+					|| thing.Map != map
+					|| thing.HostileTo(Faction.OfPlayer) == false;
+			});
 			return targets;
 		}
 
@@ -649,12 +658,12 @@ namespace ZombieLand
 		[HarmonyPatch(nameof(AttackTargetsCache.DeregisterTarget))]
 		static class AttackTargetsCache_DeregisterTarget_Patch
 		{
-			static void Postfix(IAttackTarget target)
+			static void Prefix(IAttackTarget target)
 			{
 				var thing = target.Thing;
 				if (thing == null || IsZombielandTarget(target))
 					return;
-				var map = thing.Map;
+				var map = thing.MapHeld;
 				if (map == null)
 					return;
 				if (playerHostilesWithoutZombies.TryGetValue(map, out var targets))

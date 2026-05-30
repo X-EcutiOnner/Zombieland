@@ -1,5 +1,42 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <Defs>
+    <ThingDef ParentName="BuildingBase">
+        <defName>ZombieLand_DecontaminationTransportPod</defName>
+        <label>decontamination transport pod</label>
+        <description>A one-way pickup pod sent to collect a colonist for decontamination treatment.</description>
+        <graphicData>
+            <texPath>Things/Special/DropPod</texPath>
+            <graphicClass>Graphic_Single</graphicClass>
+            <drawSize>(2,2)</drawSize>
+        </graphicData>
+        <size>(1,1)</size>
+        <rotatable>false</rotatable>
+        <tickerType>Normal</tickerType>
+        <altitudeLayer>BuildingOnTop</altitudeLayer>
+        <passability>PassThroughOnly</passability>
+        <castEdgeShadows>false</castEdgeShadows>
+        <fillPercent>0.5</fillPercent>
+        <terrainAffordanceNeeded>Light</terrainAffordanceNeeded>
+        <forceDebugSpawnable>true</forceDebugSpawnable>
+        <statBases>
+            <MaxHitPoints>250</MaxHitPoints>
+            <Flammability>0.5</Flammability>
+        </statBases>
+        <comps>
+            <li Class="CompProperties_Transporter">
+                <restEffectiveness>0.8</restEffectiveness>
+                <canChangeAssignedThingsAfterStarting>true</canChangeAssignedThingsAfterStarting>
+            </li>
+        </comps>
+        <inspectorTabs>
+            <li>ITab_ContentsTransporter</li>
+        </inspectorTabs>
+        <building>
+            <claimable>false</claimable>
+            <destroySound>BuildingDestroyed_Metal_Big</destroySound>
+        </building>
+    </ThingDef>
+
     <QuestScriptDef>
         <defName>Decontamination</defName>
         <rootSelectionWeight>0</rootSelectionWeight>
@@ -48,23 +85,14 @@
                     <delayTicks>3500</delayTicks>
                     <node Class="QuestNode_Sequence">
                         <nodes>
-                            <li Class="QuestNode_SubScript">
-                                <def>Util_TransportShip_Pickup</def>
-                                <parms>
-                                    <leaveDelayTicks>60000</leaveDelayTicks>
-                                    <leaveImmediatelyWhenSatisfied>true</leaveImmediatelyWhenSatisfied>
-                                    <acceptColonists>true</acceptColonists>
-                                    <acceptChildren>false</acceptChildren>
-                                    <onlyAcceptColonists>true</onlyAcceptColonists>
-                                    <onlyAcceptHealthy>true</onlyAcceptHealthy>
-                                    <requireColonistCount>1</requireColonistCount>
-                                    <minAge>$minAge</minAge>
-                                </parms>
+                            <li Class="ZombieLand.QuestNode_CreateDecontaminationPickupTransporter">
+                                <storeAs>pickupShipThing</storeAs>
+                                <factionToSendTo>$asker</factionToSendTo>
                             </li>
 
                             <li Class="QuestNode_Letter">
-                                <label TKey="LetterLabelShuttleArrived">Shuttle arrived</label>
-                                <text TKey="LetterTextShuttleArrived">The shuttle has arrived to collect one of your colonists.</text>
+                                <label TKey="LetterLabelTransportArrived">Transport arrived</label>
+                                <text TKey="LetterTextTransportArrived">The transport pod has arrived to collect one of your colonists.</text>
                                 <lookTargets>$pickupShipThing</lookTargets>
                             </li>
                         </nodes>
@@ -76,8 +104,8 @@
                     <node Class="QuestNode_Sequence">
                         <nodes>
                             <li Class="QuestNode_Letter">
-                                <label TKey="LetterLabelShuttleDestroyed">Shuttle destroyed</label>
-                                <text TKey="LetterTextShuttleDestroyed">The shuttle sent to collect colonists has been destroyed.</text>
+                                <label TKey="LetterLabelTransportDestroyed">Transport destroyed</label>
+                                <text TKey="LetterTextTransportDestroyed">The transport pod sent to collect colonists has been destroyed.</text>
                             </li>
                             <li Class="QuestNode_End">
                                 <outcome>Fail</outcome>
