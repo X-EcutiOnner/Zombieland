@@ -181,6 +181,7 @@ Artifacts:
 
 Current runtime evidence:
 - Added 2026-05-30 with `zombieland/ambient_temperature_contract` from `EMPTY.rws`. The live run spawned a human, human corpse, normal zombie, zombie corpse, spitter, and blob on an outdoor map with local cell temperature `4.5` degrees and outdoor temperature about `4.67`. Ordinary human and human corpse `AmbientTemperature` matched the cell temperature (`4.5`), while `Zombie`, `ZombieCorpse`, `ZombieSpitter`, and `ZombieBlob` all returned the forced normal `21` degrees from `Thing_AmbientTemperature_Patch`. `rimbridge/list_logs minimumLevel=warning` returned no entries.
+- Added 2026-05-30 with `zombieland/zombie_damage_log_association_suppression` from `EMPTY.rws`. The live run applied damage to an ordinary human, normal zombie, spitter, and blob. The human control produced one result hediff and one new combat-log text association, while all three Zombieland pawn classes produced result hediffs with no combat-log text association. The first attempt exposed a fixture cleanup bug that left damaged spawned pawns behind; the bridge tool now destroys those pawns before returning, and the rerun completed with no warning-or-higher log entries.
 
 Completion:
 - Covered when the loop completes before and after reload without manual repair and without adding a scenario-specific endpoint.
@@ -222,9 +223,10 @@ Assertions:
 
 Current runtime evidence:
 - Added 2026-05-30 with `zombieland/infection_medical_state` from `EMPTY.rws`. The live run spawned a temporary colonist and grizzly bear, applied hidden, harmless, infectable, and infecting `ZombieBite` hediffs plus a normal `Cut`, and verified natural healing behavior: hidden/infectable/infecting bites returned `CanHealNaturally=false`, harmless bites and ordinary cuts returned true, and an animal `ZombieBite` with infection state `None` also returned true through vanilla behavior. With severity set to zero, hidden/infectable/infecting bites returned `ShouldRemove=false`, while the harmless bite and ordinary cut returned true. `Recipe_RemoveBodyPart.GetPartsToApplyOn` returned all four distinct bitten parts once each, with no missing or duplicate bitten parts. `rimbridge/list_logs minimumLevel=warning` returned no entries.
+- Added 2026-05-30 with `zombieland/zombie_corpse_alert_forbid_contract` from `EMPTY.rws`. The live run proved a human corpse still returns true from the unburied-colonist alert helper and becomes forbidden when outside the home area. Normal and former zombie corpses both returned false for the alert helper and stayed unforbidden after the same outside-home forbid call. The same run verified serum extraction remains available for both zombie corpse variants and double-tap remains unavailable for both. `rimbridge/list_logs minimumLevel=warning` returned no entries.
 
 Completion:
-- Partially covered by focused contracts and the 2026-05-30 medical patch run. Remaining workflow proof: save-load during corpse conversion countdown, alert list behavior, and cure/double-tap/extract/medical UI in one player-facing map session.
+- Partially covered by focused contracts and the 2026-05-30 medical/corpse patch runs. Remaining workflow proof: save-load during corpse conversion countdown, infection alert list behavior, and cure/double-tap/extract/medical UI in one player-facing map session.
 
 ## S-Special-Gauntlet
 

@@ -1263,73 +1263,89 @@ namespace ZombieLand
 				};
 			}
 
-			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
-			if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanError) == false)
-				return humanError;
-			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 0), 10f, out var zombieCell, out var zombieError) == false)
-				return zombieError;
-			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(-3, 0, 0), 10f, out var spitterCell, out var spitterError) == false)
-				return spitterError;
-			if (TryFindClearSpawnCell(map, humanCell + new IntVec3(0, 0, 3), 10f, out var blobCell, out var blobError) == false)
-				return blobError;
-
-			var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-			GenSpawn.Spawn(human, humanCell, map, Rot4.South);
-			DisablePawnWork(human);
-
-			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
-
-			var existingSpitters = CurrentZombies(map).OfType<ZombieSpitter>()
-				.Select(ZombieRuntimeActions.StableThingId)
-				.ToHashSet(StringComparer.OrdinalIgnoreCase);
-			ZombieSpitter.Spawn(map, spitterCell);
-			var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
-				.FirstOrDefault(candidate => existingSpitters.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
-				?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
-
-			var existingBlobs = CurrentZombies(map).OfType<ZombieBlob>()
-				.Select(ZombieRuntimeActions.StableThingId)
-				.ToHashSet(StringComparer.OrdinalIgnoreCase);
-			ZombieBlob.Spawn(map, blobCell);
-			var blob = CurrentZombies(map).OfType<ZombieBlob>()
-				.FirstOrDefault(candidate => existingBlobs.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
-				?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(blobCell)).FirstOrDefault();
-
-			if (zombie == null || spitter == null || blob == null)
+			var spawnedThings = new List<Thing>();
+			try
 			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 16f, out var humanCell, out var humanError) == false)
+					return humanError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(3, 0, 0), 10f, out var zombieCell, out var zombieError) == false)
+					return zombieError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(-3, 0, 0), 10f, out var spitterCell, out var spitterError) == false)
+					return spitterError;
+				if (TryFindClearSpawnCell(map, humanCell + new IntVec3(0, 0, 3), 10f, out var blobCell, out var blobError) == false)
+					return blobError;
+
+				var human = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(human, humanCell, map, Rot4.South);
+				spawnedThings.Add(human);
+				DisablePawnWork(human);
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie != null)
+					spawnedThings.Add(zombie);
+
+				var existingSpitters = CurrentZombies(map).OfType<ZombieSpitter>()
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				ZombieSpitter.Spawn(map, spitterCell);
+				var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+					.FirstOrDefault(candidate => existingSpitters.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+					?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(spitterCell)).FirstOrDefault();
+				if (spitter != null)
+					spawnedThings.Add(spitter);
+
+				var existingBlobs = CurrentZombies(map).OfType<ZombieBlob>()
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToHashSet(StringComparer.OrdinalIgnoreCase);
+				ZombieBlob.Spawn(map, blobCell);
+				var blob = CurrentZombies(map).OfType<ZombieBlob>()
+					.FirstOrDefault(candidate => existingBlobs.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+					?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(blobCell)).FirstOrDefault();
+				if (blob != null)
+					spawnedThings.Add(blob);
+
+				if (zombie == null || spitter == null || blob == null)
+				{
+					return new
+					{
+						success = false,
+						human = DescribePawn(human),
+						zombie = DescribeZombie(zombie),
+						spitter = DescribeZombie(spitter),
+						blob = DescribeZombie(blob),
+						error = "Could not create all damage-log fixture pawns."
+					};
+				}
+
+				var humanResult = DamageAndAssociateWithLog(human, 2f);
+				var zombieResult = DamageAndAssociateWithLog(zombie, 2f);
+				var spitterResult = DamageAndAssociateWithLog(spitter, 0.5f);
+				var blobResult = DamageAndAssociateWithLog(blob, 0.5f);
+
+				var humanAssociated = humanResult.resultHediffCount > 0 && humanResult.combatTextDelta > 0;
+				var zombieSuppressed = zombieResult.resultHediffCount > 0 && zombieResult.combatTextDelta == 0;
+				var spitterSuppressed = spitterResult.resultHediffCount > 0 && spitterResult.combatTextDelta == 0;
+				var blobSuppressed = blobResult.resultHediffCount > 0 && blobResult.combatTextDelta == 0;
+
 				return new
 				{
-					success = false,
-					human = DescribePawn(human),
-					zombie = DescribeZombie(zombie),
-					spitter = DescribeZombie(spitter),
-					blob = DescribeZombie(blob),
-					error = "Could not create all damage-log fixture pawns."
+					success = humanAssociated && zombieSuppressed && spitterSuppressed && blobSuppressed,
+					humanAssociated,
+					zombieSuppressed,
+					spitterSuppressed,
+					blobSuppressed,
+					human = humanResult,
+					zombie = zombieResult,
+					spitter = spitterResult,
+					blob = blobResult
 				};
 			}
-
-			var humanResult = DamageAndAssociateWithLog(human, 2f);
-			var zombieResult = DamageAndAssociateWithLog(zombie, 2f);
-			var spitterResult = DamageAndAssociateWithLog(spitter, 0.5f);
-			var blobResult = DamageAndAssociateWithLog(blob, 0.5f);
-
-			var humanAssociated = humanResult.resultHediffCount > 0 && humanResult.combatTextDelta > 0;
-			var zombieSuppressed = zombieResult.resultHediffCount > 0 && zombieResult.combatTextDelta == 0;
-			var spitterSuppressed = spitterResult.resultHediffCount > 0 && spitterResult.combatTextDelta == 0;
-			var blobSuppressed = blobResult.resultHediffCount > 0 && blobResult.combatTextDelta == 0;
-
-			return new
+			finally
 			{
-				success = humanAssociated && zombieSuppressed && spitterSuppressed && blobSuppressed,
-				humanAssociated,
-				zombieSuppressed,
-				spitterSuppressed,
-				blobSuppressed,
-				human = humanResult,
-				zombie = zombieResult,
-				spitter = spitterResult,
-				blob = blobResult
-			};
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
 		}
 
 		[Tool("zombieland/zombie_fire_attachment_state_contract", Description = "Verify real fire attachment add/remove keeps Zombie.isOnFire synchronized.")]

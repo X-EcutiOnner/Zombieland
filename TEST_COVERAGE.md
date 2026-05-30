@@ -99,6 +99,7 @@ Already evidenced:
 - `c6f2b87 Optimize zombie tick sampling`
 - `4e90c65 Trim zombie ticking hot path`
 - Live `S-Core-Horde-Loop` sub-contract evidence: `zombieland/ambient_temperature_contract` from `EMPTY.rws` proved ordinary human and human corpse `AmbientTemperature` stayed at the vanilla cell temperature (`4.5`), while `Zombie`, `ZombieCorpse`, `ZombieSpitter`, and `ZombieBlob` all reported Zombieland's forced normal temperature (`21`). `rimbridge/list_logs minimumLevel=warning` returned no entries.
+- Live patch-boundary evidence: `zombieland/zombie_damage_log_association_suppression` from `EMPTY.rws` proved ordinary human damage still associated with the combat log (`combatTextDelta=1`), while normal zombie, spitter, and blob damage each produced a result hediff without combat-log text (`combatTextDelta=0`). The fixture now cleans up spawned pawns before returning; the rerun had no warning-or-higher log entries.
 
 Required tests:
 - Horde scenario: from an empty controlled save, spawn a mixed group and run real ticks through sensing, tracking, rage, door contact, wall contact, wandering fallback, and cleanup.
@@ -167,6 +168,7 @@ Already evidenced:
 - `7127f37 Split bridge eating contracts`
 - `0235865 Cover non-flesh eating rejection`
 - Live partial `S-Infection-Medical` evidence: `zombieland/infection_medical_state` from `EMPTY.rws` covered the medical patch cluster in one runtime pass. Hidden, infectable, and infecting zombie bites returned `CanHealNaturally=false`; harmless bites, an ordinary `Cut`, and an animal zombie bite with infection state `None` returned true. After severity was forced to zero, hidden/infectable/infecting bites returned `ShouldRemove=false`, while harmless bite and ordinary cut returned true. `Recipe_RemoveBodyPart.GetPartsToApplyOn` returned the four distinct bitten body parts exactly once each with no missing or duplicate bitten parts. `rimbridge/list_logs minimumLevel=warning` returned no entries.
+- Live corpse/alert/forbid evidence: `zombieland/zombie_corpse_alert_forbid_contract` from `EMPTY.rws` proved a human corpse still counts for the unburied-colonist alert and is auto-forbidden outside home, while normal and former zombie corpses do not count for that alert and remain unforbidden outside home. The same run kept serum extraction available on both zombie corpse variants and double-tap unavailable for both; `rimbridge/list_logs minimumLevel=warning` returned no entries.
 
 Required tests:
 - Infection progression scenario: bite, hidden stage, visible treatable stage, untreatable conversion, treatment in and out of bed, amputation/removal path if feasible.
@@ -175,7 +177,7 @@ Required tests:
 - Serum workflow: extract area, filter visibility, auto-extract workgiver, recipe cure, inventory/product handling.
 
 Current gap:
-- Focused contracts exist, and the natural-healing/remove-body-part/ShouldRemove medical patch cluster now has live evidence. Remaining E gaps are alert/UI timing, save-load progression during corpse conversion, and proving cure/double-tap/extract/medical UI together as one player workflow.
+- Focused contracts exist, and the natural-healing/remove-body-part/ShouldRemove medical patch cluster plus corpse alert/forbid boundaries now have live evidence. Remaining E gaps are infection alert/UI timing, save-load progression during corpse conversion, and proving cure/double-tap/extract/medical UI together as one player workflow.
 
 ### F. Contamination
 
