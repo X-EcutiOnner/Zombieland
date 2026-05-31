@@ -2052,7 +2052,13 @@ namespace ZombieLand
 				list[i - 1].opcode = OpCodes.Ldarg_1;
 				list[i].operand = to;
 
-				i = list.FindLastIndex(instr => instr.LoadsConstant(0));
+				var f_posture = typeof(Pawn_JobTracker).Field(nameof(Pawn_JobTracker.posture));
+				i = list.FindIndex(instr => instr.opcode == OpCodes.Stfld && Equals(instr.operand, f_posture)) - 1;
+				if (i < 0 || list[i].LoadsConstant(0) == false)
+				{
+					Error("Cannot find " + f_posture.DeclaringType.FullDescription() + "." + f_posture.Name + " assignment in Pawn_PathFollower.StartPath");
+					return list;
+				}
 				list.RemoveAt(i);
 				list.InsertRange(i, new CodeInstruction[]
 				{
