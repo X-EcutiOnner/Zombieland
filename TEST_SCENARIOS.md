@@ -771,6 +771,10 @@ Artifacts:
 - XML/type-ref scan summary.
 - Load log summary without Zombieland if runtime path is possible.
 
+Current source/decompiler evidence:
+- Started 2026-05-31. RimWorld 1.6 `Dialog_SaveFileList` still exposes the protected save-file interaction pattern used by `Dialog_SaveThenUninstall`; `GameDataSaveLoader.SaveGame(string)` still writes `Current.Game` through `Scribe_Deep.Look`; `WorldPawns.ExposeData()` still persists `pawnsAlive`, `pawnsMothballed`, `pawnsDead`, and `pawnsForcefullyKeptAsWorldPawns`; `FactionManager.ExposeData()` still persists `allFactions`; and `BattleLog.Battles` remains the public battle-log list surface. The source pass found that `ZombieRemover.IsZombieDef()` was too narrow for no-mod save hygiene because many Zombieland defs do not match `Zombie_`/`_Zombie` and do not use Zombieland classes, including examples such as `ZombieScare`, `ZombieThought`, `ZombieZapA/B`, `Chainsaw`, `Thumper`, and several custom jobs/effects. It now uses the owning Zombieland mod package as the authoritative def test.
+- The same pass tightened additional source-only cleanup gaps that a dirty fixture must verify next: Zombieland recipes are removed from work-table bill stacks rather than only cleaning their ingredient filters; Zombieland hediff defs/classes and memories such as `ZombieScare` are removed from pawns; Zombieland apparel/equipment/inventory/carrying contents are removed from pawns; and active Zombieland jobs or mental states are stopped/reset before the copy save is written. This is not runtime completion evidence; it defines the next destructive fixture assertions.
+
 Completion:
 - Covered when a dirty save copy loads or scans clean without Zombieland references and the source save is unchanged.
 

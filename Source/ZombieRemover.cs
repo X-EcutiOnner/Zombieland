@@ -93,6 +93,8 @@ namespace ZombieLand
 		{
 			if (def == null)
 				return false;
+			if (def.modContentPack?.PackageId == ZombielandMod.Identifier)
+				return true;
 			if (def.GetType().Namespace == Tools.zlNamespace)
 				return true;
 			if (def.defName == null)
@@ -135,9 +137,9 @@ namespace ZombieLand
 				.Do(RemoveFromFilter);
 
 			map.listerThings.AllThings.SelectMany(ContentOfFields<BillStack>)
-				.SelectMany(AllBills)
-				.Select(bill => bill?.ingredientFilter).ToList()
-				.Do(RemoveFromFilter);
+				.Distinct()
+				.ToList()
+				.Do(CleanBillStack);
 
 			map.listerThings.AllThings.SelectMany(ContentOfFields<StorageSettings>)
 				.Select(settings => settings?.filter ?? new ThingFilter())
@@ -188,7 +190,7 @@ namespace ZombieLand
 
 			var hediffs1 = pawn.GetHediffsList<Hediff_Injury_ZombieBite>();
 			var hediffs2 = pawn.GetHediffsList<Hediff_MissingPart>().Where(hediff => hediff.lastInjury.IsZombieHediff());
-			var hediffs3 = Enumerable.Empty<Hediff_Injury>();
+			var hediffs3 = pawn.health.hediffSet.hediffs.Where(hediff => hediff.IsZombieType() || hediff.def.IsZombieDef()).ToArray();
 
 			foreach (var hediff in hediffs1)
 				pawn.health.RemoveHediff(hediff);
@@ -198,14 +200,73 @@ namespace ZombieLand
 				pawn.health.RemoveHediff(hediff);
 
 			_ = pawn.filth?.carriedFilth?.RemoveAll(filth => filth.IsZombieThing());
+			RemovePawnHeldZombieThings(pawn);
+			RemovePawnZombieJobsAndMentalStates(pawn);
 
 			pawn.needs?.AllNeeds?.Do(need =>
 			{
 				var needMood = need as Need_Mood;
-				_ = needMood?.thoughts?.memories?.Memories?.RemoveAll(memory => memory.otherPawn is Zombie);
-				_ = needMood?.thoughts?.memories?.Memories?.RemoveAll(memory => memory.otherPawn is ZombieBlob);
-				_ = needMood?.thoughts?.memories?.Memories?.RemoveAll(memory => memory.otherPawn is ZombieSpitter);
+				_ = needMood?.thoughts?.memories?.Memories?.RemoveAll(IsZombieMemory);
 			});
+		}
+
+		static void CleanBillStack(BillStack billStack)
+		{
+			if (billStack?.bills == null)
+				return;
+
+			_ = billStack.bills.RemoveAll(bill => bill?.recipe.IsZombieDef() == true);
+			foreach (var bill in billStack.bills.ToArray())
+				RemoveFromFilter(bill?.ingredientFilter);
+		}
+
+		static bool IsZombieMemory(Thought_Memory memory)
+		{
+			if (memory == null)
+				return false;
+			if (memory.IsZombieType() || memory.def.IsZombieDef())
+				return true;
+			if (memory.otherPawn is Zombie || memory.otherPawn is ZombieBlob || memory.otherPawn is ZombieSpitter)
+				return true;
+			return false;
+		}
+
+		static void RemovePawnZombieJobsAndMentalStates(Pawn pawn)
+		{
+			if (pawn.jobs?.AllJobs()?.Any(job => job?.def.IsZombieDef() == true) == true)
+				pawn.jobs.StopAll(false, true);
+
+			var mentalStateHandler = pawn.mindState?.mentalStateHandler;
+			if (mentalStateHandler?.CurStateDef.IsZombieDef() == true || mentalStateHandler?.CurState.IsZombieType() == true)
+				mentalStateHandler.Reset();
+		}
+
+		static void RemovePawnHeldZombieThings(Pawn pawn)
+		{
+			foreach (var apparel in pawn.apparel?.WornApparel?.Where(apparel => apparel.IsZombieThing()).ToArray() ?? Array.Empty<Apparel>())
+			{
+				pawn.apparel.Remove(apparel);
+				if (apparel.Destroyed == false)
+					apparel.Destroy();
+			}
+
+			foreach (var equipment in pawn.equipment?.AllEquipmentListForReading?.Where(equipment => equipment.IsZombieThing()).ToArray() ?? Array.Empty<ThingWithComps>())
+				pawn.equipment.DestroyEquipment(equipment);
+
+			RemoveZombieThingsFromOwner(pawn.inventory?.innerContainer);
+			RemoveZombieThingsFromOwner(pawn.carryTracker?.innerContainer);
+		}
+
+		static void RemoveZombieThingsFromOwner(ThingOwner owner)
+		{
+			if (owner == null)
+				return;
+			foreach (var thing in owner.Where(thing => thing.IsZombieThing()).ToArray())
+			{
+				owner.Remove(thing);
+				if (thing.Destroyed == false)
+					thing.Destroy();
+			}
 		}
 
 		static void RemoveWorldPawns()

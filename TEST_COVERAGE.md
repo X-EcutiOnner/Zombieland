@@ -453,6 +453,7 @@ Code surface: `Source/ZombieRemover.cs`, `Source/Dialog_SaveThenUninstall.cs`, s
 
 Already evidenced:
 - No specific post-baseline coverage found in the commit subjects beyond baseline compile.
+- Source/decompiler audit started 2026-05-31. RimWorld 1.6 `GameDataSaveLoader.SaveGame(string)` still deep-scribes `Current.Game`; `WorldPawns.ExposeData()` persists `pawnsAlive`, `pawnsMothballed`, `pawnsDead`, and `pawnsForcefullyKeptAsWorldPawns`; `FactionManager.ExposeData()` persists `allFactions`; and `Dialog_SaveFileList`/`Dialog_SaveFileList_Save` still use the protected `DoFileInteraction(string)` override shape that `Dialog_SaveThenUninstall` relies on. The source pass found and fixed remover blind spots before runtime: `IsZombieDef` now treats the owning Zombieland mod package as authoritative instead of relying only on fragile `Zombie_`/`_Zombie` naming or custom classes; work-table bill stacks now remove Zombieland recipes as well as ingredient filters; pawn cleanup now removes Zombieland hediff defs/classes, memories such as `ZombieScare`, pawn-held Zombieland apparel/equipment/inventory/carrying contents, and active Zombieland jobs/mental states.
 
 Required tests:
 - Save-then-uninstall scenario: create a save with zombies, zombie faction, corpses, hediffs, thoughts, tales, battle logs, filters, map/world components, contamination, and special things; run remover; load resulting save without Zombieland; verify no unresolved def/type references and no zombie faction/components remain.
@@ -460,7 +461,7 @@ Required tests:
 - World-pawn hygiene scenario: world pawns, dead pawns, relations, memories, and battle log entries referencing zombies are removed or made safe.
 
 Current gap:
-- This is high risk and basically uncovered. It needs source audit plus a destructive-copy save scenario.
+- This is high risk and still lacks destructive-copy runtime evidence. The first source/decompiler pass found and fixed several save-hygiene blind spots, but the row is not covered until a dirty source save is copied through `ZombieRemover.RemoveZombieland`, the output XML scans clean of Zombieland refs, and the copy either loads without Zombieland or reaches an equivalent no-mod load/log gate.
 
 ## Next Test Definitions To Write
 
