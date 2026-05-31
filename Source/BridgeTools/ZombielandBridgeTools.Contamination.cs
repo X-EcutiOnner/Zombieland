@@ -7083,6 +7083,12 @@ namespace ZombieLand
 			var woodFloor = DefDatabase<TerrainDef>.GetNamedSilentFail("WoodPlankFloor");
 			var bridge = DefDatabase<TerrainDef>.GetNamedSilentFail("Bridge");
 			var shallowWater = DefDatabase<TerrainDef>.GetNamedSilentFail("WaterShallow");
+			var temporaryTerrains = DefDatabase<TerrainDef>.AllDefsListForReading
+				.Where(def => def.temporary && def.frameDef != null)
+				.OrderBy(def => def.defName)
+				.ToArray();
+			var temporaryTerrain = temporaryTerrains.FirstOrDefault(def => def.CostList.NullOrEmpty() == false && def.CostList.Any(cost => cost.thingDef != null && cost.count > 0))
+				?? temporaryTerrains.FirstOrDefault();
 			var stuffDef = ThingDefOf.WoodLog;
 			if (woodFloor?.frameDef == null || bridge?.frameDef == null || shallowWater == null || stuffDef == null)
 			{
@@ -7137,6 +7143,9 @@ namespace ZombieLand
 				return floorCellError;
 			if (TryFindTerrainFrameCell(floorCell + new IntVec3(4, 0, 0), 16f, out var bridgeCell, out var bridgeCellError) == false)
 				return bridgeCellError;
+			var tempCell = IntVec3.Invalid;
+			if (temporaryTerrain != null && TryFindTerrainFrameCell(bridgeCell + new IntVec3(4, 0, 0), 16f, out tempCell, out var tempCellError) == false)
+				return tempCellError;
 
 			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
 
@@ -7150,14 +7159,15 @@ namespace ZombieLand
 					touchedCells.Add((cell, map.terrainGrid.TerrainAt(cell), map.terrainGrid.FoundationAt(cell), map.terrainGrid.TempTerrainAt(cell), map.GetContamination(cell)));
 				}
 
-				(bool success, object payload) CompleteTerrainFrame(TerrainDef terrainDef, IntVec3 cell, float materialContamination, TerrainDef underTerrain = null)
+				(bool success, object payload) CompleteTerrainFrame(TerrainDef terrainDef, IntVec3 cell, float materialContamination, TerrainDef underTerrain = null, ThingDef materialDef = null)
 				{
 					SnapshotTerrain(cell);
 					if (underTerrain != null)
 						map.terrainGrid.SetTerrain(cell, underTerrain);
 
+					var frameMaterialDef = materialDef ?? stuffDef;
 					var frame = ThingMaker.MakeThing(terrainDef.frameDef) as Frame;
-					var material = ThingMaker.MakeThing(stuffDef);
+					var material = ThingMaker.MakeThing(frameMaterialDef);
 					createdThings.Add(frame);
 					createdThings.Add(material);
 
@@ -7174,7 +7184,7 @@ namespace ZombieLand
 					frame.SetFactionDirect(Faction.OfPlayer);
 					GenSpawn.Spawn(frame, cell, map, Rot4.South, WipeMode.Vanish, false);
 
-					material.stackCount = Mathf.Max(1, terrainDef.CostList?.FirstOrDefault(cost => cost.thingDef == stuffDef)?.count ?? 1);
+					material.stackCount = Mathf.Max(1, terrainDef.CostList?.FirstOrDefault(cost => cost.thingDef == frameMaterialDef)?.count ?? 1);
 					material.SetContamination(materialContamination);
 					var materialBefore = material.GetContamination();
 					var acceptedMaterial = frame.resourceContainer.TryAdd(material, canMergeWithExistingStacks: true);
@@ -7213,6 +7223,9 @@ namespace ZombieLand
 						success,
 						terrain = terrainDef.defName,
 						frameDef = terrainDef.frameDef.defName,
+						temporary = terrainDef.temporary,
+						isFoundation = terrainDef.isFoundation,
+						materialDef = frameMaterialDef.defName,
 						cell = ZombieRuntimeActions.DescribeCell(cell),
 						frame = ZombieRuntimeActions.StableThingId(frame),
 						frameDestroyed,
@@ -7246,21 +7259,37 @@ namespace ZombieLand
 
 				map.SetContamination(floorCell, 0f);
 				map.SetContamination(bridgeCell, 0f);
+				if (tempCell.IsValid)
+					map.SetContamination(tempCell, 0f);
 
 				var floorResult = CompleteTerrainFrame(woodFloor, floorCell, 0.62f);
 				var bridgeResult = CompleteTerrainFrame(bridge, bridgeCell, 0.74f, shallowWater);
+				var temporaryResult = temporaryTerrain == null
+					? new
+					{
+						success = true,
+						skipped = true,
+						reason = "No active constructible TerrainDef has temporary=true and frameDef != null.",
+						activeTemporaryTerrainDefs = temporaryTerrains.Select(def => def.defName).ToArray()
+					}
+					: CompleteTerrainFrame(
+						temporaryTerrain,
+						tempCell,
+						0.57f,
+						materialDef: temporaryTerrain.CostList?.FirstOrDefault(cost => cost.thingDef != null && cost.count > 0)?.thingDef ?? stuffDef).payload;
 				var affectFloorResult = VerifyAffectFloorTransfer(map, bridgeCell + new IntVec3(4, 0, 0), woodFloor, cleanup);
 				var workerAfter = worker.GetContamination();
 
 				return new
 				{
-					success = floorResult.success && bridgeResult.success && ObjectSuccess(affectFloorResult) && CloseFloat(workerAfter, 0f),
+					success = floorResult.success && bridgeResult.success && ObjectSuccess(temporaryResult) && ObjectSuccess(affectFloorResult) && CloseFloat(workerAfter, 0f),
 					cleanup,
 					worker = DescribePawn(worker),
 					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
 					workerAfter,
 					floor = floorResult.payload,
 					bridge = bridgeResult.payload,
+					temporary = temporaryResult,
 					affectFloor = affectFloorResult
 				};
 			}

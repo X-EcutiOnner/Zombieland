@@ -33,7 +33,7 @@ namespace ZombieLand
 			// no base.ExposeData() to call
 
 			Scribe_Values.Look(ref destX, "destX");
-			Scribe_Values.Look(ref destX, "destY");
+			Scribe_Values.Look(ref destY, "destY");
 			Scribe_Values.Look(ref pX, "pX");
 			Scribe_Values.Look(ref pY, "pY");
 			Scribe_Values.Look(ref drop, "drop");

@@ -1,17 +1,22 @@
 using RimBridgeServer.Annotations;
+using HarmonyLib;
 using RimWorld;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using UnityEngine;
 using Verse;
 using Verse.AI;
+using Verse.Sound;
 
 namespace ZombieLand
 {
 	public sealed partial class ZombielandBridgeTools
 	{
+		static bool? soundEventsPreviousWriteState;
+
 		[Tool("zombieland/get_status", Description = "Read a compact live Zombieland status summary for the current RimWorld session.")]
 		public static object GetStatus()
 		{
@@ -105,6 +110,8 @@ namespace ZombieLand
 				var timeControlProbe = VerifyTimeControlService();
 				var clearMapsProbe = VerifyClearMapsService();
 				var rootLifecycleProbe = VerifyRootLifecycleHooks();
+				var defResolutionProbe = VerifyZombielandDefResolution();
+				var optionalIntegrationsProbe = VerifyOptionalIntegrations();
 
 				return new
 				{
@@ -120,7 +127,9 @@ namespace ZombieLand
 						&& ObjectSuccess(mainMenuProbe)
 						&& ObjectSuccess(timeControlProbe)
 						&& ObjectSuccess(clearMapsProbe)
-						&& ObjectSuccess(rootLifecycleProbe),
+						&& ObjectSuccess(rootLifecycleProbe)
+						&& ObjectSuccess(defResolutionProbe)
+						&& ObjectSuccess(optionalIntegrationsProbe),
 					patchTargets = new
 					{
 						assets = assetTargets,
@@ -136,9 +145,707 @@ namespace ZombieLand
 					mainMenuInit = mainMenuProbe,
 					timeControl = timeControlProbe,
 					clearMaps = clearMapsProbe,
-					rootLifecycle = rootLifecycleProbe
+					rootLifecycle = rootLifecycleProbe,
+					defResolution = defResolutionProbe,
+					optionalIntegrations = optionalIntegrationsProbe
 				};
 			}
+
+			static object VerifyOptionalIntegrations()
+			{
+				var activePackages = LoadedModManager.RunningModsListForReading
+					.Select(mod => mod.PackageIdPlayerFacing)
+					.Where(id => id.NullOrEmpty() == false)
+					.OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+					.ToArray();
+				var activePackageSet = new HashSet<string>(activePackages, StringComparer.OrdinalIgnoreCase);
+
+			var integrations = new[]
+			{
+				DescribeOptionalIntegration(
+					"Combat Extended",
+					"ceteam.combatextended",
+					activePackageSet,
+					new[]
+					{
+						ExternalMemberTypeMethod("armorReroute", "CombatExtended.Harmony.Harmony_DamageWorker_AddInjury_ApplyDamageToPart", "ArmorReroute"),
+						ExternalMemberTypeMethod("projectileLaunch", "CombatExtended.ProjectileCE", "Launch", new[] { typeof(Thing), typeof(Vector2), typeof(float), typeof(float), typeof(float), typeof(float), typeof(Thing), typeof(float) }),
+						ExternalMemberTypeMethod("afterArmorDamage", "CombatExtended.ArmorUtilityCE", "GetAfterArmorDamage", new[] { typeof(DamageInfo), typeof(Pawn), typeof(BodyPartRecord), typeof(bool).MakeByRefType(), typeof(bool).MakeByRefType(), typeof(bool).MakeByRefType() }),
+						ExternalMemberTypeMethod("ammoUser", "CombatExtended.CompAmmoUser", "TryReduceAmmoCount")
+					},
+					PatchedMethodsForPatchClass("CETools_Patch1")
+						.Concat(PatchedMethodsForPatchClass("CETools_Patch2"))
+						.Concat(PatchedMethodsForPatchClass("CETools_Patch3"))
+						.Concat(PatchedMethodsForPatchClass("CETools_Patch4"))
+						.ToArray()),
+				DescribeOptionalIntegration(
+					"Humanoid Alien Races",
+					"erdelf.humanoidalienraces",
+					activePackageSet,
+					new[]
+					{
+						ExternalMemberType("alienRaceDef", "AlienRace.ThingDef_AlienRace"),
+						ExternalMemberField("alienRaceSettings", "AlienRace.ThingDef_AlienRace", "alienRace"),
+						ExternalMemberField("compatibility", "AlienRace.ThingDef_AlienRace+AlienSettings", "compatibility"),
+						ExternalAlienFleshPawnMember()
+					},
+					Array.Empty<object>()),
+				DescribeOptionalIntegration(
+					"Vehicle Framework",
+					"SmashPhil.VehicleFramework",
+					activePackageSet,
+					new[]
+					{
+						ExternalMemberType("vehiclePawn", "Vehicles.VehiclePawn"),
+						ExternalMemberType("vehicleStatDefOf", "Vehicles.VehicleStatDefOf"),
+						ExternalMemberTypeMethod("vehicleGetStatValue", "Vehicles.VehiclePawn", "GetStatValue"),
+						ExternalMemberStringMethod("vehicleFleeDestination", "Vehicles.VehicleDamager:TryFindDirectFleeDestination")
+					},
+					PatchedMethodsForPatchOwner("net.pardeike.zombieland.vehicles")),
+				DescribeOptionalIntegration(
+					"Dubs Performance Analyzer",
+					"Dubwise.DubsPerformanceAnalyzer.steam",
+					activePackageSet,
+					new[]
+					{
+						ExternalMemberStringMethod("drawNamesPrefix", "Analyzer.Fixes.H_DrawNamesFix:Prefix")
+					},
+					PatchedMethodsForPatchOwner("net.pardeike.zombieland.dubs")),
+				DescribeOptionalIntegration(
+					"Save Our Ship 2",
+					"kentington.saveourship2",
+					activePackageSet,
+					new[]
+					{
+						ExternalMemberTypeMethod("shipInteriorIsHologram", "SaveOurShip2.ShipInteriorMod2", "IsHologram"),
+						ExternalMemberStringMethod("shipCombatGenerateShip", "RimWorld.ShipCombatManager:GenerateShip"),
+						ExternalMemberStringMethod("spaceSubMeshGenerateMesh", "SaveOurShip2.GenerateSpaceSubMesh:GenerateMesh")
+					},
+					PatchedMethodsForPatchClass("RimWorld_ShipCombatManager_GenerateShip_Patch")
+						.Concat(PatchedMethodsForPatchClass("SaveOurShip2_GenerateSpaceSubMesh_GenerateMesh_Patch"))
+						.Concat(PatchedMethodsForPatchClass("Map_MapUpdate_Patch"))
+						.ToArray()),
+				DescribeOptionalIntegration(
+					"RimConnect",
+					"betterscenes.rimconnect",
+					activePackageSet,
+					new[]
+					{
+						ExternalMemberTypeMethod("actionList", "RimConnection.ActionList", "GenerateActionList"),
+						ExternalMemberTypeMethod("actionExecute", "RimConnection.Action", "Execute"),
+						ExternalMemberStringMethod("badEventNotification", "RimConnection.AlertManager:BadEventNotification", new[] { typeof(string), typeof(IntVec3) }),
+						ExternalMemberStringMethod("settingsWindow", "RimConnection.Settings.CommandOptionSettings:DoWindowContents")
+					},
+					PatchedMethodsForPatchClass("RimConnection_Settings_CommandOptionSettings_Patch")
+						.Concat(PatchedMethodsForPatchOwner("net.pardeike.zombieland.rimconnect"))
+						.ToArray()),
+				DescribeOptionalIntegration(
+					"Camera+",
+					"brrainz.cameraplus",
+					activePackageSet,
+					new[]
+					{
+						InternalMemberMethod("cameraSupportColors", typeof(CameraPlusSupport.Methods), "GetCameraPlusColors"),
+						InternalMemberMethod("cameraSupportMarkers", typeof(CameraPlusSupport.Methods), "GetCameraPlusMarkers")
+					},
+					Array.Empty<object>())
+			};
+			var customization = DescribeCustomizationSupport();
+			var cameraMarkers = DescribeCameraPlusMarkerTextures();
+
+			return new
+			{
+				success = integrations.All(ObjectSuccess)
+					&& ObjectSuccess(customization)
+					&& ObjectSuccess(cameraMarkers),
+				activePackages,
+				integrations,
+				customization,
+				cameraMarkers
+			};
+		}
+
+		static object DescribeOptionalIntegration(string name, string packageId, HashSet<string> activePackageSet, OptionalMemberSnapshot[] members, object[] patchTargets)
+		{
+			var packageActive = activePackageSet.Contains(packageId);
+			var dependencyPresent = members.Any(member => member.typePresent || member.methodPresent || member.fieldPresent);
+			var missingMembers = dependencyPresent
+				? members.Where(member => member.success == false).ToArray()
+				: Array.Empty<OptionalMemberSnapshot>();
+			return new
+			{
+				success = packageActive
+					? dependencyPresent && missingMembers.Length == 0
+					: dependencyPresent == false || missingMembers.Length == 0,
+				name,
+				packageId,
+				packageActive,
+				dependencyPresent,
+				runtimeState = packageActive ? "active" : dependencyPresent ? "assembly_or_type_present_but_inactive" : "absent",
+				memberChecks = members,
+				missingMemberCount = missingMembers.Length,
+				missingMembers,
+				patchTargets,
+				patchTargetCount = patchTargets.Length
+			};
+		}
+
+		static object DescribeCustomizationSupport()
+		{
+			try
+			{
+				var type = typeof(Customization);
+				var canBecomeZombieCount = ((ICollection)type
+					.GetField("canBecomeZombieEvaluators", BindingFlags.Static | BindingFlags.NonPublic)
+					?.GetValue(null))?.Count ?? 0;
+				var attractsZombiesCount = ((ICollection)type
+					.GetField("attractsZombiesEvaluators", BindingFlags.Static | BindingFlags.NonPublic)
+					?.GetValue(null))?.Count ?? 0;
+				return new
+				{
+					success = true,
+					zombielandSupportAssemblies = canBecomeZombieCount + attractsZombiesCount,
+					canBecomeZombieCount,
+					attractsZombiesCount
+				};
+			}
+			catch (Exception ex)
+			{
+				return new
+				{
+					success = false,
+					error = ex.GetType().Name + ": " + ex.Message
+				};
+			}
+		}
+
+		static object DescribeCameraPlusMarkerTextures()
+		{
+			var inner = ContentFinder<Texture2D>.Get("InnerCameraMarker", false);
+			var outer = ContentFinder<Texture2D>.Get("OuterCameraMarker", false);
+			return new
+			{
+				success = inner != null && outer != null,
+				inner = inner?.name,
+				outer = outer?.name
+			};
+		}
+
+		static object[] PatchedMethodsForPatchOwner(string owner)
+		{
+			return Harmony.GetAllPatchedMethods()
+				.Select(method => new
+				{
+					method,
+					patchInfo = Harmony.GetPatchInfo(method)
+				})
+				.Select(entry => new
+				{
+					entry.method,
+					patches = (entry.patchInfo?.Prefixes ?? Enumerable.Empty<Patch>())
+						.Concat(entry.patchInfo?.Postfixes ?? Enumerable.Empty<Patch>())
+						.Concat(entry.patchInfo?.Transpilers ?? Enumerable.Empty<Patch>())
+						.Where(patch => patch.owner == owner)
+						.ToArray()
+				})
+				.Where(entry => entry.patches.Length > 0)
+				.Select(entry => new
+				{
+					method = entry.method.FullDescription(),
+					patchMethods = entry.patches.Select(patch => patch.PatchMethod?.FullDescription()).Distinct().OrderBy(text => text).ToArray()
+				})
+				.Cast<object>()
+				.ToArray();
+		}
+
+		static OptionalMemberSnapshot ExternalMemberType(string name, string typeName)
+		{
+			var type = AccessTools.TypeByName(typeName);
+			return new OptionalMemberSnapshot
+			{
+				success = type != null,
+				name = name,
+				typeName = typeName,
+				typePresent = type != null
+			};
+		}
+
+		static OptionalMemberSnapshot ExternalMemberField(string name, string typeName, string fieldName)
+		{
+			var type = AccessTools.TypeByName(typeName);
+			var field = type == null ? null : AccessTools.Field(type, fieldName);
+			return new OptionalMemberSnapshot
+			{
+				success = type != null && field != null,
+				name = name,
+				typeName = typeName,
+				memberName = fieldName,
+				typePresent = type != null,
+				fieldPresent = field != null,
+				resolvedMember = field == null ? null : $"{field.DeclaringType?.FullName}.{field.Name}"
+			};
+		}
+
+		static OptionalMemberSnapshot ExternalMemberTypeMethod(string name, string typeName, string methodName, Type[] parameters = null)
+		{
+			var type = AccessTools.TypeByName(typeName);
+			var method = type == null ? null : AccessTools.Method(type, methodName, parameters);
+			return new OptionalMemberSnapshot
+			{
+				success = type != null && method != null,
+				name = name,
+				typeName = typeName,
+				memberName = methodName,
+				typePresent = type != null,
+				methodPresent = method != null,
+				resolvedMember = method?.FullDescription()
+			};
+		}
+
+		static OptionalMemberSnapshot ExternalMemberStringMethod(string name, string methodName, Type[] parameters = null)
+		{
+			var method = AccessTools.Method(methodName, parameters);
+			return new OptionalMemberSnapshot
+			{
+				success = method != null,
+				name = name,
+				memberName = methodName,
+				methodPresent = method != null,
+				typePresent = method?.DeclaringType != null,
+				resolvedMember = method?.FullDescription()
+			};
+		}
+
+		static OptionalMemberSnapshot ExternalAlienFleshPawnMember()
+		{
+			var settingsType = AccessTools.TypeByName("AlienRace.ThingDef_AlienRace+AlienSettings");
+			var compatibilityField = settingsType == null ? null : AccessTools.Field(settingsType, "compatibility");
+			var method = compatibilityField?.FieldType == null ? null : AccessTools.Method(compatibilityField.FieldType, "IsFleshPawn");
+			return new OptionalMemberSnapshot
+			{
+				success = settingsType != null && compatibilityField != null && method != null,
+				name = "isFleshPawn",
+				typeName = compatibilityField?.FieldType?.FullName ?? "AlienRace.ThingDef_AlienRace+AlienSettings.compatibility",
+				memberName = "IsFleshPawn",
+				typePresent = settingsType != null,
+				fieldPresent = compatibilityField != null,
+				methodPresent = method != null,
+				resolvedMember = method?.FullDescription()
+			};
+		}
+
+		static OptionalMemberSnapshot InternalMemberMethod(string name, Type type, string methodName)
+		{
+			var method = AccessTools.Method(type, methodName);
+			return new OptionalMemberSnapshot
+			{
+				success = method != null,
+				name = name,
+				typeName = type.FullName,
+				memberName = methodName,
+				typePresent = type != null,
+				methodPresent = method != null,
+				resolvedMember = method?.FullDescription()
+			};
+		}
+
+		sealed class OptionalMemberSnapshot
+		{
+			public bool success;
+			public string name;
+			public string typeName;
+			public string memberName;
+			public bool typePresent;
+			public bool methodPresent;
+			public bool fieldPresent;
+			public string resolvedMember;
+		}
+
+		static object VerifyZombielandDefResolution()
+		{
+			var content = LoadedModManager.GetMod<ZombielandMod>()?.Content;
+			if (content == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not resolve the active Zombieland ModContentPack."
+				};
+			}
+
+			var allDefs = new List<Def>();
+			var typeCounts = new List<object>();
+			var databaseErrors = new List<object>();
+			foreach (var defType in GenDefDatabase.AllDefTypesWithDatabases().OrderBy(type => type.FullName, StringComparer.Ordinal))
+			{
+				try
+				{
+					var databaseType = typeof(DefDatabase<>).MakeGenericType(defType);
+					var property = databaseType.GetProperty("AllDefsListForReading", BindingFlags.Public | BindingFlags.Static);
+					if (property?.GetValue(null) is not IEnumerable loadedDefs)
+						continue;
+
+					var ownedDefs = loadedDefs
+						.OfType<Def>()
+						.Where(def => IsZombielandDef(def, content))
+						.OrderBy(def => def.defName, StringComparer.Ordinal)
+						.ToArray();
+					if (ownedDefs.Length == 0)
+						continue;
+
+					allDefs.AddRange(ownedDefs);
+					typeCounts.Add(new
+					{
+						type = defType.FullName,
+						count = ownedDefs.Length,
+						samples = ownedDefs.Take(8).Select(def => def.defName).ToArray()
+					});
+				}
+				catch (Exception ex)
+				{
+					databaseErrors.Add(new
+					{
+						type = defType.FullName,
+						error = ex.GetType().Name + ": " + ex.Message
+					});
+				}
+			}
+
+			var configErrors = allDefs
+				.SelectMany(DescribeDefConfigErrors)
+				.Take(50)
+				.ToArray();
+			var graphicResults = allDefs
+				.OfType<ThingDef>()
+				.Where(def => def.graphicData != null)
+				.Select(DescribeThingGraphicResolution)
+				.ToArray();
+			var graphicErrors = graphicResults
+				.Where(result => result.success == false)
+				.Take(50)
+				.ToArray();
+			var pawnKindGraphicResults = allDefs
+				.OfType<PawnKindDef>()
+				.SelectMany(DescribePawnKindGraphicResolution)
+				.ToArray();
+			var pawnKindGraphicErrors = pawnKindGraphicResults
+				.Where(result => result.success == false)
+				.Take(50)
+				.ToArray();
+			var soundResults = allDefs
+				.OfType<SoundDef>()
+				.OrderBy(def => def.defName, StringComparer.Ordinal)
+				.Select(DescribeSoundDefResolution)
+				.ToArray();
+			var soundErrors = soundResults
+				.Where(result => result.success == false)
+				.Take(50)
+				.ToArray();
+			var classResolutionErrors = allDefs
+				.SelectMany(DescribeDefClassResolution)
+				.Take(50)
+				.ToArray();
+
+			return new
+			{
+				success = allDefs.Count > 0
+					&& databaseErrors.Count == 0
+					&& configErrors.Length == 0
+					&& graphicErrors.Length == 0
+					&& pawnKindGraphicErrors.Length == 0
+					&& soundErrors.Length == 0
+					&& classResolutionErrors.Length == 0,
+				mod = new
+				{
+					name = content.Name,
+					packageId = content.PackageIdPlayerFacing
+				},
+				totalDefs = allDefs.Count,
+				typeCounts = typeCounts.ToArray(),
+				configErrorCount = configErrors.Length,
+				configErrors,
+				classResolutionErrorCount = classResolutionErrors.Length,
+				classResolutionErrors,
+				graphics = new
+				{
+					checkedThingDefs = graphicResults.Length,
+					errorCount = graphicErrors.Length,
+					errors = graphicErrors
+				},
+				pawnKindGraphics = new
+				{
+					checkedStages = pawnKindGraphicResults.Length,
+					errorCount = pawnKindGraphicErrors.Length,
+					errors = pawnKindGraphicErrors
+				},
+				sounds = new
+				{
+					checkedDefs = soundResults.Length,
+					errorCount = soundErrors.Length,
+					errors = soundErrors,
+					sustainDefs = soundResults
+						.Where(result => result is SoundResolutionSnapshot snapshot && snapshot.sustain)
+						.Select(result => ((SoundResolutionSnapshot)result).defName)
+						.ToArray()
+				},
+				databaseErrorCount = databaseErrors.Count,
+				databaseErrors = databaseErrors.ToArray()
+			};
+		}
+
+		static bool IsZombielandDef(Def def, ModContentPack content)
+		{
+			return def?.modContentPack == content
+				|| string.Equals(def?.modContentPack?.PackageIdPlayerFacing, "brrainz.zombieland", StringComparison.OrdinalIgnoreCase);
+		}
+
+		static IEnumerable<object> DescribeDefConfigErrors(Def def)
+		{
+			IEnumerable<string> errors;
+			try
+			{
+				errors = def.ConfigErrors() ?? Enumerable.Empty<string>();
+			}
+			catch (Exception ex)
+			{
+				return new object[]
+				{
+					new
+					{
+						def = DescribeDefIdentity(def),
+						error = ex.GetType().Name + ": " + ex.Message
+					}
+				};
+			}
+
+			return errors
+				.Where(error => error.NullOrEmpty() == false)
+				.Select(error => new
+				{
+					def = DescribeDefIdentity(def),
+					error
+				});
+		}
+
+		static IEnumerable<object> DescribeDefClassResolution(Def def)
+		{
+			foreach (var fieldName in new[] { "thingClass", "workerClass", "driverClass", "stateClass", "needClass", "hediffClass", "giverClass" })
+			{
+				var field = def.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+				if (field == null || field.GetValue(def) is not Type type)
+					continue;
+				if (type.Assembly == null)
+				{
+					yield return new
+					{
+						def = DescribeDefIdentity(def),
+						field = fieldName,
+						type = type.FullName,
+						error = "Type has no assembly."
+					};
+				}
+			}
+		}
+
+		static DefGraphicResolutionSnapshot DescribeThingGraphicResolution(ThingDef def)
+		{
+			try
+			{
+				var graphic = def.graphicData.Graphic;
+				var material = graphic?.MatSingle;
+				var uiIcon = def.uiIcon;
+				var success = graphic != null && material.NullOrBad() == false;
+				return new DefGraphicResolutionSnapshot
+				{
+					success = success,
+					defName = def.defName,
+					type = def.GetType().FullName,
+					texPath = def.graphicData.texPath,
+					graphicClass = def.graphicData.graphicClass?.FullName,
+					graphicType = graphic?.GetType().FullName,
+					material = material?.name,
+					uiIcon = uiIcon?.name,
+					uiIconBad = uiIcon.NullOrBad(),
+					error = success ? null : "Graphic or material resolved null/bad."
+				};
+			}
+			catch (Exception ex)
+			{
+				return new DefGraphicResolutionSnapshot
+				{
+					success = false,
+					defName = def.defName,
+					type = def.GetType().FullName,
+					texPath = def.graphicData?.texPath,
+					graphicClass = def.graphicData?.graphicClass?.FullName,
+					error = ex.GetType().Name + ": " + ex.Message
+				};
+			}
+		}
+
+		static IEnumerable<DefGraphicResolutionSnapshot> DescribePawnKindGraphicResolution(PawnKindDef def)
+		{
+			if (def.lifeStages == null)
+				yield break;
+			for (var i = 0; i < def.lifeStages.Count; i++)
+			{
+				var graphicData = def.lifeStages[i]?.bodyGraphicData;
+				if (graphicData == null)
+					continue;
+				yield return DescribePawnKindGraphicResolution(def, i, graphicData);
+			}
+		}
+
+		static DefGraphicResolutionSnapshot DescribePawnKindGraphicResolution(PawnKindDef def, int stageIndex, GraphicData graphicData)
+		{
+			try
+			{
+				var graphic = graphicData.Graphic;
+				var material = graphic?.MatSingle;
+				var success = graphic != null && material.NullOrBad() == false;
+				return new DefGraphicResolutionSnapshot
+				{
+					success = success,
+					defName = def.defName,
+					type = def.GetType().FullName,
+					stageIndex = stageIndex,
+					texPath = graphicData.texPath,
+					graphicClass = graphicData.graphicClass?.FullName,
+					graphicType = graphic?.GetType().FullName,
+					material = material?.name,
+					error = success ? null : "PawnKind body graphic or material resolved null/bad."
+				};
+			}
+			catch (Exception ex)
+			{
+				return new DefGraphicResolutionSnapshot
+				{
+					success = false,
+					defName = def.defName,
+					type = def.GetType().FullName,
+					stageIndex = stageIndex,
+					texPath = graphicData.texPath,
+					graphicClass = graphicData.graphicClass?.FullName,
+					error = ex.GetType().Name + ": " + ex.Message
+				};
+			}
+		}
+
+		static SoundResolutionSnapshot DescribeSoundDefResolution(SoundDef def)
+		{
+			try
+			{
+				var subSounds = def.subSounds ?? new List<SubSoundDef>();
+				var subSoundSnapshots = subSounds
+					.Select((subSound, index) => DescribeSubSoundResolution(def, subSound, index))
+					.ToArray();
+				var success = def.isUndefined == false
+					&& subSounds.Count > 0
+					&& subSoundSnapshots.All(snapshot => snapshot.success)
+					&& (def.sustainStartSound == null || def.sustainStartSound.isUndefined == false)
+					&& (def.sustainStopSound == null || def.sustainStopSound.isUndefined == false)
+					&& (def.sustainFadeoutStartSound == null || def.sustainFadeoutStartSound.isUndefined == false);
+				return new SoundResolutionSnapshot
+				{
+					success = success,
+					defName = def.defName,
+					sustain = def.sustain,
+					subSoundCount = subSounds.Count,
+					totalResolvedGrains = subSoundSnapshots.Sum(snapshot => snapshot.resolvedGrainCount),
+					sustainStartSound = def.sustainStartSound?.defName,
+					sustainStopSound = def.sustainStopSound?.defName,
+					sustainFadeoutStartSound = def.sustainFadeoutStartSound?.defName,
+					subSounds = subSoundSnapshots,
+					error = success ? null : "SoundDef has no subsounds, unresolved grains, or undefined sustain references."
+				};
+			}
+			catch (Exception ex)
+			{
+				return new SoundResolutionSnapshot
+				{
+					success = false,
+					defName = def.defName,
+					error = ex.GetType().Name + ": " + ex.Message
+				};
+			}
+		}
+
+		static SubSoundResolutionSnapshot DescribeSubSoundResolution(SoundDef parent, SubSoundDef subSound, int index)
+		{
+			var resolvedGrainCount = 0;
+			var error = (string)null;
+			try
+			{
+				var field = typeof(SubSoundDef).GetField("resolvedGrains", BindingFlags.Instance | BindingFlags.NonPublic);
+				if (field?.GetValue(subSound) is ICollection grains)
+					resolvedGrainCount = grains.Count;
+				else
+					error = "Could not read private resolvedGrains collection.";
+			}
+			catch (Exception ex)
+			{
+				error = ex.GetType().Name + ": " + ex.Message;
+			}
+
+			return new SubSoundResolutionSnapshot
+			{
+				success = error == null && subSound.grains.Count > 0 && resolvedGrainCount > 0,
+				index = index,
+				name = subSound.name,
+				grains = subSound.grains.Count,
+				resolvedGrainCount = resolvedGrainCount,
+				error = error ?? (subSound.grains.Count == 0 ? "SubSound has no grains." : resolvedGrainCount == 0 ? $"{parent.defName} subSound has no resolved grains." : null)
+			};
+		}
+
+		static object DescribeDefIdentity(Def def)
+		{
+			return new
+			{
+				defName = def?.defName,
+				type = def?.GetType().FullName,
+				fileName = def?.fileName
+			};
+		}
+
+		sealed class DefGraphicResolutionSnapshot
+		{
+			public bool success;
+			public string defName;
+			public string type;
+			public int? stageIndex;
+			public string texPath;
+			public string graphicClass;
+			public string graphicType;
+			public string material;
+			public string uiIcon;
+			public bool uiIconBad;
+			public string error;
+		}
+
+		sealed class SoundResolutionSnapshot
+		{
+			public bool success;
+			public string defName;
+			public bool sustain;
+			public int subSoundCount;
+			public int totalResolvedGrains;
+			public string sustainStartSound;
+			public string sustainStopSound;
+			public string sustainFadeoutStartSound;
+			public SubSoundResolutionSnapshot[] subSounds;
+			public string error;
+		}
+
+		sealed class SubSoundResolutionSnapshot
+		{
+			public bool success;
+			public int index;
+			public string name;
+			public int grains;
+			public int resolvedGrainCount;
+			public string error;
+		}
 
 			static object VerifyStartupAssets()
 			{
@@ -527,6 +1234,83 @@ namespace ZombieLand
 				limit = cappedLimit,
 				zombies
 			};
+		}
+
+		[Tool("zombieland/sound_events_state", Description = "Start, stop, clear, or read RimWorld's built-in debug sound-event recorder for reusable audio trigger evidence.")]
+		public static object SoundEventsState(
+			[ToolParameter(Description = "Action to perform: begin, read, clear, or end.", Required = false, DefaultValue = "read")] string action = "read",
+			[ToolParameter(Description = "Optional case-insensitive substring used to filter returned event lines.", Required = false, DefaultValue = "")] string filter = "",
+			[ToolParameter(Description = "Maximum number of event lines to return.", Required = false, DefaultValue = 80)] int limit = 80)
+		{
+			var normalized = (action ?? "read").Trim().ToLowerInvariant();
+			if (normalized != "begin" && normalized != "read" && normalized != "clear" && normalized != "end")
+			{
+				return new
+				{
+					success = false,
+					error = "Unsupported action. Use begin, read, clear, or end.",
+					writeSoundEventsRecord = DebugViewSettings.writeSoundEventsRecord
+				};
+			}
+
+			var clearSucceeded = false;
+			if (normalized == "begin")
+			{
+				if (soundEventsPreviousWriteState.HasValue == false)
+					soundEventsPreviousWriteState = DebugViewSettings.writeSoundEventsRecord;
+				DebugViewSettings.writeSoundEventsRecord = true;
+				clearSucceeded = ClearDebugSoundEvents();
+			}
+			else if (normalized == "clear")
+				clearSucceeded = ClearDebugSoundEvents();
+			else if (normalized == "end")
+			{
+				if (soundEventsPreviousWriteState.HasValue)
+					DebugViewSettings.writeSoundEventsRecord = soundEventsPreviousWriteState.Value;
+				else
+					DebugViewSettings.writeSoundEventsRecord = false;
+				soundEventsPreviousWriteState = null;
+			}
+
+			var cappedLimit = Math.Max(1, Math.Min(limit, 500));
+			var filterText = (filter ?? "").Trim();
+			var events = ReadDebugSoundEventLines()
+				.Where(line => filterText.Length == 0 || line.IndexOf(filterText, StringComparison.OrdinalIgnoreCase) >= 0)
+				.Take(cappedLimit)
+				.ToArray();
+
+			return new
+			{
+				success = true,
+				action = normalized,
+				writeSoundEventsRecord = DebugViewSettings.writeSoundEventsRecord,
+				previousWriteSoundEventsRecord = soundEventsPreviousWriteState,
+				clearSucceeded = normalized == "begin" || normalized == "clear" ? clearSucceeded : null as bool?,
+				filter = filterText,
+				count = events.Length,
+				limit = cappedLimit,
+				events
+			};
+		}
+
+		static bool ClearDebugSoundEvents()
+		{
+			var queue = AccessTools.Field(typeof(DebugSoundEventsLog), "queue")?.GetValue(null);
+			var clear = queue == null ? null : AccessTools.Method(queue.GetType(), "Clear");
+			if (queue == null || clear == null)
+				return false;
+			clear.Invoke(queue, Array.Empty<object>());
+			return true;
+		}
+
+		static string[] ReadDebugSoundEventLines()
+		{
+			var text = DebugSoundEventsLog.EventsListingDebugString ?? "";
+			return text
+				.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+				.Select(line => line.Trim())
+				.Where(line => line.Length > 0)
+				.ToArray();
 		}
 
 		[Tool("zombieland/defensive_defaults_contract", Description = "Verify legacy defensive defaults do not throw when old/corrupt enum-style state is encountered.")]

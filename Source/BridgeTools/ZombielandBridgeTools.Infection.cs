@@ -862,6 +862,824 @@ namespace ZombieLand
 			return true;
 		}
 
+		const string InfectionWorkflowPrefix = "ZL_Infection_";
+		const string InfectionWorkflowDoctorName = "ZL_Infection_Doctor";
+		const string InfectionWorkflowHiddenName = "ZL_Infection_Hidden_Alert";
+		const string InfectionWorkflowCureName = "ZL_Infection_Cure_Patient";
+		const string InfectionWorkflowInfectingName = "ZL_Infection_Infecting_Alert";
+		const string InfectionWorkflowCountdownName = "ZL_Infection_Countdown_Corpse";
+		const string InfectionWorkflowDoubleTapName = "ZL_Infection_DoubleTap_Corpse";
+		const string InfectionWorkflowZombieCorpseName = "ZL_Infection_Extract_Zombie";
+
+		sealed class WorkflowAlertSnapshot
+		{
+			public string label;
+			public bool active;
+			public int count;
+			public string[] ids;
+			public string[] names;
+			public string explanation;
+		}
+
+		sealed class WorkflowAlertsSnapshot
+		{
+			public WorkflowAlertSnapshot hidden;
+			public WorkflowAlertSnapshot imminent;
+			public WorkflowAlertSnapshot infecting;
+			public string[] needPatchTracked;
+		}
+
+		sealed class WorkflowCorpseConversionSnapshot
+		{
+			public int infectionCount;
+			public int[] ticksWhenBecomingZombie;
+			public int ticksUntilConversion;
+			public bool hasBrain;
+			public bool queued;
+		}
+
+		[Tool("zombieland/infection_workflow_state", Description = "Set up, read, or execute the reusable S-Infection-Medical workflow: alerts, cure, double-tap, serum extraction, and corpse-conversion save-load state.")]
+		public static object InfectionWorkflowState(
+			[ToolParameter(Description = "Action mode: setup, read, or execute.", Required = false, DefaultValue = "read")] string actionMode = "read")
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var normalizedMode = (actionMode ?? "read").Trim().ToLowerInvariant();
+			if (normalizedMode == "setup")
+				return SetupInfectionWorkflow(map);
+			if (normalizedMode == "execute")
+				return ExecuteInfectionWorkflow(map);
+			if (normalizedMode == "read")
+				return ReadInfectionWorkflow(map, "read");
+
+			return new
+			{
+				success = false,
+				actionMode = normalizedMode,
+				error = "Unsupported infection_workflow_state actionMode. Use setup, read, or execute."
+			};
+		}
+
+		static object SetupInfectionWorkflow(Map map)
+		{
+			var patchTargets = InfectionWorkflowPatchTargets();
+			CleanupInfectionWorkflow(map);
+			ZombieSettings.Values.zombieBiteInfectionChance = 1f;
+			ZombieSettings.Values.hoursAfterDeathToBecomeZombie = 2;
+			ZombieSettings.Values.corpsesExtractAmount = Math.Max(1f, ZombieSettings.Values.corpsesExtractAmount);
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryFindClearSpawnCell(map, root, 20f, out var doctorCell, out var doctorError) == false)
+				return doctorError;
+
+			var doctor = CreateWorkflowColonist(map, doctorCell, InfectionWorkflowDoctorName, true);
+			var spawned = new List<Thing> { doctor };
+			try
+			{
+				var hidden = SpawnWorkflowColonistNear(map, doctorCell + new IntVec3(3, 0, 0), InfectionWorkflowHiddenName, spawned);
+				var curePatient = SpawnWorkflowColonistNear(map, doctorCell + new IntVec3(6, 0, 0), InfectionWorkflowCureName, spawned);
+				var infecting = SpawnWorkflowColonistNear(map, doctorCell + new IntVec3(9, 0, 0), InfectionWorkflowInfectingName, spawned);
+				var countdownPawn = SpawnWorkflowColonistNear(map, doctorCell + new IntVec3(0, 0, 4), InfectionWorkflowCountdownName, spawned);
+				var doubleTapPawn = SpawnWorkflowColonistNear(map, doctorCell + new IntVec3(3, 0, 4), InfectionWorkflowDoubleTapName, spawned);
+				var zombieCell = FindWorkflowCell(map, doctorCell + new IntVec3(6, 0, 4));
+
+				if (AddWorkflowZombieBite(hidden, "harmful", out var hiddenBite, out var error) == false)
+					return InfectionWorkflowFailure("setup-hidden-bite", error, spawned);
+				ForceHiddenBite(hiddenBite);
+				SetPawnInfectionStateFromBite(hidden, hiddenBite);
+
+				if (AddWorkflowZombieBite(curePatient, "harmful", out var cureBite, out error) == false)
+					return InfectionWorkflowFailure("setup-cure-bite", error, spawned);
+				SetPawnInfectionStateFromBite(curePatient, cureBite);
+
+				if (AddWorkflowZombieBite(infecting, "final", out var infectingBite, out error) == false)
+					return InfectionWorkflowFailure("setup-infecting-bite", error, spawned);
+				SetPawnInfectionStateFromBite(infecting, infectingBite);
+
+				if (AddWorkflowZombieBite(countdownPawn, "final", out var countdownBite, out error) == false)
+					return InfectionWorkflowFailure("setup-countdown-bite", error, spawned);
+				ClearWorkflowApparel(countdownPawn);
+				if (ZombieRuntimeActions.KillPawnToCorpse(countdownPawn, out var countdownCorpse, out error) == false)
+					return InfectionWorkflowFailure("setup-countdown-kill", error, spawned);
+				var countdownTicks = SetCorpseConversionTicks(countdownCorpse, GenTicks.TicksGame + 2500);
+
+				if (AddWorkflowZombieBite(doubleTapPawn, "final", out var doubleTapBite, out error) == false)
+					return InfectionWorkflowFailure("setup-doubletap-bite", error, spawned);
+				ClearWorkflowApparel(doubleTapPawn);
+				if (ZombieRuntimeActions.KillPawnToCorpse(doubleTapPawn, out var doubleTapCorpse, out error) == false)
+					return InfectionWorkflowFailure("setup-doubletap-kill", error, spawned);
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+					return InfectionWorkflowFailure("setup-zombie", "ZombieGenerator.SpawnZombie returned no zombie.", spawned);
+				zombie.Name = new NameSingle(InfectionWorkflowZombieCorpseName);
+				zombie.Kill(null);
+				var zombieCorpse = zombie.Corpse as ZombieCorpse
+					?? map.listerThings.AllThings.OfType<ZombieCorpse>().OrderBy(thing => thing.Position.DistanceToSquared(zombieCell)).FirstOrDefault();
+				if (zombieCorpse == null)
+					return InfectionWorkflowFailure("setup-zombie-corpse", "Killing the workflow zombie did not leave a ZombieCorpse.", spawned);
+				TrackZombieCorpse(map, zombieCorpse);
+
+				var state = ReadInfectionWorkflow(map, "setup");
+				return new
+				{
+					success = ObjectSuccess(state),
+					actionMode = "setup",
+					patchTargets,
+					doctor = DescribePawn(doctor),
+					fixture = state,
+					countdownTicks,
+					bites = new
+					{
+						hidden = DescribeWorkflowBite(hiddenBite),
+						cure = DescribeWorkflowBite(cureBite),
+						infecting = DescribeWorkflowBite(infectingBite),
+						countdown = DescribeWorkflowBite(countdownBite),
+						doubleTap = DescribeWorkflowBite(doubleTapBite)
+					},
+					corpses = new
+					{
+						countdown = DescribeCorpse(countdownCorpse),
+						doubleTap = DescribeCorpse(doubleTapCorpse),
+						zombie = DescribeCorpse(zombieCorpse)
+					}
+				};
+			}
+			catch (Exception ex)
+			{
+				return new
+				{
+					success = false,
+					actionMode = "setup",
+					error = ex.ToString()
+				};
+			}
+		}
+
+		static object ReadInfectionWorkflow(Map map, string actionMode)
+		{
+			var doctor = FindWorkflowPawn(map, InfectionWorkflowDoctorName);
+			var hidden = FindWorkflowPawn(map, InfectionWorkflowHiddenName);
+			var curePatient = FindWorkflowPawn(map, InfectionWorkflowCureName);
+			var infecting = FindWorkflowPawn(map, InfectionWorkflowInfectingName);
+			var countdownCorpse = FindWorkflowCorpse(map, InfectionWorkflowCountdownName);
+			var doubleTapCorpse = FindWorkflowCorpse(map, InfectionWorkflowDoubleTapName);
+			var zombieCorpse = FindWorkflowCorpse(map, InfectionWorkflowZombieCorpseName) as ZombieCorpse;
+			var conversionQueue = map.GetComponent<TickManager>()?.colonistsToConvert;
+			var alerts = DescribeInfectionAlerts();
+			var countdown = DescribeWorkflowCorpseConversion(countdownCorpse, conversionQueue);
+			var doubleTap = DescribeWorkflowCorpseConversion(doubleTapCorpse, conversionQueue);
+
+			return new
+			{
+				success = doctor != null
+					&& hidden != null
+					&& curePatient != null
+					&& infecting != null
+					&& countdownCorpse != null
+					&& doubleTapCorpse != null
+					&& zombieCorpse != null
+					&& alerts.hidden.count == 1
+					&& alerts.imminent.count == 1
+					&& alerts.infecting.count == 1
+					&& countdown.infectionCount == 1
+					&& countdown.ticksUntilConversion > 0
+					&& doubleTap.hasBrain
+					&& zombieCorpse.Spawned,
+				actionMode,
+				tick = GenTicks.TicksGame,
+				patchTargets = InfectionWorkflowPatchTargets(),
+				pawns = new
+				{
+					doctor = DescribePawn(doctor),
+					hidden = DescribePawn(hidden),
+					curePatient = DescribePawn(curePatient),
+					infecting = DescribePawn(infecting)
+				},
+				infections = new
+				{
+					hidden = ZombieRuntimeActions.DescribePawnInfection(hidden),
+					curePatient = ZombieRuntimeActions.DescribePawnInfection(curePatient),
+					infecting = ZombieRuntimeActions.DescribePawnInfection(infecting)
+				},
+				corpses = new
+				{
+					countdown = DescribeCorpse(countdownCorpse),
+					doubleTap = DescribeCorpse(doubleTapCorpse),
+					zombie = DescribeCorpse(zombieCorpse)
+				},
+				conversion = new
+				{
+					queueCount = conversionQueue?.Count ?? -1,
+					countdown,
+					doubleTap
+				},
+				alerts,
+				extract = new
+				{
+					stackCount = CountWorkflowExtract(map),
+					zombieCorpseTracked = map.GetComponent<TickManager>()?.allZombieCorpses?.Contains(zombieCorpse) ?? false
+				}
+			};
+		}
+
+		static object ExecuteInfectionWorkflow(Map map)
+		{
+			var before = ReadInfectionWorkflow(map, "before-execute");
+			var doctor = FindWorkflowPawn(map, InfectionWorkflowDoctorName);
+			var curePatient = FindWorkflowPawn(map, InfectionWorkflowCureName);
+			var countdownCorpse = FindWorkflowCorpse(map, InfectionWorkflowCountdownName);
+			var doubleTapCorpse = FindWorkflowCorpse(map, InfectionWorkflowDoubleTapName);
+			var zombieCorpse = FindWorkflowCorpse(map, InfectionWorkflowZombieCorpseName) as ZombieCorpse;
+			if (doctor == null || curePatient == null || countdownCorpse == null || doubleTapCorpse == null || zombieCorpse == null)
+			{
+				return new
+				{
+					success = false,
+					actionMode = "execute",
+					before,
+					error = "The infection workflow fixture is incomplete. Run setup and save/load before execute."
+				};
+			}
+
+			var cure = ExecuteWorkflowCure(doctor, curePatient);
+			var doubleTap = ExecuteWorkflowDoubleTap(doctor, doubleTapCorpse);
+			var extract = ExecuteWorkflowExtract(doctor, zombieCorpse);
+			var conversion = ExecuteWorkflowCountdownConversion(map, countdownCorpse);
+			var after = ReadInfectionWorkflowAfterExecute(map);
+
+			return new
+			{
+				success = ObjectSuccess(before)
+					&& ObjectSuccess(cure)
+					&& ObjectSuccess(doubleTap)
+					&& ObjectSuccess(extract)
+					&& ObjectSuccess(conversion)
+					&& ObjectSuccess(after),
+				actionMode = "execute",
+				before,
+				cure,
+				doubleTap,
+				extract,
+				conversion,
+				after
+			};
+		}
+
+		static object ReadInfectionWorkflowAfterExecute(Map map)
+		{
+			var doctor = FindWorkflowPawn(map, InfectionWorkflowDoctorName);
+			var hidden = FindWorkflowPawn(map, InfectionWorkflowHiddenName);
+			var curePatient = FindWorkflowPawn(map, InfectionWorkflowCureName);
+			var infecting = FindWorkflowPawn(map, InfectionWorkflowInfectingName);
+			var countdownCorpse = FindWorkflowCorpse(map, InfectionWorkflowCountdownName);
+			var doubleTapCorpse = FindWorkflowCorpse(map, InfectionWorkflowDoubleTapName);
+			var zombieCorpse = FindWorkflowCorpse(map, InfectionWorkflowZombieCorpseName);
+			var converted = CurrentZombies(map)
+				.Where(zombie => zombie.Name?.ToStringShort == InfectionWorkflowCountdownName)
+				.Select(DescribeZombie)
+				.ToArray();
+			var alerts = DescribeInfectionAlerts();
+
+			return new
+			{
+				success = doctor != null
+					&& hidden != null
+					&& curePatient != null
+					&& infecting != null
+					&& countdownCorpse == null
+					&& doubleTapCorpse != null
+					&& zombieCorpse == null
+					&& converted.Length == 1
+					&& alerts.hidden.count == 1
+					&& alerts.imminent.count == 0
+					&& alerts.infecting.count == 1,
+				actionMode = "after-execute",
+				pawns = new
+				{
+					doctor = DescribePawn(doctor),
+					hidden = DescribePawn(hidden),
+					curePatient = DescribePawn(curePatient),
+					infecting = DescribePawn(infecting)
+				},
+				infections = new
+				{
+					hidden = ZombieRuntimeActions.DescribePawnInfection(hidden),
+					curePatient = ZombieRuntimeActions.DescribePawnInfection(curePatient),
+					infecting = ZombieRuntimeActions.DescribePawnInfection(infecting)
+				},
+				corpses = new
+				{
+					countdown = DescribeCorpse(countdownCorpse),
+					doubleTap = DescribeCorpse(doubleTapCorpse),
+					zombie = DescribeCorpse(zombieCorpse)
+				},
+				converted,
+				alerts,
+				extractStackCount = CountWorkflowExtract(map)
+			};
+		}
+
+		static object ExecuteWorkflowCure(Pawn doctor, Pawn patient)
+		{
+			var recipe = CustomDefs.CureZombieInfection;
+			var worker = recipe?.Worker;
+			var serumDef = DefDatabase<ThingDef>.GetNamed("ZombieSerumSimple", false);
+			var partsBefore = worker?.GetPartsToApplyOn(patient, recipe).ToArray() ?? Array.Empty<BodyPartRecord>();
+			if (recipe == null || worker == null || serumDef == null || partsBefore.Length == 0)
+			{
+				return new
+				{
+					success = false,
+					doctor = DescribePawn(doctor),
+					patient = DescribePawn(patient),
+					recipeFound = recipe != null,
+					workerFound = worker != null,
+					serumFound = serumDef != null,
+					curablePartCount = partsBefore.Length,
+					error = "The workflow cure step could not find a recipe worker, serum, or curable bite part."
+				};
+			}
+
+			var infectionBefore = ZombieRuntimeActions.DescribePawnInfection(patient);
+			var part = partsBefore.First();
+			var serum = ThingMaker.MakeThing(serumDef);
+			worker.ApplyOnPawn(patient, part, doctor, new List<Thing> { serum }, null);
+			var bites = patient.GetHediffsList<Hediff_Injury_ZombieBite>().ToArray();
+			foreach (var bite in bites)
+				SetPawnInfectionStateFromBite(patient, bite);
+			var partsAfter = worker.GetPartsToApplyOn(patient, recipe).ToArray();
+			var infectionAfter = ZombieRuntimeActions.DescribePawnInfection(patient);
+			var alertsAfter = DescribeInfectionAlerts();
+			var patientId = ZombieRuntimeActions.StableThingId(patient);
+			var patientStillAlerted = alertsAfter.hidden.ids.Contains(patientId)
+				|| alertsAfter.imminent.ids.Contains(patientId)
+				|| alertsAfter.infecting.ids.Contains(patientId);
+
+			return new
+			{
+				success = partsBefore.Length > 0
+					&& partsAfter.Length == 0
+					&& patientStillAlerted == false
+					&& bites.All(bite => bite.TendDuration?.GetInfectionState() == InfectionState.BittenHarmless)
+					&& bites.All(bite => bite.mayBecomeZombieWhenDead == false),
+				doctor = DescribePawn(doctor),
+				patient = DescribePawn(patient),
+				curedPart = DescribeBodyPart(part),
+				curablePartCountBefore = partsBefore.Length,
+				curablePartCountAfter = partsAfter.Length,
+				infectionBefore,
+				infectionAfter,
+				bites = bites.Select(DescribeWorkflowBite).ToArray(),
+				patientStillAlerted,
+				alertsAfter
+			};
+		}
+
+		static object ExecuteWorkflowDoubleTap(Pawn actor, Corpse corpse)
+		{
+			var brainBefore = corpse?.InnerPawn?.health?.hediffSet?.GetBrain();
+			var queue = actor?.Map?.GetComponent<TickManager>()?.colonistsToConvert;
+			var jobResult = RunWorkflowJob(
+				actor,
+				corpse,
+				new WorkGiver_DoubleTap(),
+				2 + (int)Math.Ceiling(100f / (Math.Max(0.1f, actor.GetStatValue(StatDefOf.MeleeDPS, true)) * 4f) + 1f) * 80,
+				tick => corpse?.InnerPawn?.health?.hediffSet?.GetBrain() == null);
+			var brainAfter = corpse?.InnerPawn?.health?.hediffSet?.GetBrain();
+			var queueBeforeTrigger = queue?.Count ?? -1;
+			SetCorpseConversionTicks(corpse, GenTicks.TicksGame - 1);
+			corpse?.TickRare();
+			var queueAfterTrigger = queue?.Count ?? -1;
+			var queuedAfterTrigger = queue?.Contains(corpse) ?? false;
+
+			return new
+			{
+				success = ObjectSuccess(jobResult)
+					&& brainBefore != null
+					&& brainAfter == null
+					&& queuedAfterTrigger == false
+					&& queueAfterTrigger == queueBeforeTrigger,
+				actor = DescribePawn(actor),
+				corpse = DescribeCorpse(corpse),
+				brainBefore = brainBefore?.def?.defName,
+				brainAfter = brainAfter?.def?.defName,
+				jobResult,
+				queueBeforeTrigger,
+				queueAfterTrigger,
+				queuedAfterTrigger,
+				conversion = DescribeWorkflowCorpseConversion(corpse, queue)
+			};
+		}
+
+		static object ExecuteWorkflowExtract(Pawn actor, ZombieCorpse corpse)
+		{
+			var map = actor?.Map;
+			TrackZombieCorpse(map, corpse);
+			var before = CountWorkflowExtract(map);
+			var jobResult = RunWorkflowJob(
+				actor,
+				corpse,
+				new WorkGiver_ExtractZombieSerum(),
+				120 + (int)Math.Ceiling(100f / (Math.Max(0.1f, actor.GetStatValue(StatDefOf.MedicalTendSpeed, true)) / 2f)),
+				tick => (corpse?.Destroyed ?? true) || corpse?.Spawned == false || CountWorkflowExtract(map) > before);
+			var after = CountWorkflowExtract(map);
+			var corpseGone = corpse == null || corpse.Destroyed || corpse.Spawned == false;
+
+			return new
+			{
+				success = ObjectSuccess(jobResult)
+					&& corpseGone
+					&& after > before,
+				actor = DescribePawn(actor),
+				corpse = DescribeCorpse(corpse),
+				jobResult,
+				extractBefore = before,
+				extractAfter = after,
+				extractDelta = after - before,
+				expectedExtractPerZombie = Tools.ExtractPerZombie(),
+				corpseGone
+			};
+		}
+
+		static object ExecuteWorkflowCountdownConversion(Map map, Corpse corpse)
+		{
+			var before = CurrentZombies(map).Select(ZombieRuntimeActions.StableThingId).ToHashSet();
+			var persisted = DescribeWorkflowCorpseConversion(corpse, map.GetComponent<TickManager>()?.colonistsToConvert);
+			var ticksBefore = SetCorpseConversionTicks(corpse, GenTicks.TicksGame - 1);
+			var queue = map.GetComponent<TickManager>()?.colonistsToConvert;
+			var queueCountBeforeTickRare = queue?.Count ?? -1;
+			corpse?.TickRare();
+			var queueCountAfterTickRare = queue?.Count ?? -1;
+			var queuedAfterTickRare = queue?.Contains(corpse) ?? false;
+			var convertedQueuedCorpse = ZombieRuntimeActions.RunQueuedConversion(map, corpse, out var queueCountBeforeRun, out var queueCountAfterRun, out var error);
+			var newZombies = CurrentZombies(map)
+				.Where(zombie => before.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+				.Select(DescribeZombie)
+				.ToArray();
+
+			return new
+			{
+				success = persisted.infectionCount == 1
+					&& persisted.ticksUntilConversion > 0
+					&& queuedAfterTickRare
+					&& convertedQueuedCorpse
+					&& newZombies.Length == 1,
+				persisted,
+				ticksBefore,
+				queueCountBeforeTickRare,
+				queueCountAfterTickRare,
+				queuedAfterTickRare,
+				convertedQueuedCorpse,
+				queueCountBeforeRun,
+				queueCountAfterRun,
+				error,
+				newZombieCount = newZombies.Length,
+				newZombies
+			};
+		}
+
+		static object RunWorkflowJob(Pawn actor, Thing target, WorkGiver_Scanner workGiver, int maxTicks, Func<int, bool> done)
+		{
+			if (actor == null || target == null || workGiver == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					target = StableId(target),
+					error = "RunWorkflowJob requires an actor, target, and workgiver."
+				};
+			}
+
+			actor.pather?.StopDead();
+			actor.jobs?.EndCurrentJob(JobCondition.InterruptForced);
+			var hasForcedJob = workGiver.HasJobOnThing(actor, target, true);
+			var job = hasForcedJob ? workGiver.JobOnThing(actor, target, true) : null;
+			if (job == null)
+			{
+				return new
+				{
+					success = false,
+					actor = DescribePawn(actor),
+					target = StableId(target),
+					workGiver = workGiver.GetType().Name,
+					hasForcedJob,
+					error = "The workflow workgiver did not create a forced job."
+				};
+			}
+
+			job.playerForced = true;
+			var jobDefName = job.def?.defName;
+			var samples = new List<object>();
+			actor.jobs.StartJob(job, JobCondition.InterruptForced, null, true, true);
+			var startedJob = actor.CurJobDef?.defName;
+			var tickHit = -1;
+			for (var tick = 1; tick <= maxTicks; tick++)
+			{
+				AdvanceGameTicks(1);
+				var complete = done?.Invoke(tick) ?? false;
+				if (tick == 1 || tick == maxTicks || tick % 80 == 0 || complete)
+				{
+					samples.Add(new
+					{
+						tick,
+						job = actor.CurJobDef?.defName,
+						targetSpawned = target.Spawned,
+						targetDestroyed = target.Destroyed
+					});
+				}
+				if (complete)
+				{
+					tickHit = tick;
+					break;
+				}
+			}
+
+			return new
+			{
+				success = hasForcedJob && startedJob == jobDefName && tickHit > 0,
+				actor = DescribePawn(actor),
+				target = StableId(target),
+				workGiver = workGiver.GetType().Name,
+				hasForcedJob,
+				jobDef = jobDefName,
+				startedJob,
+				maxTicks,
+				tickHit,
+				samples
+			};
+		}
+
+		static (int infectionCount, int[] ticksWhenBecomingZombie) SetCorpseConversionTicks(Corpse corpse, int ticks)
+		{
+			var infections = new List<Hediff_ZombieInfection>();
+			corpse?.InnerPawn?.health?.hediffSet?.GetHediffs(ref infections);
+			foreach (var infection in infections)
+				infection.ticksWhenBecomingZombie = ticks;
+			return (infections.Count, infections.Select(infection => infection.ticksWhenBecomingZombie).ToArray());
+		}
+
+		static WorkflowCorpseConversionSnapshot DescribeWorkflowCorpseConversion(Corpse corpse, Queue<ThingWithComps> queue)
+		{
+			var infections = new List<Hediff_ZombieInfection>();
+			corpse?.InnerPawn?.health?.hediffSet?.GetHediffs(ref infections);
+			var ticks = infections.Select(infection => infection.ticksWhenBecomingZombie).ToArray();
+			var firstTick = ticks.Length == 0 ? -1 : ticks.Min();
+			return new WorkflowCorpseConversionSnapshot
+			{
+				infectionCount = infections.Count,
+				ticksWhenBecomingZombie = ticks,
+				ticksUntilConversion = firstTick < 0 ? -1 : firstTick - GenTicks.TicksGame,
+				hasBrain = corpse?.InnerPawn?.health?.hediffSet?.GetBrain() != null,
+				queued = queue?.Contains(corpse) ?? false
+			};
+		}
+
+		static WorkflowAlertsSnapshot DescribeInfectionAlerts()
+		{
+			var hidden = DescribeWorkflowAlert(new Alert_ColonistsBittenByZombie());
+			var imminent = DescribeWorkflowAlert(new Alert_ImminentZombiInfection());
+			var infecting = DescribeWorkflowAlert(new Alert_ZombieInfection());
+			var tracked = Patches.Need_CurLevel_Patch.infectedColonists ?? new HashSet<Pawn>();
+			return new WorkflowAlertsSnapshot
+			{
+				hidden = hidden,
+				imminent = imminent,
+				infecting = infecting,
+				needPatchTracked = tracked
+					.Where(pawn => IsWorkflowPawnName(pawn?.Name?.ToStringShort))
+					.Select(ZombieRuntimeActions.StableThingId)
+					.ToArray()
+			};
+		}
+
+		static WorkflowAlertSnapshot DescribeWorkflowAlert(Alert_ZombieInfectionProgress alert)
+		{
+			var affected = alert.AffectedColonists
+				.Where(pawn => IsWorkflowPawnName(pawn?.Name?.ToStringShort))
+				.ToArray();
+			var report = alert.GetReport();
+			return new WorkflowAlertSnapshot
+			{
+				label = alert.GetLabel().ToString(),
+				active = report.active,
+				count = affected.Length,
+				ids = affected.Select(ZombieRuntimeActions.StableThingId).ToArray(),
+				names = affected.Select(pawn => pawn.Name?.ToStringShort).ToArray(),
+				explanation = alert.GetExplanation().ToString().Trim()
+			};
+		}
+
+		static object DescribeWorkflowBite(Hediff_Injury_ZombieBite bite)
+		{
+			return new
+			{
+				hediffDef = bite?.def?.defName,
+				part = DescribeBodyPart(bite?.Part),
+				state = bite?.TendDuration?.GetInfectionState().ToString(),
+				bite?.mayBecomeZombieWhenDead
+			};
+		}
+
+		static object[] InfectionWorkflowPatchTargets()
+		{
+			return PatchedMethodsForPatchClass("Pawn_Kill_Patch")
+				.Concat(PatchedMethodsForPatchClass("Corpse_TickRare_Patch"))
+				.Concat(PatchedMethodsForPatchClass("Corpse_RotStageChanged_Patch"))
+				.Concat(PatchedMethodsForPatchClass("HealthCardUtility_DrawOverviewTab_Patch"))
+				.Where(target => target != null)
+				.Distinct()
+				.OrderBy(target => target.ToString())
+				.ToArray();
+		}
+
+		static object InfectionWorkflowFailure(string stage, string error, List<Thing> spawned)
+		{
+			return new
+			{
+				success = false,
+				stage,
+				error,
+				spawned = spawned
+					.Where(thing => thing != null)
+					.Select(StableId)
+					.ToArray()
+			};
+		}
+
+		static Pawn CreateWorkflowColonist(Map map, IntVec3 cell, string name, bool doctor)
+		{
+			Pawn pawn = null;
+			for (var attempt = 0; attempt < 25; attempt++)
+			{
+				pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				if (doctor == false || pawn.WorkTypeIsDisabled(WorkTypeDefOf.Doctor) == false)
+					break;
+				pawn = null;
+			}
+			pawn ??= PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			pawn.Name = new NameSingle(name);
+			GenSpawn.Spawn(pawn, cell, map, WipeMode.Vanish);
+			pawn.workSettings?.EnableAndInitializeIfNotAlreadyInitialized();
+			if (doctor)
+			{
+				if (pawn.WorkTypeIsDisabled(WorkTypeDefOf.Doctor) == false)
+					pawn.workSettings?.SetPriority(WorkTypeDefOf.Doctor, 1);
+				pawn.skills?.Learn(SkillDefOf.Medicine, 8000f, true);
+			}
+			else
+				DisablePawnWork(pawn);
+			return pawn;
+		}
+
+		static Pawn SpawnWorkflowColonistNear(Map map, IntVec3 root, string name, List<Thing> spawned)
+		{
+			var cell = FindWorkflowCell(map, root);
+			var pawn = CreateWorkflowColonist(map, cell, name, false);
+			spawned.Add(pawn);
+			return pawn;
+		}
+
+		static void ClearWorkflowApparel(Pawn pawn)
+		{
+			pawn?.apparel?.DestroyAll(DestroyMode.Vanish);
+		}
+
+		static bool AddWorkflowZombieBite(Pawn pawn, string stage, out Hediff_Injury_ZombieBite bite, out string error)
+		{
+			bite = null;
+			error = null;
+			if (pawn == null || pawn is Zombie || pawn is ZombieBlob || pawn is ZombieSpitter)
+			{
+				error = "Target must be a non-zombie pawn.";
+				return false;
+			}
+
+			var part = pawn.health?.hediffSet?
+				.GetNotMissingParts(BodyPartHeight.Undefined, BodyPartDepth.Outside)
+				.Where(candidate => candidate.def.IsSolid(candidate, pawn.health.hediffSet.hediffs) == false)
+				.Where(candidate => candidate.def.defName != "Waist")
+				.OrderBy(candidate => WorkflowBitePartRank(candidate))
+				.FirstOrDefault();
+			if (part == null)
+			{
+				error = "No valid workflow bite part was found.";
+				return false;
+			}
+
+			bite = (Hediff_Injury_ZombieBite)HediffMaker.MakeHediff(HediffDef.Named("ZombieBite"), pawn, part);
+			if (bite.TendDuration?.ZombieInfector == null)
+			{
+				error = "Zombie bite hediff has no infector comp.";
+				return false;
+			}
+
+			bite.mayBecomeZombieWhenDead = true;
+			ZombieRuntimeActions.ApplyBiteStage(bite, stage);
+			pawn.health.AddHediff(bite, part, null);
+			ZombieRuntimeActions.ApplyBiteStage(bite, stage);
+			return true;
+		}
+
+		static int WorkflowBitePartRank(BodyPartRecord part)
+		{
+			var name = part?.def?.defName ?? "";
+			if (name.Contains("Finger"))
+				return 0;
+			if (name.Contains("Toe"))
+				return 1;
+			if (name == "Ear" || name == "Nose")
+				return 2;
+			return 10;
+		}
+
+		static IntVec3 FindWorkflowCell(Map map, IntVec3 root)
+		{
+			if (TryFindClearSpawnCell(map, root, 12f, out var cell, out _) == false)
+				throw new InvalidOperationException($"Could not find clear workflow cell near ({root.x}, {root.z}).");
+			return cell;
+		}
+
+		static Pawn FindWorkflowPawn(Map map, string name)
+		{
+			return map?.mapPawns?.AllPawnsSpawned?
+				.FirstOrDefault(pawn => pawn.Name?.ToStringShort == name);
+		}
+
+		static Corpse FindWorkflowCorpse(Map map, string innerPawnName)
+		{
+			return map?.listerThings?.AllThings?
+				.OfType<Corpse>()
+				.FirstOrDefault(corpse => corpse.InnerPawn?.Name?.ToStringShort == innerPawnName);
+		}
+
+		static bool IsWorkflowPawnName(string name)
+		{
+			return string.IsNullOrWhiteSpace(name) == false && name.StartsWith(InfectionWorkflowPrefix, StringComparison.Ordinal);
+		}
+
+		static void SetPawnInfectionStateFromBite(Pawn pawn, Hediff_Injury_ZombieBite bite)
+		{
+			pawn?.SetInfectionState(bite?.TendDuration?.GetInfectionState() ?? InfectionState.None);
+		}
+
+		static int CountWorkflowExtract(Map map)
+		{
+			return map?.listerThings?.AllThings?
+				.Where(thing => thing.def == CustomDefs.ZombieExtract)
+				.Sum(thing => thing.stackCount) ?? 0;
+		}
+
+		static void TrackZombieCorpse(Map map, ZombieCorpse corpse)
+		{
+			var corpses = map?.GetComponent<TickManager>()?.allZombieCorpses;
+			if (corpse != null && corpses != null && corpses.Contains(corpse) == false)
+				corpses.Add(corpse);
+		}
+
+		static void CleanupInfectionWorkflow(Map map)
+		{
+			if (map == null)
+				return;
+
+			foreach (var pawn in map.mapPawns.AllPawnsSpawned
+				.Where(pawn => IsWorkflowPawnName(pawn.Name?.ToStringShort))
+				.ToArray())
+				pawn.Destroy(DestroyMode.Vanish);
+
+			foreach (var corpse in map.listerThings.AllThings
+				.OfType<Corpse>()
+				.Where(corpse => IsWorkflowPawnName(corpse.InnerPawn?.Name?.ToStringShort))
+				.ToArray())
+				corpse.Destroy(DestroyMode.Vanish);
+
+			foreach (var extract in map.listerThings.AllThings
+				.Where(thing => thing.def == CustomDefs.ZombieExtract && thing.Position.DistanceToSquared(new IntVec3(map.Size.x / 2, 0, map.Size.z / 2)) < 1600)
+				.ToArray())
+				extract.Destroy(DestroyMode.Vanish);
+
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager?.colonistsToConvert != null)
+			{
+				var kept = tickManager.colonistsToConvert
+					.Where(thing => thing is not Corpse corpse || IsWorkflowPawnName(corpse.InnerPawn?.Name?.ToStringShort) == false)
+					.ToArray();
+				tickManager.colonistsToConvert.Clear();
+				foreach (var thing in kept)
+					tickManager.colonistsToConvert.Enqueue(thing);
+			}
+			tickManager?.allZombieCorpses?.RemoveAll(corpse => IsWorkflowPawnName(corpse?.InnerPawn?.Name?.ToStringShort));
+		}
+
 		[Tool("zombieland/cure_zombie_infection_recipe", Description = "Apply the real cure-infection recipe worker with 100% serum and verify the cured corpse no longer queues conversion.")]
 		public static object CureZombieInfectionRecipe()
 		{
