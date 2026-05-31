@@ -5227,6 +5227,7 @@ namespace ZombieLand
 		{
 			static void Prefix()
 			{
+				ZombieBlob.ReleaseAllRenderResources();
 				Tools.avoider.running = false;
 
 				// var maps = Find.Maps;
@@ -5235,6 +5236,16 @@ namespace ZombieLand
 				// 		map?.GetComponent<TickManager>()?.MapRemoved();
 				//
 				// MemoryUtility.ClearAllMapsAndWorld();
+			}
+		}
+
+		[HarmonyPatch(typeof(GameDataSaveLoader))]
+		[HarmonyPatch(nameof(GameDataSaveLoader.LoadGame), typeof(string))]
+		static class GameDataSaveLoader_LoadGame_Patch
+		{
+			static void Prefix()
+			{
+				ZombieBlob.ReleaseAllRenderResources();
 			}
 		}
 

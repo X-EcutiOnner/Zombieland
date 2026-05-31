@@ -23,9 +23,15 @@ namespace ZombieLand
 	{
 		public ZombieSpitter spitter;
 
+		bool TryResolveSpitter()
+		{
+			spitter ??= pawn as ZombieSpitter;
+			return spitter != null && spitter.Destroyed == false;
+		}
+
 		void InitAction()
 		{
-			spitter = pawn as ZombieSpitter;
+			TryResolveSpitter();
 		}
 
 		void DoIdle(int minTicks, int maxTicks)
@@ -117,6 +123,9 @@ namespace ZombieLand
 
 		void TickAction()
 		{
+			if (TryResolveSpitter() == false)
+				return;
+
 			switch (spitter.state)
 			{
 				case SpitterState.Idle:
@@ -205,6 +214,8 @@ namespace ZombieLand
 		public override void Notify_PatherArrived()
 		{
 			base.Notify_PatherArrived();
+			if (TryResolveSpitter() == false)
+				return;
 
 			if (spitter.state == SpitterState.Leaving)
 			{
@@ -218,6 +229,8 @@ namespace ZombieLand
 		public override void Notify_PatherFailed()
 		{
 			base.Notify_PatherFailed();
+			if (TryResolveSpitter() == false)
+				return;
 			DoIdle(30, 90);
 		}
 

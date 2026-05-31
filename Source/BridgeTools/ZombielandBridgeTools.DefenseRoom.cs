@@ -17,7 +17,7 @@ namespace ZombieLand
 		public static object DefenseRoomState(
 			[ToolParameter(Description = "Create a reusable defense-room fixture before reading state.", Required = false, DefaultValue = false)] bool setupFixture = false,
 			[ToolParameter(Description = "Try the equipped chainsaw's enabled command-action gizmo after setup/read preparation.", Required = false, DefaultValue = false)] bool activateChainsaw = false,
-			[ToolParameter(Description = "Optional action to run before readback: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure, infestationThumper, or turretFuel.", Required = false, DefaultValue = "read")] string actionMode = "read",
+			[ToolParameter(Description = "Optional action to run before readback: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure, infestationThumper, turretFuel, or floatMenu.", Required = false, DefaultValue = "read")] string actionMode = "read",
 			[ToolParameter(Description = "Ticks to advance before reading final state; clamped to 0..5000.", Required = false, DefaultValue = 0)] int advanceTicks = 0)
 		{
 			var map = CurrentMap;
@@ -423,10 +423,176 @@ namespace ZombieLand
 				case "turretfuel":
 					result = RunSavedRoomTurretFuel(map);
 					return true;
+				case "floatmenu":
+					result = RunSavedRoomFloatMenu(map);
+					return true;
 				default:
-					error = "actionMode must be one of: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure, infestationThumper, turretFuel.";
+					error = "actionMode must be one of: read, zapShocker, repairChainsaw, chainsawBuilding, thumperImpact, wallDoorPressure, infestationThumper, turretFuel, floatMenu.";
 					return false;
 			}
+		}
+
+		static object RunSavedRoomFloatMenu(Map map)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("FloatMenuMakerMap_GetOptions_Patch");
+			var zapLabel = "ZapZombies".Translate().ToString();
+			var ropeLabel = "RopeZombie".Translate().ToString();
+			var shocker = map.listerThings.ThingsOfDef(CustomDefs.ZombieShocker)
+				.OfType<ZombieShocker>()
+				.FirstOrDefault(candidate => candidate.compPowerTrader?.PowerOn == true && candidate.HasValidRoom());
+			if (shocker == null)
+			{
+				return new
+				{
+					success = false,
+					patchTargets,
+					error = "No powered valid-room ZombieShocker exists in the current map."
+				};
+			}
+
+			var actor = map.mapPawns.FreeHumanlikesSpawnedOfFaction(Faction.OfPlayer)
+				.OrderBy(pawn => pawn.Position.DistanceToSquared(shocker.Position))
+				.FirstOrDefault(pawn => pawn.CanReach(shocker, PathEndMode.ClosestTouch, Danger.Deadly, false, false, TraverseMode.ByPawn) && pawn.CanReserve(shocker));
+			if (actor == null)
+			{
+				if (TryFindClearSpawnCell(map, shocker.Position + IntVec3.South, 8f, out var actorCell, out var actorError) == false)
+					return actorError;
+				actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(actor, actorCell, map, WipeMode.Vanish);
+				DisablePawnWork(actor);
+			}
+			actor.drafter.Drafted = false;
+
+			Zombie confusedZombie = null;
+			Zombie normalZombie = null;
+			try
+			{
+				var shockerClick = shocker.Position.ToVector3Shifted();
+				var shockerOptions = FloatMenuMakerMap.GetOptions(new List<Pawn> { actor }, shockerClick, out var shockerContext);
+				var shockerCustomOptions = DescribeCustomFloatMenuOptions(shockerOptions, zapLabel, ropeLabel);
+				var shockerCanReach = actor.CanReach(shocker, PathEndMode.ClosestTouch, Danger.Deadly, false, false, TraverseMode.ByPawn);
+				var shockerCanReserve = actor.CanReserve(shocker);
+				var shockerPowerOn = shocker.compPowerTrader?.PowerOn == true;
+				var shockerHasValidRoom = shocker.HasValidRoom();
+
+				if (TryFindClearSpawnCell(map, actor.Position + new IntVec3(4, 0, 0), 12f, out var confusedCell, out var confusedError) == false)
+					return confusedError;
+				confusedZombie = ZombieRuntimeActions.SpawnZombie(confusedCell, map, ZombieType.Normal, true);
+				if (confusedZombie == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						error = "Could not spawn the confused rope-menu zombie."
+					};
+				}
+				confusedZombie.paralyzedUntil = GenTicks.TicksGame + 10000;
+				confusedZombie.ropedBy = null;
+
+				if (TryFindClearSpawnCell(map, actor.Position + new IntVec3(6, 0, 0), 12f, out var normalCell, out var normalError) == false)
+					return normalError;
+				normalZombie = ZombieRuntimeActions.SpawnZombie(normalCell, map, ZombieType.Normal, true);
+				if (normalZombie == null)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						error = "Could not spawn the ordinary rope-menu control zombie."
+					};
+				}
+				normalZombie.paralyzedUntil = 0;
+				normalZombie.ropedBy = null;
+
+				var ropeOptions = FloatMenuMakerMap.GetOptions(new List<Pawn> { actor }, confusedZombie.DrawPos, out var ropeContext);
+				var ordinaryZombieOptions = FloatMenuMakerMap.GetOptions(new List<Pawn> { actor }, normalZombie.DrawPos, out var ordinaryZombieContext);
+				var emptySelectionOptions = FloatMenuMakerMap.GetOptions(new List<Pawn>(), shockerClick, out var emptySelectionContext);
+				var ropeCustomOptions = DescribeCustomFloatMenuOptions(ropeOptions, zapLabel, ropeLabel);
+				var ordinaryZombieCustomOptions = DescribeCustomFloatMenuOptions(ordinaryZombieOptions, zapLabel, ropeLabel);
+				var emptySelectionCustomOptions = DescribeCustomFloatMenuOptions(emptySelectionOptions, zapLabel, ropeLabel);
+
+				var zapPresent = shockerCustomOptions.Count(option => option.Label == zapLabel) == 1;
+				var ropePresent = ropeCustomOptions.Count(option => option.Label == ropeLabel) == 1;
+				var ordinaryRopeAbsent = ordinaryZombieCustomOptions.Any(option => option.Label == ropeLabel) == false;
+				var emptySelectionAbsent = emptySelectionCustomOptions.Length == 0;
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& zapPresent
+						&& ropePresent
+						&& ordinaryRopeAbsent
+						&& emptySelectionAbsent
+						&& shockerCanReach
+						&& shockerCanReserve
+						&& shockerPowerOn
+						&& shockerHasValidRoom
+						&& confusedZombie.IsConfused
+						&& normalZombie.IsConfused == false,
+					action = "floatMenu",
+					patchTargets,
+					labels = new
+					{
+						zapLabel,
+						ropeLabel
+					},
+					actor = DescribePawn(actor),
+					shocker = new
+					{
+						thing = DescribeDefenseThing(shocker),
+						click = ZombieRuntimeActions.DescribeCell(shocker.Position),
+						canReach = shockerCanReach,
+						canReserve = shockerCanReserve,
+						powerOn = shockerPowerOn,
+						hasValidRoom = shockerHasValidRoom,
+						contextCreated = shockerContext != null,
+						customOptions = shockerCustomOptions
+					},
+					rope = new
+					{
+						confusedZombie = DescribeZombie(confusedZombie),
+						contextCreated = ropeContext != null,
+						customOptions = ropeCustomOptions
+					},
+					ordinaryZombieControl = new
+					{
+						normalZombie = DescribeZombie(normalZombie),
+						contextCreated = ordinaryZombieContext != null,
+						customOptions = ordinaryZombieCustomOptions
+					},
+					emptySelectionControl = new
+					{
+						contextCreated = emptySelectionContext != null,
+						customOptions = emptySelectionCustomOptions
+					}
+				};
+			}
+			finally
+			{
+				if (confusedZombie != null && confusedZombie.Destroyed == false)
+					confusedZombie.Destroy(DestroyMode.Vanish);
+				if (normalZombie != null && normalZombie.Destroyed == false)
+					normalZombie.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		sealed class FloatMenuOptionSummary
+		{
+			public string Label { get; set; }
+			public bool Disabled { get; set; }
+		}
+
+		static FloatMenuOptionSummary[] DescribeCustomFloatMenuOptions(List<FloatMenuOption> options, string zapLabel, string ropeLabel)
+		{
+			return options
+				.Where(option => option.Label == zapLabel || option.Label == ropeLabel)
+				.Select(option => new FloatMenuOptionSummary
+				{
+					Label = option.Label,
+					Disabled = option.Disabled
+				})
+				.ToArray();
 		}
 
 		static object RunSavedRoomTurretFuel(Map map)

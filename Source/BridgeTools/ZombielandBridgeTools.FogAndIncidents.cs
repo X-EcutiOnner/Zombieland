@@ -1868,6 +1868,7 @@ namespace ZombieLand
 				&& playerFaction.HostileTo(zombieFaction)
 				&& zombieFaction.HostileTo(playerFaction);
 			var goodwillSuppression = VerifyZombieFactionGoodwillSuppression(zombieFaction, playerFaction, nonZombieFactions);
+			var newWorldPrefix = VerifyZombieFactionNewWorldPrefix();
 
 			return new
 			{
@@ -1875,7 +1876,8 @@ namespace ZombieLand
 					&& zombieFaction != null
 					&& playerHostility
 					&& mutualHostility
-					&& ObjectSuccess(goodwillSuppression),
+					&& ObjectSuccess(goodwillSuppression)
+					&& ObjectSuccess(newWorldPrefix),
 				zombieFactionCount = zombieFactions.Length,
 				zombieFaction = zombieFaction == null ? null : new
 				{
@@ -1888,9 +1890,48 @@ namespace ZombieLand
 				playerHostility,
 				mutualHostility,
 				goodwillSuppression,
+				newWorldPrefix,
 				factionCount = factions.Length,
 				nonZombieFactionCount = nonZombieFactions.Length,
 				relations
+			};
+		}
+
+		static object VerifyZombieFactionNewWorldPrefix()
+		{
+			var patchOwners = PatchOwners(typeof(FactionGenerator), nameof(FactionGenerator.GenerateFactionsIntoWorldLayer));
+			var patchType = typeof(Patches).GetNestedType("FactionGenerator_GenerateFactionsIntoWorldLayer_Patch", BindingFlags.NonPublic);
+			var prefix = patchType?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+			if (prefix == null)
+			{
+				return new
+				{
+					success = false,
+					patchOwners,
+					error = "Could not reflect FactionGenerator_GenerateFactionsIntoWorldLayer_Patch.Prefix."
+				};
+			}
+
+			var empty = new List<FactionDef>();
+			var alreadyPresent = new List<FactionDef> { ZombieDefOf.Zombies };
+			prefix.Invoke(null, new object[] { empty });
+			prefix.Invoke(null, new object[] { alreadyPresent });
+			prefix.Invoke(null, new object[] { null });
+
+			var emptyZombieCount = empty.Count(def => def == ZombieDefOf.Zombies);
+			var existingZombieCount = alreadyPresent.Count(def => def == ZombieDefOf.Zombies);
+			return new
+			{
+				success = patchOwners.Contains("net.pardeike.zombieland")
+					&& emptyZombieCount == 1
+					&& existingZombieCount == 1,
+				sourcePath = "FactionGenerator.GenerateFactionsIntoWorldLayer prefix synthetic faction-def list",
+				patchOwners,
+				emptyList = empty.Select(def => def?.defName).ToArray(),
+				emptyZombieCount,
+				preexistingList = alreadyPresent.Select(def => def?.defName).ToArray(),
+				preexistingZombieCount = existingZombieCount,
+				nullListAccepted = true
 			};
 		}
 
@@ -2119,13 +2160,14 @@ namespace ZombieLand
 				FillZombieTickPercent(targetPercent);
 				var percentBeforeTicking = ZombieTicker.PercentTicking;
 				var expectedTicking = Mathf.FloorToInt(liveCachedBefore * percentBeforeTicking);
+				var sample = spawned.FirstOrDefault(zombie => zombie.Spawned && zombie.Dead == false);
+				var gridRepopulation = VerifyZombieGridRepopulationAfterReset(map, sample);
 				ZombieTicker.zombiesTicked = 0;
 				tickManager.ZombieTicking();
 				var subsetCount = tickManager.currentZombiesTicking?.Length ?? 0;
 				var tickedCount = ZombieTicker.zombiesTicked;
 				var allTickedWereLive = tickManager.currentZombiesTicking?.All(zombie => zombie.Spawned && zombie.Dead == false) ?? false;
 
-				var sample = spawned.FirstOrDefault(zombie => zombie.Spawned && zombie.Dead == false);
 				FillZombieTickPercent(1f);
 				var normalSpeed = sample?.GetStatValue(StatDefOf.MoveSpeed) ?? 0f;
 				FillZombieTickPercent(targetPercent);
@@ -2153,6 +2195,7 @@ namespace ZombieLand
 						&& ObjectSuccess(killedCleanup)
 						&& ObjectSuccess(idleState)
 						&& ObjectSuccess(gunshotPheromones)
+						&& ObjectSuccess(gridRepopulation)
 						&& ObjectSuccess(collisionSuppression),
 					destroyedExisting,
 					spawnedCount = spawned.Count,
@@ -2171,6 +2214,7 @@ namespace ZombieLand
 					killedCleanup,
 					idleState,
 					gunshotPheromones,
+					gridRepopulation,
 					collisionSuppression,
 					sample = DescribeZombie(sample)
 				};
@@ -2186,11 +2230,109 @@ namespace ZombieLand
 				tickManager.currentZombiesTicking = Array.Empty<Zombie>();
 				tickManager.currentZombiesTickingIndex = 0;
 			}
-		}
+			}
 
-		static object VerifyNothingHappeningSpawnGate()
-		{
-			var originalSpawning = ZombieGenerator.ZombiesSpawning;
+			static object VerifyZombieGridRepopulationAfterReset(Map map, Zombie zombie)
+			{
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						error = "No live zombie sample was available for grid repopulation verification."
+					};
+				}
+
+				var destination = IntVec3.Invalid;
+				foreach (var offset in GenAdj.AdjacentCells)
+				{
+					var cell = zombie.Position + offset;
+					if (cell.InBounds(map) && zombie.HasValidDestination(cell))
+					{
+						destination = cell;
+						break;
+					}
+				}
+
+				if (destination.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						error = "No valid adjacent destination was available for grid repopulation verification.",
+						position = ZombieRuntimeActions.DescribeCell(zombie.Position)
+					};
+				}
+
+				var grid = map.GetGrid();
+				ClearZombieCount(grid, zombie.Position);
+				ClearZombieCount(grid, destination);
+				if (zombie.lastGotoPosition.IsValid)
+					ClearZombieCount(grid, zombie.lastGotoPosition);
+
+				zombie.pather?.StopDead();
+				zombie.lastGotoPosition = IntVec3.Invalid;
+				var beforeAtPosition = grid.GetZombieCount(zombie.Position);
+				var beforeAtDestination = grid.GetZombieCount(destination);
+				var beforeLastGotoValid = zombie.lastGotoPosition.IsValid;
+
+				zombie.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
+				if (zombie.jobs.curDriver is not JobDriver_Stumble stumbleDriver)
+				{
+					return new
+					{
+						success = false,
+						error = "The sample zombie did not start a Stumble job.",
+						currentJob = zombie.CurJobDef?.defName
+					};
+				}
+
+				stumbleDriver.destination = destination;
+				stumbleDriver.ExecuteMove(zombie, grid);
+
+				var afterAtPosition = grid.GetZombieCount(zombie.Position);
+				var afterAtDestination = grid.GetZombieCount(destination);
+				var afterLastGoto = zombie.lastGotoPosition;
+				var moving = zombie.pather?.Moving ?? false;
+				var pathDestination = moving ? zombie.pather.Destination.Cell : IntVec3.Invalid;
+
+				return new
+				{
+					success = beforeAtPosition == 0
+						&& beforeAtDestination == 0
+						&& beforeLastGotoValid == false
+						&& afterAtPosition == 0
+						&& afterAtDestination == 1
+						&& afterLastGoto == destination
+						&& moving
+						&& pathDestination == destination,
+					position = ZombieRuntimeActions.DescribeCell(zombie.Position),
+					destination = ZombieRuntimeActions.DescribeCell(destination),
+					beforeAtPosition,
+					beforeAtDestination,
+					beforeLastGotoValid,
+					afterAtPosition,
+					afterAtDestination,
+					afterLastGoto = ZombieRuntimeActions.DescribeCell(afterLastGoto),
+					moving,
+					pathDestination = pathDestination.IsValid ? ZombieRuntimeActions.DescribeCell(pathDestination) : null,
+					currentJob = zombie.CurJobDef?.defName
+				};
+			}
+
+			static void ClearZombieCount(PheromoneGrid grid, IntVec3 cell)
+			{
+				if (cell.IsValid == false)
+					return;
+
+				var current = grid.GetZombieCount(cell);
+				if (current != 0)
+					grid.ChangeZombieCount(cell, -current);
+			}
+
+			static object VerifyNothingHappeningSpawnGate()
+			{
+				var originalSpawning = ZombieGenerator.ZombiesSpawning;
 			try
 			{
 				ZombieGenerator.ZombiesSpawning = 0;

@@ -22,6 +22,18 @@ namespace ZombieLand
 			public object[] samples { get; set; }
 		}
 
+		sealed class PathingRegionMetrics
+		{
+			public int regionCount { get; set; }
+			public int indexCount { get; set; }
+			public int validRegionCount { get; set; }
+			public int rootCount { get; set; }
+			public int childCount { get; set; }
+			public bool indexMatchesRegionCount { get; set; }
+			public bool fixtureRoomProper { get; set; }
+			public bool hasValidWanderDestination { get; set; }
+		}
+
 		sealed class RaidWorkerTryExecuteProbe
 		{
 			public string caseName { get; set; }
@@ -99,10 +111,10 @@ namespace ZombieLand
 			};
 		}
 
-		[Tool("zombieland/incident_threat_state", Description = "Set up or read a reusable incident/threat fixture, and run scenario-level incident wave, spawn mix, infection, forecast, and spawn-mode checks.")]
+		[Tool("zombieland/incident_threat_state", Description = "Set up or read a reusable incident/threat fixture, and run scenario-level incident wave, spawn mix, infection, forecast, spawn-mode, and pathing-region checks.")]
 		public static object IncidentThreatState(
 			[ToolParameter(Description = "Create a reusable capable-colony incident fixture before reading state.", Required = false, DefaultValue = false)] bool setupFixture = false,
-			[ToolParameter(Description = "Optional action to run before readback: read, scheduledWave, spawnMatrix, threatForecast, forecastUi, spawnModes, raidWorker, zeroThreat, or all.", Required = false, DefaultValue = "read")] string actionMode = "read",
+			[ToolParameter(Description = "Optional action to run before readback: read, scheduledWave, spawnMatrix, threatForecast, forecastUi, spawnModes, raidWorker, zeroThreat, pathingRegions, or all.", Required = false, DefaultValue = "read")] string actionMode = "read",
 			[ToolParameter(Description = "Ticks to advance before reading final state; clamped to 0..5000.", Required = false, DefaultValue = 0)] int advanceTicks = 0)
 		{
 			var map = CurrentMap;
@@ -185,13 +197,124 @@ namespace ZombieLand
 				case "zerothreat":
 					result = RunZeroThreatDeathContract(map);
 					return true;
+				case "pathingregions":
+					result = RunPathingRegionsContract(map);
+					return true;
 				case "all":
 					result = RunIncidentThreatAll(map);
 					return true;
 				default:
-					error = "actionMode must be one of: read, scheduledWave, spawnMatrix, threatForecast, forecastUi, spawnModes, raidWorker, zeroThreat, all.";
+					error = "actionMode must be one of: read, scheduledWave, spawnMatrix, threatForecast, forecastUi, spawnModes, raidWorker, zeroThreat, pathingRegions, all.";
 					return false;
 			}
+		}
+
+		static object RunPathingRegionsContract(Map map)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("RegionAndRoomUpdater_CreateOrUpdateRooms_Patch");
+			var tickManager = map.GetComponent<TickManager>();
+			var pathing = tickManager?.zombiePathing;
+			if (pathing == null)
+			{
+				return new
+				{
+					success = false,
+					patchTargets,
+					error = "Current map has no Zombieland TickManager zombiePathing component."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			if (TryBuildFogRoomFixture(map, root, 32f, out var fixture, out var fixtureError) == false)
+				return fixtureError;
+
+			var afterFixture = DescribePathingRegions(map, pathing, fixture, out var afterFixtureMetrics);
+			pathing.backpointingRegionsIndices = new Dictionary<Region, int>();
+			pathing.backpointingRegions = new List<BackpointingRegion>();
+			var afterClear = DescribePathingRegions(map, pathing, fixture, out var afterClearMetrics);
+
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+			var afterRebuild = DescribePathingRegions(map, pathing, fixture, out var afterRebuildMetrics);
+
+			return new
+			{
+				success = patchTargets.Length > 0
+					&& afterFixtureMetrics.regionCount > 0
+					&& afterClearMetrics.regionCount == 0
+					&& afterRebuildMetrics.regionCount > 0
+					&& afterRebuildMetrics.indexMatchesRegionCount
+					&& afterRebuildMetrics.rootCount > 0
+					&& afterRebuildMetrics.childCount > 0
+					&& afterRebuildMetrics.fixtureRoomProper
+					&& afterRebuildMetrics.hasValidWanderDestination,
+				patchTargets,
+				fixture = new
+				{
+					doorCell = ZombieRuntimeActions.DescribeCell(fixture.doorCell),
+					targetWallCell = ZombieRuntimeActions.DescribeCell(fixture.targetWallCell),
+					interiorCenter = ZombieRuntimeActions.DescribeCell(fixture.interiorRect.CenterCell),
+					interiorCellCount = fixture.interiorRect.Area
+				},
+				afterFixture,
+				afterClear,
+				afterRebuild,
+				note = "The verifier clears zombiePathing caches, calls the real RegionAndRoomUpdater.RebuildAllRegionsAndRooms path, and expects the installed CreateOrUpdateRooms postfix to repopulate the smart-wander region graph."
+			};
+		}
+
+		static object DescribePathingRegions(Map map, ZombiePathing pathing, FogRoomFixture fixture, out PathingRegionMetrics metrics)
+		{
+			var regions = pathing?.backpointingRegions ?? new List<BackpointingRegion>();
+			var validRegionCount = regions.Count(region => region.region != null && region.region.valid);
+			var rootCount = regions.Count(region => region.parentIdx == -1);
+			var childCount = regions.Count(region => region.parentIdx >= 0);
+			var room = fixture.interiorRect.CenterCell.GetRoom(map);
+			var samples = regions
+				.Select((entry, index) => new { entry, index })
+				.Where(row => row.entry.parentIdx >= 0 && row.entry.cell.IsValid)
+				.Take(6)
+				.Select(row =>
+				{
+					var destination = pathing.GetWanderDestination(row.entry.cell);
+					return new
+					{
+						index = row.index,
+						parentIdx = row.entry.parentIdx,
+						cell = ZombieRuntimeActions.DescribeCell(row.entry.cell),
+						destination = destination.IsValid ? ZombieRuntimeActions.DescribeCell(destination) : null,
+						destinationValid = destination.IsValid,
+						regionValid = row.entry.region != null && row.entry.region.valid,
+						regionType = row.entry.region?.type.ToString(),
+						door = row.entry.region?.door?.ThingID
+					};
+				})
+				.ToArray();
+
+			metrics = new PathingRegionMetrics
+			{
+				regionCount = regions.Count,
+				indexCount = pathing?.backpointingRegionsIndices?.Count ?? 0,
+				validRegionCount = validRegionCount,
+				rootCount = rootCount,
+				childCount = childCount,
+				indexMatchesRegionCount = (pathing?.backpointingRegionsIndices?.Count ?? 0) == regions.Count,
+				fixtureRoomProper = room?.ProperRoom == true,
+				hasValidWanderDestination = samples.Any(sample => sample.destinationValid)
+			};
+
+			return new
+			{
+				metrics,
+				fixtureRoom = room == null ? null : new
+				{
+					cellCount = room.CellCount,
+					properRoom = room.ProperRoom,
+					isDoorway = room.IsDoorway,
+					isHuge = room.IsHuge,
+					fogged = room.Fogged
+				},
+				samples
+			};
 		}
 
 		static bool TrySetupIncidentThreatFixture(Map map, out object setup, out object error)

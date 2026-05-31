@@ -14,9 +14,9 @@ namespace ZombieLand
 	{
 		const string SettingsScenarioPawnName = "ZL_Settings_Colonist";
 
-		[Tool("zombieland/settings_state", Description = "Read, prepare, or verify a reusable Zombieland settings/keyframe/colonist-toggle persistence fixture.")]
-		public static object SettingsState(
-			[ToolParameter(Description = "Action mode: read, prepare, verify, modal, behavior, or gizmos.", Required = false, DefaultValue = "read")] string actionMode = "read",
+			[Tool("zombieland/settings_state", Description = "Read, prepare, or verify reusable Zombieland settings/new-game/keyframe/colonist-toggle persistence fixtures.")]
+			public static object SettingsState(
+				[ToolParameter(Description = "Action mode: read, prepare, verify, modal, behavior, gizmos, or new-game.", Required = false, DefaultValue = "read")] string actionMode = "read",
 			[ToolParameter(Description = "Open RimWorld's real Zombieland game-settings page/dialog while reading or preparing.", Required = false, DefaultValue = false)] bool openSettingsDialog = false)
 		{
 			var normalizedMode = (actionMode ?? "read").Trim().ToLowerInvariant();
@@ -65,19 +65,30 @@ namespace ZombieLand
 					behaviorVerification
 				};
 			}
-			if (normalizedMode == "gizmos")
-			{
-				var gizmoVerification = VerifySettingsGizmoFixtures();
-				return new
+				if (normalizedMode == "gizmos")
+				{
+					var gizmoVerification = VerifySettingsGizmoFixtures();
+					return new
 				{
 					success = ObjectSuccess(gizmoVerification),
 					actionMode = normalizedMode,
 					state = ReadSettingsPersistenceFixture(openSettingsDialog),
-					gizmoVerification
-				};
-			}
-			if (normalizedMode == "read")
-			{
+						gizmoVerification
+					};
+				}
+				if (normalizedMode == "new-game")
+				{
+					var newGameVerification = VerifySettingsNewGameSetupFixtures();
+					return new
+					{
+						success = ObjectSuccess(newGameVerification),
+						actionMode = normalizedMode,
+						state = ReadSettingsPersistenceFixture(openSettingsDialog),
+						newGameVerification
+					};
+				}
+				if (normalizedMode == "read")
+				{
 				var state = ReadSettingsPersistenceFixture(openSettingsDialog);
 				return new
 				{
@@ -86,13 +97,13 @@ namespace ZombieLand
 					state
 				};
 			}
-			return new
-			{
-				success = false,
-				actionMode,
-				error = "Unsupported settings actionMode. Use read, prepare, verify, modal, behavior, or gizmos."
-			};
-		}
+				return new
+				{
+					success = false,
+					actionMode,
+					error = "Unsupported settings actionMode. Use read, prepare, verify, modal, behavior, gizmos, or new-game."
+				};
+			}
 
 		static object PrepareSettingsPersistenceFixture(bool openSettingsDialog)
 		{
@@ -743,8 +754,8 @@ namespace ZombieLand
 			}
 		}
 
-		static object VerifySettingsGizmoFixtures()
-		{
+			static object VerifySettingsGizmoFixtures()
+			{
 			var map = CurrentMap;
 			var anchor = FindSettingsScenarioPawn(map);
 			if (map == null || anchor == null)
@@ -869,11 +880,195 @@ namespace ZombieLand
 					ColonistSettings.Values.RemoveColonist(pawn);
 				if (pawn?.Destroyed == false)
 					pawn.Destroy(DestroyMode.Vanish);
+				}
 			}
-		}
 
-		static Pawn CreateSettingsGizmoPawn(Map map, Pawn anchor)
-		{
+			static object VerifySettingsNewGameSetupFixtures()
+			{
+				var defaults = VerifyNewGameDefaultsPrefix();
+				var stitchedPages = VerifyNewGameStitchedPages();
+				var hostilityResponse = VerifyNewGameHostilityResponse();
+
+				return new
+				{
+					success = ObjectSuccess(defaults)
+						&& ObjectSuccess(stitchedPages)
+						&& ObjectSuccess(hostilityResponse),
+					sourcePath = "Page_SelectScenario.BeginScenarioConfiguration prefix -> ZombieSettings.ApplyDefaults; PageUtility.StitchedPages prefix -> Dialog_Settings insertion; Game.InitNewGame postfix -> colonist hostility response Attack",
+					defaults,
+					stitchedPages,
+					hostilityResponse
+				};
+			}
+
+			static object VerifyNewGameDefaultsPrefix()
+			{
+				var patchTargets = PatchedMethodsForPatchClass("Page_SelectScenario_BeginScenarioConfiguration_Patch");
+				var prefix = typeof(Patches)
+					.GetNestedType("Page_SelectScenario_BeginScenarioConfiguration_Patch", BindingFlags.Static | BindingFlags.NonPublic)
+					?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+
+				var settingsSnapshot = SnapshotZombieSettings();
+				var scrollSnapshot = SettingsDialog.scrollPosition;
+				try
+				{
+					var sentinel = CreateSettingsGroup(9.25f, 925, AttackMode.OnlyColonists, SpawnWhenType.InEventsOnly, SpawnHowType.FromTheEdges, SmashMode.Nothing, true, false, 0.91f, 9.25f);
+					ZombieSettings.Values = sentinel;
+					ZombieSettings.ValuesOverTime = new List<SettingsKeyFrame>
+					{
+						new()
+						{
+							amount = 0,
+							unit = SettingsKeyFrame.Unit.Days,
+							values = sentinel.MakeCopy()
+						}
+					};
+					SettingsDialog.scrollPosition = new Vector2(17f, 23f);
+					var before = DescribeSettingsGroup(ZombieSettings.Values);
+					var expected = ZombieSettings.CalculateInterpolation(ZombieSettingsDefaults.groupOverTime, 0);
+
+					prefix?.Invoke(null, Array.Empty<object>());
+
+					var after = ZombieSettings.Values;
+					var keyframes = ZombieSettings.ValuesOverTime;
+					return new
+					{
+						success = prefix != null
+							&& patchTargets.Length > 0
+							&& SettingsGroupsCoreMatch(after, expected)
+							&& keyframes != null
+							&& keyframes.Count == ZombieSettingsDefaults.groupOverTime.Count
+							&& SettingsDialog.scrollPosition == Vector2.zero,
+						patchTargets,
+						prefixFound = prefix != null,
+						before,
+						after = DescribeSettingsGroup(after),
+						expected = DescribeSettingsGroup(expected),
+						defaultKeyframeCount = ZombieSettingsDefaults.groupOverTime?.Count ?? 0,
+						resultKeyframeCount = keyframes?.Count ?? 0,
+						scrollPosition = DescribeVector2(SettingsDialog.scrollPosition)
+					};
+				}
+				finally
+				{
+					RestoreZombieSettings(settingsSnapshot);
+					SettingsDialog.scrollPosition = scrollSnapshot;
+				}
+			}
+
+			static object VerifyNewGameStitchedPages()
+			{
+				var patchTargets = PatchedMethodsForPatchClass("PageUtility_StitchedPages_Patch");
+				var firstPage = new Page_SelectScenario();
+				var lastPage = new Page_SelectStoryteller();
+				var pages = new List<Page> { firstPage, lastPage };
+				var stitchedFirst = PageUtility.StitchedPages(pages);
+				var inserted = pages.Count > 1 ? pages[1] : null;
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& ReferenceEquals(stitchedFirst, firstPage)
+						&& pages.Count == 3
+						&& inserted is Dialog_Settings
+						&& ReferenceEquals(firstPage.next, inserted)
+						&& ReferenceEquals(inserted.prev, firstPage)
+						&& ReferenceEquals(inserted.next, lastPage)
+						&& ReferenceEquals(lastPage.prev, inserted),
+					patchTargets,
+					pageTypes = pages.Select(page => page.GetType().FullName).ToArray(),
+					firstType = stitchedFirst?.GetType().FullName,
+					insertedType = inserted?.GetType().FullName,
+					firstNextType = firstPage.next?.GetType().FullName,
+					insertedPrevType = inserted?.prev?.GetType().FullName,
+					insertedNextType = inserted?.next?.GetType().FullName,
+					lastPrevType = lastPage.prev?.GetType().FullName
+				};
+			}
+
+			static object VerifyNewGameHostilityResponse()
+			{
+				var map = CurrentMap;
+				if (map == null)
+				{
+					return new
+					{
+						success = false,
+						error = "A loaded map is required for the Game.InitNewGame hostility-response postfix probe."
+					};
+				}
+
+				var patchTargets = PatchedMethodsForPatchClass("Game_InitNewGame_Patch");
+				var postfix = typeof(Patches)
+					.GetNestedType("Game_InitNewGame_Patch", BindingFlags.NonPublic)
+					?.GetMethod("Postfix", BindingFlags.Static | BindingFlags.NonPublic);
+				Pawn colonist = null;
+				try
+				{
+					if (TryFindClearSpawnCell(map, new IntVec3(map.Size.x / 2, 0, map.Size.z / 2) + new IntVec3(9, 0, 9), 16f, out var cell, out var cellError) == false)
+						return cellError;
+
+					colonist = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+					GenSpawn.Spawn(colonist, cell, map, Rot4.South);
+					DisablePawnWork(colonist);
+					colonist.playerSettings.hostilityResponse = HostilityResponseMode.Ignore;
+					var before = colonist.playerSettings.hostilityResponse;
+
+					postfix?.Invoke(null, Array.Empty<object>());
+					var after = colonist.playerSettings.hostilityResponse;
+
+					return new
+					{
+						success = postfix != null
+							&& patchTargets.Length > 0
+							&& before == HostilityResponseMode.Ignore
+							&& after == HostilityResponseMode.Attack,
+						patchTargets,
+						postfixFound = postfix != null,
+						colonist = DescribePawn(colonist),
+						before = before.ToString(),
+						after = after.ToString()
+					};
+				}
+				finally
+				{
+					if (colonist != null && colonist.Destroyed == false)
+						colonist.Destroy(DestroyMode.Vanish);
+				}
+			}
+
+			static bool SettingsGroupsCoreMatch(SettingsGroup left, SettingsGroup right)
+			{
+				if (left == null || right == null)
+					return false;
+
+				return Approximately(left.threatScale, right.threatScale)
+					&& left.maximumNumberOfZombies == right.maximumNumberOfZombies
+					&& left.attackMode == right.attackMode
+					&& left.spawnWhenType == right.spawnWhenType
+					&& left.spawnHowType == right.spawnHowType
+					&& left.smashMode == right.smashMode
+					&& left.doubleTapRequired == right.doubleTapRequired
+					&& left.betterZombieAvoidance == right.betterZombieAvoidance
+					&& Approximately(left.zombieBiteInfectionChance, right.zombieBiteInfectionChance)
+					&& Approximately(left.contaminationBaseFactor, right.contaminationBaseFactor)
+					&& Approximately(left.healthFactor, right.healthFactor)
+					&& Approximately(left.childChance, right.childChance)
+					&& Approximately(left.spitterThreat, right.spitterThreat)
+					&& left.minimumZombiesForWallPushing == right.minimumZombiesForWallPushing;
+			}
+
+			static object DescribeVector2(Vector2 vector)
+			{
+				return new
+				{
+					vector.x,
+					vector.y
+				};
+			}
+
+			static Pawn CreateSettingsGizmoPawn(Map map, Pawn anchor)
+			{
 			for (var attempt = 0; attempt < 60; attempt++)
 			{
 				if (TryFindClearSpawnCell(map, anchor.Position + new IntVec3(2 + attempt % 5, 0, attempt / 5), 10f, out var cell, out _) == false)

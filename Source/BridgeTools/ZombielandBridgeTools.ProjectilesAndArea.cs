@@ -90,13 +90,15 @@ namespace ZombieLand
 				action = RunAreaWorkflowZombieStats(map);
 			else if (normalizedActionMode == "visual-support")
 				action = RunAreaWorkflowVisualSupport(map);
+			else if (normalizedActionMode == "warning-ui")
+				action = RunAreaWorkflowWarningUi(map, fixtureAreas);
 			else if (normalizedActionMode != "read")
 			{
 				return new
 				{
 					success = false,
 					actionMode,
-					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, or visual-support."
+					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, visual-support, or warning-ui."
 				};
 			}
 			var actionSucceeded = normalizedActionMode == "read"
@@ -926,6 +928,174 @@ namespace ZombieLand
 				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
 				ZombieSettings.Values.highlightDangerousAreas = oldHighlightDangerousAreas;
 			}
+		}
+
+		static object RunAreaWorkflowWarningUi(Map map, (Area_Allowed area, AreaRiskMode mode)[] fixtureAreas)
+		{
+			var colonistInsideArea = fixtureAreas.FirstOrDefault(pair => pair.mode == AreaRiskMode.ColonistInside).area;
+			var zombieInsideArea = fixtureAreas.FirstOrDefault(pair => pair.mode == AreaRiskMode.ZombieInside).area;
+			if (colonistInsideArea == null || zombieInsideArea == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Area warning UI needs ColonistInside and ZombieInside fixture areas."
+				};
+			}
+
+			var messageTargets = PatchedMethodsForPatchClass("Messages_MessagesDoGUI_Patch");
+			var drawTargets = PatchedMethodsForPatchClass("Message_Draw_Patch");
+			var liveMessagesField = typeof(Messages).GetField("liveMessages", BindingFlags.Static | BindingFlags.NonPublic);
+			var messagesTopLeftField = typeof(Messages).GetField("MessagesTopLeftStandard", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+			var messageDrawPrefix = typeof(Patches)
+				.GetNestedType("Message_Draw_Patch", BindingFlags.NonPublic)
+				?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+			var oldHighlightDangerousAreas = ZombieSettings.Values.highlightDangerousAreas;
+
+			try
+			{
+				ZombieSettings.Values.highlightDangerousAreas = true;
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+				DestroyAreaWorkflowPawns(map);
+				ZombieAreaManager.pawnsInDanger.Clear();
+				ZombieAreaManager.warningShowing = false;
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root + new IntVec3(-4, 0, 0), 12f, out var actorCell, out var actorError) == false)
+					return actorError;
+				var zombieCell = GenRadial.RadialCellsAround(actorCell, 3f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.OrderBy(cell => cell.DistanceToSquared(actorCell))
+					.FirstOrDefault();
+				if (zombieCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						actorCell = ZombieRuntimeActions.DescribeCell(actorCell),
+						error = "No nearby clear zombie cell was found for the area warning UI fixture."
+					};
+				}
+
+				var actor = GenerateAreaWorkflowPawn(Faction.OfPlayer, false);
+				actor.Name = new NameSingle("ZL_Area_Warning_Worker");
+				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+				DisablePawnWork(actor);
+				actor.playerSettings.AreaRestrictionInPawnCurrentMap = colonistInsideArea;
+
+				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new
+					{
+						success = false,
+						actor = DescribePawn(actor),
+						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+						error = "ZombieGenerator.SpawnZombie returned no area warning UI zombie."
+					};
+				}
+				zombie.Name = new NameSingle("ZL_Area_Warning_Zombie");
+				zombie.state = ZombieState.Tracking;
+
+				SetAreaCells(map, colonistInsideArea, actor.Position);
+				SetAreaCells(map, zombieInsideArea, zombie.Position);
+				ZombieSettings.Values.dangerousAreas[colonistInsideArea] = AreaRiskMode.ColonistInside;
+				ZombieSettings.Values.dangerousAreas[zombieInsideArea] = AreaRiskMode.ZombieInside;
+				RunZombieAreaStateUpdater();
+
+				var warningEntries = ZombieAreaManager.pawnsInDanger
+					.Select(pair => new
+					{
+						pawn = DescribePawn(pair.Key),
+						area = pair.Value?.Label
+					})
+					.ToArray();
+				var actorInWarning = ZombieAreaManager.pawnsInDanger.TryGetValue(actor, out var actorArea)
+					&& actorArea == colonistInsideArea;
+				var zombieInWarning = ZombieAreaManager.pawnsInDanger.TryGetValue(zombie, out var zombieArea)
+					&& zombieArea == zombieInsideArea;
+
+				var liveMessageCountBefore = LiveMessageCount(liveMessagesField);
+				const string probeMessage = "Zombieland area warning UI probe";
+				Messages.Message(probeMessage, new LookTargets(actor, zombie), MessageTypeDefOf.NeutralEvent, false);
+				var liveMessageCountAfter = LiveMessageCount(liveMessagesField);
+				var messageAdded = liveMessageCountAfter > liveMessageCountBefore;
+
+				var standardTopLeft = messagesTopLeftField?.GetValue(null) is Vector2 vector
+					? vector
+					: Vector2.zero;
+				var yOffsetNoWarning = (int)standardTopLeft.y;
+				var noWarningArgs = new object[] { yOffsetNoWarning };
+				ZombieAreaManager.warningShowing = false;
+				messageDrawPrefix?.Invoke(null, noWarningArgs);
+				var yOffsetAfterNoWarning = (int)noWarningArgs[0];
+
+				var yOffsetWithWarning = (int)standardTopLeft.y;
+				var warningArgs = new object[] { yOffsetWithWarning };
+				ZombieAreaManager.warningShowing = true;
+				messageDrawPrefix?.Invoke(null, warningArgs);
+				var yOffsetAfterWarning = (int)warningArgs[0];
+
+				// Leave warningShowing false here; the real MessagesDoGUI prefix sets it during the render path.
+				ZombieAreaManager.warningShowing = false;
+
+				return new
+				{
+					success = messageTargets.Length > 0
+						&& drawTargets.Length > 0
+						&& messageDrawPrefix != null
+						&& actorInWarning
+						&& zombieInWarning
+						&& warningEntries.Length >= 2
+						&& messageAdded
+						&& yOffsetAfterNoWarning == yOffsetNoWarning
+						&& yOffsetAfterWarning == yOffsetWithWarning + 29,
+					patchTargets = new
+					{
+						messagesDoGUI = messageTargets,
+						messageDraw = drawTargets
+					},
+					actor = DescribePawn(actor),
+					zombie = DescribeZombie(zombie),
+					warningEntries,
+					message = new
+					{
+						text = probeMessage,
+						liveMessageCountBefore,
+						liveMessageCountAfter,
+						messageAdded
+					},
+					yOffsetProbe = new
+					{
+						standardTopLeft = new { x = standardTopLeft.x, y = standardTopLeft.y },
+						noWarningBefore = yOffsetNoWarning,
+						noWarningAfter = yOffsetAfterNoWarning,
+						warningBefore = yOffsetWithWarning,
+						warningAfter = yOffsetAfterWarning,
+						expectedWarningAfter = yOffsetWithWarning + 29
+					},
+					cells = new
+					{
+						actor = ZombieRuntimeActions.DescribeCell(actor.Position),
+						zombie = ZombieRuntimeActions.DescribeCell(zombie.Position)
+					},
+					note = "The fixture intentionally leaves pawnsInDanger and a live message in place so generic screenshot/UI tools can capture the real MessagesDoGUI prefix path."
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.highlightDangerousAreas = oldHighlightDangerousAreas;
+			}
+		}
+
+		static int LiveMessageCount(FieldInfo liveMessagesField)
+		{
+			return liveMessagesField?.GetValue(null) is System.Collections.ICollection collection
+				? collection.Count
+				: -1;
 		}
 
 		static object VerifyAreaWorkflowHostilityResponse(Map map, Pawn fleeingPawn, Zombie nearbyZombie, IntVec3 root)

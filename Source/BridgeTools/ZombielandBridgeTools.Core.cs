@@ -23,6 +23,7 @@ namespace ZombieLand
 			var zombieRace = CustomDefs.Zombie?.race;
 			var settings = ZombieSettings.Values;
 			var zombieGrid = DescribeZombieGrid(map, zombies);
+			var ideology = DescribeIdeologyLoadState(map, zombies);
 
 			return new
 			{
@@ -48,8 +49,23 @@ namespace ZombieLand
 					cachedZombieCount = tickManager.allZombiesCached?.Count ?? 0,
 					liveZombieCount = tickManager.ZombieCount(),
 					currentColonyPoints = tickManager.currentColonyPoints,
-					spawningInProgress = ZombieGenerator.ZombiesSpawning
+					spawningInProgress = ZombieGenerator.ZombiesSpawning,
+					currentZombiesTickingLength = tickManager.currentZombiesTicking?.Length ?? 0,
+					currentZombiesTickingIndex = tickManager.currentZombiesTickingIndex
 				},
+				zombieTicker = new
+				{
+					percentTicking = ZombieTicker.PercentTicking,
+					percentSamples = ZombieTicker.percentZombiesTicked.ToArray(),
+					percentIndex = ZombieTicker.percentZombiesTickedIndex,
+					zombiesTicked = ZombieTicker.zombiesTicked,
+					maxTicking = ZombieTicker.maxTicking,
+					currentTicking = ZombieTicker.currentTicking,
+					managersCount = ZombieTicker.managers?.Count() ?? 0,
+					frameWatchRunning = ZombielandMod.frameWatch.IsRunning,
+					frameWatchElapsedMilliseconds = ZombielandMod.frameWatch.ElapsedMilliseconds
+				},
+				ideology,
 				zombieGrid,
 				spawnedZombieCount = zombies.Length,
 				ordinaryZombies = zombies.OfType<Zombie>().Count(),
@@ -428,6 +444,62 @@ namespace ZombieLand
 			};
 		}
 
+		static object DescribeIdeologyLoadState(Map map, Pawn[] zombies)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Pawn_IdeoTracker_ExposeData_Patch");
+			var pawns = map?.mapPawns?.AllPawnsSpawned ?? Enumerable.Empty<Pawn>();
+			var livingHumans = pawns
+				.Where(pawn => pawn?.Destroyed == false && pawn.Dead == false && pawn.RaceProps?.Humanlike == true)
+				.ToArray();
+			var nonZombieHumans = livingHumans
+				.Where(pawn => ZombieAreaManager.IsZombielandPawn(pawn) == false)
+				.ToArray();
+			var zombiePawns = zombies
+				.Where(pawn => pawn?.Destroyed == false && pawn.Dead == false)
+				.ToArray();
+
+			object DescribeIdeoPawn(Pawn pawn)
+			{
+				return new
+				{
+					pawnId = ZombieRuntimeActions.StableThingId(pawn),
+					thingId = pawn.ThingID,
+					label = pawn.LabelShort,
+					defName = pawn.def?.defName,
+					kindDef = pawn.kindDef?.defName,
+					shouldHaveIdeo = pawn.ShouldHaveIdeo,
+					hasIdeoTracker = pawn.ideo != null,
+					hasIdeo = pawn.ideo?.Ideo != null,
+					ideoName = pawn.ideo?.Ideo?.name,
+					certainty = pawn.ideo?.Certainty
+				};
+			}
+
+			return new
+			{
+				ideologyInstalled = ModsConfig.IdeologyActive,
+				patchTargets,
+				nonZombieHumanCount = nonZombieHumans.Length,
+				nonZombieHumansWithIdeoTracker = nonZombieHumans.Count(pawn => pawn.ideo != null),
+				nonZombieHumansShouldHaveIdeo = nonZombieHumans.Count(pawn => pawn.ShouldHaveIdeo),
+				nonZombieHumansWithIdeo = nonZombieHumans.Count(pawn => pawn.ideo?.Ideo != null),
+				zombielandPawnCount = zombiePawns.Length,
+				zombielandPawnsWithIdeoTracker = zombiePawns.Count(pawn => pawn.ideo != null),
+				zombielandPawnsShouldHaveIdeo = zombiePawns.Count(pawn => pawn.ShouldHaveIdeo),
+				zombielandPawnsWithIdeo = zombiePawns.Count(pawn => pawn.ideo?.Ideo != null),
+				nonZombieSamples = nonZombieHumans
+					.OrderBy(pawn => pawn.ThingID, StringComparer.Ordinal)
+					.Take(6)
+					.Select(DescribeIdeoPawn)
+					.ToArray(),
+				zombieSamples = zombiePawns
+					.OrderBy(pawn => pawn.ThingID, StringComparer.Ordinal)
+					.Take(6)
+					.Select(DescribeIdeoPawn)
+					.ToArray()
+			};
+		}
+
 		[Tool("zombieland/list_zombies", Description = "List spawned Zombieland pawns on the current map with stable ids and compact state.")]
 		public static object ListZombies([ToolParameter(Description = "Maximum number of zombies to return.", Required = false, DefaultValue = 100)] int limit = 100)
 		{
@@ -734,6 +806,637 @@ namespace ZombieLand
 			};
 		}
 
+		[Tool("zombieland/spawn_zombie_group", Description = "Spawn a bounded group of Zombieland zombies around a map cell for generic scenario and performance fixtures.")]
+		public static object SpawnZombieGroup(
+			[ToolParameter(Description = "Target center x coordinate. Use -1 with z -1 to spawn near map center.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Target center z coordinate. Use -1 with x -1 to spawn near map center.", Required = false, DefaultValue = -1)] int z = -1,
+			[ToolParameter(Description = "Maximum number of zombies to spawn. Clamped to 1..200.", Required = false, DefaultValue = 50)] int count = 50,
+			[ToolParameter(Description = "Search radius in cells around the center. Clamped to 3..60.", Required = false, DefaultValue = 18)] int radius = 18,
+			[ToolParameter(Description = "Zombie type name, for example Normal, Random, SuicideBomber, ToxicSplasher, TankyOperator, Miner, Electrifier, Albino, DarkSlimer, or Healer.", Required = false, DefaultValue = "Normal")] string type = "Normal",
+			[ToolParameter(Description = "When true, skip the underground dig-out state and spawn each zombie standing.", Required = false, DefaultValue = true)] bool appearDirectly = true,
+			[ToolParameter(Description = "Optional zombie-count grid value to seed at each spawned cell. Zero leaves the grid untouched.", Required = false, DefaultValue = 0)] int primeGridCount = 0)
+		{
+			if (TryParseZombieType(type, out var zombieType, out var parseError) == false)
+			{
+				return new
+				{
+					success = false,
+					error = parseError
+				};
+			}
+
+			if (TryFindSpawnCell(x, z, out var map, out var center, out var error) == false)
+				return error;
+
+			var cappedCount = Math.Max(1, Math.Min(count, 200));
+			var cappedRadius = Math.Max(3, Math.Min(radius, 60));
+			var cells = GenRadial.RadialCellsAround(center, cappedRadius, true)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetThingList(map).Any(thing => thing is Pawn) == false)
+				.Take(cappedCount)
+				.ToArray();
+
+			var tickManager = map.GetComponent<TickManager>();
+			var grid = map.GetGrid();
+			var spawned = new List<Pawn>(cells.Length);
+			foreach (var cell in cells)
+			{
+				var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, zombieType, appearDirectly);
+				if (zombie == null)
+					continue;
+
+				if (primeGridCount > 0 && zombie is Zombie ordinary)
+				{
+					var current = grid.GetZombieCount(cell);
+					if (current != 0)
+						grid.ChangeZombieCount(cell, -current);
+					grid.ChangeZombieCount(cell, primeGridCount);
+					ordinary.lastGotoPosition = cell;
+				}
+				spawned.Add(zombie);
+			}
+
+			return new
+			{
+				success = spawned.Count == cappedCount,
+				requestedCell = ZombieRuntimeActions.DescribeCell(new IntVec3(x, 0, z)),
+				centerCell = ZombieRuntimeActions.DescribeCell(center),
+				requestedCount = count,
+				count = cappedCount,
+				spawnedCount = spawned.Count,
+				radius = cappedRadius,
+				type = zombieType.ToString(),
+				appearDirectly,
+				primeGridCount,
+				tickManagerCachedCount = tickManager?.allZombiesCached?.Count(zombie => spawned.Contains(zombie)) ?? 0,
+				zombies = spawned.Take(20).Select(DescribeZombie).ToArray()
+			};
+		}
+
+		[Tool("zombieland/pheromone_state", Description = "Read, clear, or set Zombieland pheromone timestamps in a bounded current-map area for generic senses/pathing fixtures.")]
+		public static object PheromoneState(
+			[ToolParameter(Description = "Action to perform: read, clear, or set.", Required = false, DefaultValue = "read")] string action = "read",
+			[ToolParameter(Description = "Center x coordinate.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Center z coordinate.", Required = false, DefaultValue = -1)] int z = -1,
+			[ToolParameter(Description = "Radius around the center. Use 0 for a single cell. Clamped to 0..60.", Required = false, DefaultValue = 0f)] float radius = 0f,
+			[ToolParameter(Description = "For set action, timestamp age in RimWorld game ticks. Zero means current tick; values above the fadeoff create stale pheromones.", Required = false, DefaultValue = 0)] int ageGameTicks = 0,
+			[ToolParameter(Description = "For set action, optional zombie-count value to write. Use -1 to leave zombie counts unchanged.", Required = false, DefaultValue = -1)] int zombieCount = -1,
+			[ToolParameter(Description = "For clear action, also zero zombie-count values.", Required = false, DefaultValue = false)] bool clearZombieCounts = false,
+			[ToolParameter(Description = "Maximum sample cells to return.", Required = false, DefaultValue = 20)] int maxSamples = 20)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var center = x < 0 && z < 0 ? map.Center : new IntVec3(x, 0, z);
+			if (center.InBounds(map) == false)
+			{
+				return new
+				{
+					success = false,
+					error = $"Cell ({center.x}, {center.z}) is outside the current map."
+				};
+			}
+
+			var normalizedAction = (action ?? "read").Trim().ToLowerInvariant();
+			if (normalizedAction != "read" && normalizedAction != "clear" && normalizedAction != "set")
+			{
+				return new
+				{
+					success = false,
+					error = "Unsupported action. Use read, clear, or set."
+				};
+			}
+
+			var cappedRadius = Math.Max(0f, Math.Min(radius, 60f));
+			var cells = (cappedRadius <= 0f ? new[] { center } : GenRadial.RadialCellsAround(center, cappedRadius, true))
+				.Where(cell => cell.InBounds(map))
+				.Distinct()
+				.ToArray();
+			var grid = map.GetGrid();
+			var now = Tools.Ticks();
+			var fadeoff = Tools.PheromoneFadeoff();
+			var threshold = now - fadeoff;
+
+			if (normalizedAction == "clear")
+			{
+				foreach (var cell in cells)
+				{
+					grid.SetTimestamp(cell, 0);
+					if (clearZombieCounts)
+					{
+						var current = grid.GetZombieCount(cell);
+						if (current != 0)
+							grid.ChangeZombieCount(cell, -current);
+					}
+				}
+			}
+			else if (normalizedAction == "set")
+			{
+				var timestamp = now - Math.Max(0, ageGameTicks) * 1000L;
+				foreach (var cell in cells)
+				{
+					grid.SetTimestamp(cell, timestamp);
+					if (zombieCount >= 0)
+					{
+						var current = grid.GetZombieCount(cell);
+						if (current != 0)
+							grid.ChangeZombieCount(cell, -current);
+						if (zombieCount != 0)
+							grid.ChangeZombieCount(cell, zombieCount);
+					}
+				}
+			}
+
+			var samples = cells
+				.Select(cell =>
+				{
+					var timestamp = grid.GetTimestamp(cell);
+					return new
+					{
+						cell,
+						timestamp,
+						ageGameTicks = timestamp == 0 ? (long?)null : (now - timestamp) / 1000L,
+						fresh = timestamp > threshold,
+						zombieCount = grid.GetZombieCount(cell),
+						walkable = cell.Walkable(map),
+						standable = cell.Standable(map),
+						edifice = cell.GetEdifice(map)?.def?.defName
+					};
+				})
+				.ToArray();
+
+			var sampleLimit = Math.Max(1, Math.Min(maxSamples, 100));
+			return new
+			{
+				success = true,
+				action = normalizedAction,
+				center = ZombieRuntimeActions.DescribeCell(center),
+				radius = cappedRadius,
+				now,
+				fadeoff,
+				fadeoffGameTicks = fadeoff / 1000L,
+				threshold,
+				cellCount = cells.Length,
+				nonZeroTimestampCells = samples.Count(sample => sample.timestamp != 0),
+				freshCells = samples.Count(sample => sample.fresh),
+				nonZeroZombieCountCells = samples.Count(sample => sample.zombieCount != 0),
+				samples = samples
+					.OrderByDescending(sample => sample.timestamp)
+					.ThenBy(sample => sample.cell.x)
+					.ThenBy(sample => sample.cell.z)
+					.Take(sampleLimit)
+					.Select(sample => new
+					{
+						cell = ZombieRuntimeActions.DescribeCell(sample.cell),
+						sample.timestamp,
+						sample.ageGameTicks,
+						sample.fresh,
+						sample.zombieCount,
+						sample.walkable,
+						sample.standable,
+						sample.edifice
+					})
+					.ToArray()
+			};
+		}
+
+		[Tool("zombieland/place_wall_line", Description = "Place a reusable straight wall fixture line on the current map for pathing, scent, and room scenarios.")]
+		public static object PlaceWallLine(
+			[ToolParameter(Description = "Start x coordinate.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Start z coordinate.", Required = false, DefaultValue = -1)] int z = -1,
+			[ToolParameter(Description = "Number of wall cells to place. Clamped to 1..80.", Required = false, DefaultValue = 5)] int length = 5,
+			[ToolParameter(Description = "Direction of the line: north, south, east, or west.", Required = false, DefaultValue = "north")] string direction = "north",
+			[ToolParameter(Description = "Stuff defName for the wall. Defaults to WoodLog.", Required = false, DefaultValue = "WoodLog")] string stuffDefName = "WoodLog",
+			[ToolParameter(Description = "When true, assign the walls to the player faction.", Required = false, DefaultValue = true)] bool playerFaction = true)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var start = x < 0 && z < 0 ? map.Center : new IntVec3(x, 0, z);
+			if (start.InBounds(map) == false)
+			{
+				return new
+				{
+					success = false,
+					error = $"Cell ({start.x}, {start.z}) is outside the current map."
+				};
+			}
+
+			var normalizedDirection = (direction ?? "north").Trim().ToLowerInvariant();
+			var step = normalizedDirection switch
+			{
+				"north" => IntVec3.North,
+				"south" => IntVec3.South,
+				"east" => IntVec3.East,
+				"west" => IntVec3.West,
+				_ => IntVec3.Invalid
+			};
+			if (step.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Unsupported direction. Use north, south, east, or west."
+				};
+			}
+
+			var wallDef = ThingDefOf.Wall;
+			var stuffDef = DefDatabase<ThingDef>.GetNamedSilentFail(stuffDefName) ?? ThingDefOf.WoodLog;
+			var cappedLength = Math.Max(1, Math.Min(length, 80));
+			var spawned = new List<Building>();
+			var skipped = new List<object>();
+			for (var i = 0; i < cappedLength; i++)
+			{
+				var cell = start + step * i;
+				if (cell.InBounds(map) == false || cell.Fogged(map) || cell.GetThingList(map).Any(thing => thing is Pawn))
+				{
+					skipped.Add(new
+					{
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						reason = "out-of-bounds, fogged, or occupied by pawn"
+					});
+					continue;
+				}
+
+				foreach (var existing in cell.GetThingList(map).Where(thing => thing.def.category == ThingCategory.Building).ToArray())
+					existing.Destroy(DestroyMode.Vanish);
+
+				var wall = ThingMaker.MakeThing(wallDef, stuffDef) as Building;
+				if (wall == null)
+				{
+					skipped.Add(new
+					{
+						cell = ZombieRuntimeActions.DescribeCell(cell),
+						reason = "could not create wall"
+					});
+					continue;
+				}
+
+				GenSpawn.Spawn(wall, cell, map, WipeMode.Vanish);
+				if (playerFaction)
+					wall.SetFaction(Faction.OfPlayer);
+				spawned.Add(wall);
+			}
+
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+
+			return new
+			{
+				success = spawned.Count == cappedLength,
+				start = ZombieRuntimeActions.DescribeCell(start),
+				direction = normalizedDirection,
+				requestedLength = length,
+				length = cappedLength,
+				spawnedCount = spawned.Count,
+				stuffDef = stuffDef.defName,
+				playerFaction,
+				walls = spawned.Select(wall => new
+				{
+					thingId = wall.ThingID,
+					cell = ZombieRuntimeActions.DescribeCell(wall.Position),
+					walkable = wall.Position.Walkable(map),
+					standable = wall.Position.Standable(map)
+				}).ToArray(),
+				skipped
+			};
+		}
+
+		[Tool("zombieland/place_thing", Description = "Place one generic thing or building on the current map for reusable scenario fixtures.")]
+		public static object PlaceThing(
+			[ToolParameter(Description = "ThingDef defName to place, for example Door, Wall, Steel, or FirefoamPopper.", Required = true)] string defName,
+			[ToolParameter(Description = "Target x coordinate.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Target z coordinate.", Required = false, DefaultValue = -1)] int z = -1,
+			[ToolParameter(Description = "Stuff defName for made-from-stuff things. Empty uses the default stuff.", Required = false, DefaultValue = "")] string stuffDefName = "",
+			[ToolParameter(Description = "Stack count for stackable things. Clamped to 1..500.", Required = false, DefaultValue = 1)] int stackCount = 1,
+			[ToolParameter(Description = "Faction owner: none, player, zombies, or hostile. Buildings default well with player.", Required = false, DefaultValue = "player")] string faction = "player",
+			[ToolParameter(Description = "Destroy existing buildings at the target cell before placing.", Required = false, DefaultValue = true)] bool wipeBuildings = true,
+			[ToolParameter(Description = "Optional hit points to assign after spawning. Zero keeps default.", Required = false, DefaultValue = 0)] int hitPoints = 0)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var cell = x < 0 && z < 0 ? map.Center : new IntVec3(x, 0, z);
+			if (cell.InBounds(map) == false)
+			{
+				return new
+				{
+					success = false,
+					error = $"Cell ({cell.x}, {cell.z}) is outside the current map."
+				};
+			}
+			if (cell.Fogged(map))
+			{
+				return new
+				{
+					success = false,
+					error = $"Cell ({cell.x}, {cell.z}) is fogged."
+				};
+			}
+
+			var thingDef = DefDatabase<ThingDef>.GetNamedSilentFail(defName);
+			if (thingDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = $"ThingDef '{defName}' was not found."
+				};
+			}
+
+			ThingDef stuffDef = null;
+			if (thingDef.MadeFromStuff)
+			{
+				stuffDef = string.IsNullOrWhiteSpace(stuffDefName)
+					? GenStuff.DefaultStuffFor(thingDef)
+					: DefDatabase<ThingDef>.GetNamedSilentFail(stuffDefName);
+				if (stuffDef == null)
+				{
+					return new
+					{
+						success = false,
+						error = $"Stuff def '{stuffDefName}' was not found or no default stuff is available for {thingDef.defName}."
+					};
+				}
+			}
+
+			if (wipeBuildings)
+				foreach (var existing in cell.GetThingList(map).Where(thing => thing.def.category == ThingCategory.Building).ToArray())
+					existing.Destroy(DestroyMode.Vanish);
+
+			var thing = ThingMaker.MakeThing(thingDef, stuffDef);
+			if (thing == null)
+			{
+				return new
+				{
+					success = false,
+					error = $"ThingMaker.MakeThing returned null for {thingDef.defName}."
+				};
+			}
+
+			if (thing.def.stackLimit > 1)
+				thing.stackCount = Math.Max(1, Math.Min(stackCount, Math.Min(500, thing.def.stackLimit)));
+
+			GenSpawn.Spawn(thing, cell, map, WipeMode.Vanish);
+			var owner = ResolveFixtureFaction(faction);
+			if (thing is ThingWithComps || thing is Building)
+				thing.SetFactionDirect(owner);
+			if (hitPoints > 0)
+				thing.HitPoints = Math.Min(hitPoints, thing.MaxHitPoints);
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+
+			return new
+			{
+				success = thing.Spawned,
+				thing = DescribeFixtureThing(thing),
+				requestedCell = ZombieRuntimeActions.DescribeCell(cell),
+				stuffDef = stuffDef?.defName,
+				faction = owner?.def?.defName
+			};
+		}
+
+		[Tool("zombieland/start_map_fire", Description = "Start a normal RimWorld map fire at a current-map cell for reusable fire/corridor fixtures.")]
+		public static object StartMapFire(
+			[ToolParameter(Description = "Target x coordinate.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Target z coordinate.", Required = false, DefaultValue = -1)] int z = -1,
+			[ToolParameter(Description = "Initial fire size. Clamped to 0.1..1.75.", Required = false, DefaultValue = 0.5f)] float size = 0.5f)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var cell = x < 0 && z < 0 ? map.Center : new IntVec3(x, 0, z);
+			if (cell.InBounds(map) == false || cell.Fogged(map))
+			{
+				return new
+				{
+					success = false,
+					error = $"Cell ({cell.x}, {cell.z}) is outside the current map or fogged."
+				};
+			}
+
+			var started = FireUtility.TryStartFireIn(cell, map, Math.Max(0.1f, Math.Min(size, 1.75f)), null);
+			var fire = cell.GetThingList(map).OfType<Fire>().FirstOrDefault();
+			return new
+			{
+				success = started && fire != null,
+				started,
+				cell = ZombieRuntimeActions.DescribeCell(cell),
+				fire = DescribeFixtureThing(fire)
+			};
+		}
+
+		[Tool("zombieland/spawn_pawn_fixture", Description = "Spawn an ordinary pawn fixture and optionally make it health-downed, killed into a corpse, or burning.")]
+		public static object SpawnPawnFixture(
+			[ToolParameter(Description = "PawnKindDef defName. Defaults to Colonist.", Required = false, DefaultValue = "Colonist")] string pawnKindDefName = "Colonist",
+			[ToolParameter(Description = "Target x coordinate.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Target z coordinate.", Required = false, DefaultValue = -1)] int z = -1,
+			[ToolParameter(Description = "Faction owner: player, hostile, none, or zombies.", Required = false, DefaultValue = "player")] string faction = "player",
+			[ToolParameter(Description = "Optional name prefix to make the fixture easy to identify.", Required = false, DefaultValue = "ZL_Fixture")] string namePrefix = "ZL_Fixture",
+			[ToolParameter(Description = "Disable work after spawning if the pawn has work settings.", Required = false, DefaultValue = true)] bool disableWork = true,
+			[ToolParameter(Description = "Make the pawn health-downed through RimWorld's MakeDowned path.", Required = false, DefaultValue = false)] bool downed = false,
+			[ToolParameter(Description = "Kill the pawn after spawning and return the resulting corpse.", Required = false, DefaultValue = false)] bool dead = false,
+			[ToolParameter(Description = "Attach fire to the pawn after spawning. Ignored for dead fixtures.", Required = false, DefaultValue = false)] bool attachFire = false)
+		{
+			if (TryFindSpawnCell(x, z, out var map, out var cell, out var error) == false)
+				return error;
+
+			var kindDef = DefDatabase<PawnKindDef>.GetNamedSilentFail(pawnKindDefName) ?? PawnKindDefOf.Colonist;
+			var owner = ResolveFixtureFaction(faction);
+			var pawn = PawnGenerator.GeneratePawn(kindDef, owner);
+			if (string.IsNullOrWhiteSpace(namePrefix) == false && pawn.Name is NameTriple)
+			{
+				var index = map.mapPawns.AllPawnsSpawned.Count(p => p.Name?.ToStringShort?.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase) == true) + 1;
+				pawn.Name = new NameTriple(namePrefix, index.ToString(), "Fixture");
+			}
+			GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+			if (disableWork)
+				DisablePawnWork(pawn);
+
+			string downedError = null;
+			if (downed && dead == false)
+				_ = TryMakeDownedForCombat(pawn, out downedError);
+
+			var fireAttached = false;
+			if (attachFire && dead == false)
+			{
+				FireUtility.TryAttachFire(pawn, 1f, null);
+				fireAttached = pawn.GetAttachment(ThingDefOf.Fire) is Fire;
+			}
+
+			Corpse corpse = null;
+			if (dead)
+			{
+				pawn.Kill(null);
+				corpse = cell.GetThingList(map).OfType<Corpse>().FirstOrDefault(c => c.InnerPawn == pawn)
+					?? map.listerThings.ThingsInGroup(ThingRequestGroup.Corpse).OfType<Corpse>().FirstOrDefault(c => c.InnerPawn == pawn);
+			}
+
+			return new
+			{
+				success = dead ? corpse != null : pawn.Spawned && (downed == false || pawn.health.Downed),
+				requestedCell = ZombieRuntimeActions.DescribeCell(new IntVec3(x, 0, z)),
+				spawnCell = ZombieRuntimeActions.DescribeCell(cell),
+				pawn = DescribePawn(pawn),
+				healthDowned = pawn.health?.Downed ?? false,
+				publicDowned = pawn.Downed,
+				downedError,
+				fireAttached,
+				corpse = DescribeFixtureThing(corpse)
+			};
+		}
+
+		[Tool("zombieland/read_cell_things", Description = "Read spawned things, pawns, corpses, buildings, and fire in a bounded current-map area.")]
+		public static object ReadCellThings(
+			[ToolParameter(Description = "Center x coordinate.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Center z coordinate.", Required = false, DefaultValue = -1)] int z = -1,
+			[ToolParameter(Description = "Radius around the center. Use 0 for a single cell. Clamped to 0..60.", Required = false, DefaultValue = 0f)] float radius = 0f,
+			[ToolParameter(Description = "Maximum thing samples to return.", Required = false, DefaultValue = 100)] int maxThings = 100)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+
+			var center = x < 0 && z < 0 ? map.Center : new IntVec3(x, 0, z);
+			if (center.InBounds(map) == false)
+			{
+				return new
+				{
+					success = false,
+					error = $"Cell ({center.x}, {center.z}) is outside the current map."
+				};
+			}
+
+			var cappedRadius = Math.Max(0f, Math.Min(radius, 60f));
+			var cells = (cappedRadius <= 0f ? new[] { center } : GenRadial.RadialCellsAround(center, cappedRadius, true))
+				.Where(cell => cell.InBounds(map))
+				.Distinct()
+				.ToArray();
+			var things = cells
+				.SelectMany(cell => cell.GetThingList(map).Select(thing => new { cell, thing }))
+				.Take(Math.Max(1, Math.Min(maxThings, 300)))
+				.ToArray();
+
+			return new
+			{
+				success = true,
+				center = ZombieRuntimeActions.DescribeCell(center),
+				radius = cappedRadius,
+				cellCount = cells.Length,
+				thingCount = things.Length,
+				things = things.Select(entry => DescribeFixtureThing(entry.thing)).ToArray()
+			};
+		}
+
+		static Faction ResolveFixtureFaction(string faction)
+		{
+			var key = (faction ?? "player").Trim().ToLowerInvariant();
+			if (key == "none" || key == "null")
+				return null;
+			if (key == "zombies")
+				return Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies);
+			if (key == "hostile" || key == "enemy")
+				return Find.FactionManager.AllFactionsVisible.FirstOrDefault(candidate => candidate != null && candidate.HostileTo(Faction.OfPlayer));
+			return Faction.OfPlayer;
+		}
+
+		static object DescribeFixtureThing(Thing thing)
+		{
+			if (thing == null)
+				return null;
+
+			var pawn = thing as Pawn;
+			var corpse = thing as Corpse;
+			var fire = thing as Fire;
+			return new
+			{
+				id = ZombieRuntimeActions.StableThingId(thing),
+				thingId = thing.ThingID,
+				defName = thing.def?.defName,
+				label = thing.LabelShort,
+				position = thing.Spawned ? ZombieRuntimeActions.DescribeCell(thing.Position) : null,
+				spawned = thing.Spawned,
+				destroyed = thing.Destroyed,
+				stackCount = thing.stackCount,
+				hitPoints = thing.HitPoints,
+				maxHitPoints = thing.MaxHitPoints,
+				faction = thing.Faction?.def?.defName,
+				forbidden = thing.Spawned && thing.IsForbidden(Faction.OfPlayer),
+				category = thing.def?.category.ToString(),
+				isPawn = pawn != null,
+				isCorpse = corpse != null,
+				isFire = fire != null,
+				pawn = pawn == null ? null : DescribePawn(pawn),
+				corpseInnerPawn = corpse?.InnerPawn == null ? null : DescribePawn(corpse.InnerPawn),
+				fireSize = fire?.fireSize,
+				edifice = thing.Position.IsValid && thing.Spawned ? thing.Position.GetEdifice(thing.Map)?.def?.defName : null
+			};
+		}
+
+		[Tool("zombieland/spawn_colonist", Description = "Spawn one player colonist near a map cell for generic scenario fixtures.")]
+		public static object SpawnColonist(
+			[ToolParameter(Description = "Target x coordinate. Use -1 with z -1 to spawn near map center.", Required = false, DefaultValue = -1)] int x = -1,
+			[ToolParameter(Description = "Target z coordinate. Use -1 with x -1 to spawn near map center.", Required = false, DefaultValue = -1)] int z = -1,
+			[ToolParameter(Description = "Optional colonist name prefix to make the fixture easy to identify.", Required = false, DefaultValue = "ZL_Horde_Bait")] string namePrefix = "ZL_Horde_Bait",
+			[ToolParameter(Description = "Disable all work after spawning so the pawn stays available as a scenario fixture.", Required = false, DefaultValue = true)] bool disableWork = true)
+		{
+			if (TryFindSpawnCell(x, z, out var map, out var cell, out var error) == false)
+				return error;
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			if (string.IsNullOrWhiteSpace(namePrefix) == false)
+			{
+				var index = map.mapPawns.FreeColonistsSpawned.Count(p => p.Name?.ToStringShort?.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase) == true) + 1;
+				pawn.Name = new NameTriple(namePrefix, index.ToString(), "Fixture");
+			}
+			GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+			if (disableWork)
+				DisablePawnWork(pawn);
+
+			return new
+			{
+				success = pawn.Spawned && pawn.Faction == Faction.OfPlayer,
+				requestedCell = ZombieRuntimeActions.DescribeCell(new IntVec3(x, 0, z)),
+				spawnCell = ZombieRuntimeActions.DescribeCell(cell),
+				disableWork,
+				pawn = DescribePawn(pawn)
+			};
+		}
+
 		[Tool("zombieland/spawn_spitter_visual_fixture", Description = "Spawn one idle zombie spitter without launching a ZombieBall so its custom three-layer rendering can be inspected.")]
 		public static object SpawnSpitterVisualFixture(
 			[ToolParameter(Description = "Target x coordinate. Use -1 with z -1 to spawn near map center.", Required = false, DefaultValue = -1)] int x = -1,
@@ -783,7 +1486,8 @@ namespace ZombieLand
 			[ToolParameter(Description = "Origin x coordinate for the top-left zombie. Use -1 with z -1 to start near map center.", Required = false, DefaultValue = -1)] int x = -1,
 			[ToolParameter(Description = "Origin z coordinate for the top-left zombie. Use -1 with x -1 to start near map center.", Required = false, DefaultValue = -1)] int z = -1,
 			[ToolParameter(Description = "Destroy existing Zombieland pawns on the current map before spawning the lineup.", Required = false, DefaultValue = true)] bool clearExisting = true,
-			[ToolParameter(Description = "When true, skip the underground dig-out state and spawn each zombie standing.", Required = false, DefaultValue = true)] bool appearDirectly = true)
+			[ToolParameter(Description = "When true, skip the underground dig-out state and spawn each zombie standing.", Required = false, DefaultValue = true)] bool appearDirectly = true,
+			[ToolParameter(Description = "Add spitter/blob plus staged render states for a reusable S-Special-Gauntlet visual screenshot.", Required = false, DefaultValue = false)] bool stageRenderStates = false)
 		{
 			var map = CurrentMap;
 			if (map == null)
@@ -807,6 +1511,7 @@ namespace ZombieLand
 
 			var destroyed = clearExisting ? ZombieRuntimeActions.DestroyZombies(map) : 0;
 			var success = true;
+			var spawned = new List<Pawn>();
 			var results = referenceLineup.Select<LineupEntry, object>(entry =>
 			{
 				var requestedCell = new IntVec3(origin.x + entry.dx, 0, origin.z + entry.dz);
@@ -825,6 +1530,12 @@ namespace ZombieLand
 				}
 
 				var zombie = ZombieRuntimeActions.SpawnZombie(cell, spawnMap, entry.type, appearDirectly);
+				if (zombie != null)
+				{
+					zombie.Name = new NameSingle($"ZL Visual {entry.type}");
+					zombie.Rotation = Rot4.South;
+					spawned.Add(zombie);
+				}
 				success &= zombie?.Spawned ?? false;
 				return new
 				{
@@ -836,16 +1547,226 @@ namespace ZombieLand
 					zombie = DescribeZombie(zombie)
 				};
 			}).ToArray();
+			var stage = stageRenderStates ? StageReferenceLineupRenderStates(map, origin, spawned) : null;
 
 			return new
 			{
-				success,
+				success = success && (stageRenderStates == false || ObjectSuccess(stage)),
 				origin = ZombieRuntimeActions.DescribeCell(origin),
 				destroyed,
 				appearDirectly,
+				stageRenderStates,
 				count = results.Length,
-				results
+				results,
+				stage
 			};
+		}
+
+		static object StageReferenceLineupRenderStates(Map map, IntVec3 origin, List<Pawn> spawned)
+		{
+			var staged = new List<object>();
+			var errors = new List<string>();
+			var tickAbs = GenTicks.TicksAbs;
+
+			var anchor = SpawnLineupColonist(map, origin + new IntVec3(8, 0, 5), "ZL Visual Rope Anchor", spawned, errors);
+			var wounded = ZombieRuntimeActions.SpawnZombie(ResolveLineupCell(map, origin + new IntVec3(4, 0, 6)), map, ZombieType.Normal, true);
+			if (wounded != null)
+			{
+				wounded.Name = new NameSingle("ZL Visual Wounded Target");
+				wounded.TakeDamage(new DamageInfo(DamageDefOf.Cut, 6f));
+				spawned.Add(wounded);
+				staged.Add(new { role = "healer-target", zombie = DescribeZombie(wounded) });
+			}
+			else
+				errors.Add("Could not spawn wounded healer target.");
+
+			var electrifier = spawned.OfType<Zombie>().FirstOrDefault(zombie => zombie.isElectrifier);
+			if (electrifier != null)
+			{
+				electrifier.electricDisabledUntil = 0;
+				electrifier.electricCounter = 0;
+				electrifier.absorbAttack.Clear();
+				electrifier.absorbAttack.Add(new KeyValuePair<float, int>(0f, -2));
+				staged.Add(new { role = "electrifier-arc-absorb", zombie = DescribeZombie(electrifier), absorbCount = electrifier.absorbAttack.Count });
+			}
+			else
+				errors.Add("No electrifier was available to stage electric render effects.");
+
+			var bomber = spawned.OfType<Zombie>().FirstOrDefault(zombie => zombie.IsSuicideBomber);
+			if (bomber != null)
+			{
+				bomber.lastBombTick = tickAbs;
+				staged.Add(new { role = "bomber-light", zombie = DescribeZombie(bomber) });
+			}
+
+			var albino = spawned.OfType<Zombie>().FirstOrDefault(zombie => zombie.isAlbino);
+			if (albino != null)
+			{
+				albino.scream = 180;
+				staged.Add(new { role = "albino-scream", zombie = DescribeZombie(albino), scream = albino.scream });
+			}
+			else
+				errors.Add("No albino was available to stage scream render effects.");
+
+			var healer = spawned.OfType<Zombie>().FirstOrDefault(zombie => zombie.isHealer);
+			if (healer != null && wounded != null)
+			{
+				healer.healInfo.Clear();
+				healer.healInfo.Add(new HealerInfo(wounded) { step = 12 });
+				staged.Add(new { role = "healer-beam", zombie = DescribeZombie(healer), target = DescribeZombie(wounded), healInfoCount = healer.healInfo.Count });
+			}
+			else
+				errors.Add("No healer/wounded pair was available to stage healer render effects.");
+
+			var raging = SpawnLineupZombie(map, origin + new IntVec3(8, 0, 0), ZombieType.Normal, "ZL Visual Raging", true, spawned, errors);
+			if (raging != null)
+			{
+				raging.raging = tickAbs + 60000;
+				raging.Rotation = Rot4.South;
+				staged.Add(new { role = "raging-aura-eyes", zombie = DescribeZombie(raging), ragingUntil = raging.raging });
+			}
+
+			var roped = SpawnLineupZombie(map, origin + new IntVec3(8, 0, 2), ZombieType.Normal, "ZL Visual Roped", true, spawned, errors);
+			if (roped != null && anchor != null)
+			{
+				roped.ropedBy = anchor;
+				roped.Rotation = Rot4.South;
+				staged.Add(new { role = "roped-icon-line", zombie = DescribeZombie(roped), anchor = DescribePawn(anchor), ropingFactor = roped.RopingFactorTo(anchor) });
+			}
+
+			var confused = SpawnLineupZombie(map, origin + new IntVec3(10, 0, 2), ZombieType.Normal, "ZL Visual Confused", true, spawned, errors);
+			if (confused != null)
+			{
+				confused.paralyzedUntil = tickAbs + 2500;
+				confused.Rotation = Rot4.South;
+				staged.Add(new { role = "confused-icon", zombie = DescribeZombie(confused), paralyzedUntil = confused.paralyzedUntil });
+			}
+
+			var emerging = SpawnLineupZombie(map, origin + new IntVec3(10, 0, 0), ZombieType.Normal, "ZL Visual Emerging", false, spawned, errors);
+			if (emerging != null)
+			{
+				emerging.state = ZombieState.Emerging;
+				emerging.Rotation = Rot4.South;
+				staged.Add(new { role = "emerging-render", zombie = DescribeZombie(emerging) });
+			}
+
+			var spitter = SpawnLineupSpitter(map, origin + new IntVec3(10, 0, 4), "ZL Visual Spitter", spawned, errors);
+			if (spitter != null)
+				staged.Add(new { role = "spitter-custom-render", zombie = DescribeZombie(spitter) });
+
+			var blob = SpawnLineupBlob(map, origin + new IntVec3(12, 0, 4), "ZL Visual Blob", spawned, errors);
+			if (blob != null)
+				staged.Add(new { role = "blob-render", zombie = DescribeZombie(blob) });
+
+			return new
+			{
+				success = errors.Count == 0,
+				errors = errors.ToArray(),
+				anchor = DescribePawn(anchor),
+				spawnedCount = spawned.Count,
+				staged = staged.ToArray()
+			};
+		}
+
+		static IntVec3 ResolveLineupCell(Map map, IntVec3 requestedCell)
+		{
+			if (requestedCell.InBounds(map) && requestedCell.Standable(map) && requestedCell.Fogged(map) == false && requestedCell.GetFirstPawn(map) == null)
+				return requestedCell;
+
+			return GenRadial.RadialCellsAround(requestedCell, 8f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.OrderBy(cell => cell.DistanceToSquared(requestedCell))
+				.FirstOrDefault();
+		}
+
+		static Pawn SpawnLineupColonist(Map map, IntVec3 requestedCell, string name, List<Pawn> spawned, List<string> errors)
+		{
+			var cell = ResolveLineupCell(map, requestedCell);
+			if (cell.IsValid == false)
+			{
+				errors.Add($"Could not find a spawn cell for {name}.");
+				return null;
+			}
+
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			pawn.Name = new NameSingle(name);
+			GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+			DisablePawnWork(pawn);
+			spawned.Add(pawn);
+			return pawn;
+		}
+
+		static Zombie SpawnLineupZombie(Map map, IntVec3 requestedCell, ZombieType type, string name, bool appearDirectly, List<Pawn> spawned, List<string> errors)
+		{
+			var cell = ResolveLineupCell(map, requestedCell);
+			if (cell.IsValid == false)
+			{
+				errors.Add($"Could not find a spawn cell for {name}.");
+				return null;
+			}
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, type, appearDirectly);
+			if (zombie == null)
+			{
+				errors.Add($"Could not spawn {name}.");
+				return null;
+			}
+			zombie.Name = new NameSingle(name);
+			spawned.Add(zombie);
+			return zombie;
+		}
+
+		static ZombieSpitter SpawnLineupSpitter(Map map, IntVec3 requestedCell, string name, List<Pawn> spawned, List<string> errors)
+		{
+			var cell = ResolveLineupCell(map, requestedCell);
+			if (cell.IsValid == false)
+			{
+				errors.Add($"Could not find a spawn cell for {name}.");
+				return null;
+			}
+
+			var existing = CurrentZombies(map).OfType<ZombieSpitter>().Select(ZombieRuntimeActions.StableThingId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+			ZombieSpitter.Spawn(map, cell);
+			var spitter = CurrentZombies(map).OfType<ZombieSpitter>()
+				.FirstOrDefault(candidate => existing.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieSpitter>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
+			if (spitter == null)
+			{
+				errors.Add($"Could not spawn {name}.");
+				return null;
+			}
+			spitter.Name = new NameSingle(name);
+			spitter.state = SpitterState.Idle;
+			spitter.Rotation = Rot4.South;
+			spawned.Add(spitter);
+			return spitter;
+		}
+
+		static ZombieBlob SpawnLineupBlob(Map map, IntVec3 requestedCell, string name, List<Pawn> spawned, List<string> errors)
+		{
+			var cell = ResolveLineupCell(map, requestedCell);
+			if (cell.IsValid == false)
+			{
+				errors.Add($"Could not find a spawn cell for {name}.");
+				return null;
+			}
+
+			var existing = CurrentZombies(map).OfType<ZombieBlob>().Select(ZombieRuntimeActions.StableThingId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+			ZombieBlob.Spawn(map, cell);
+			var blob = CurrentZombies(map).OfType<ZombieBlob>()
+				.FirstOrDefault(candidate => existing.Contains(ZombieRuntimeActions.StableThingId(candidate)) == false)
+				?? CurrentZombies(map).OfType<ZombieBlob>().OrderBy(candidate => candidate.Position.DistanceToSquared(cell)).FirstOrDefault();
+			if (blob == null)
+			{
+				errors.Add($"Could not spawn {name}.");
+				return null;
+			}
+			blob.Name = new NameSingle(name);
+			spawned.Add(blob);
+			return blob;
 		}
 
 	}

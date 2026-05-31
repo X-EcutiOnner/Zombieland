@@ -14,6 +14,7 @@ namespace ZombieLand
 		static readonly float elementPower = 1f;
 		static readonly float elementRadius = 0.011f;
 		static readonly float[] elementSizes = [2.5f, 2.4f, 1.6f, 1.2f, 1f, 0.9f, 0.9f, 1f, 1f];
+		static readonly HashSet<ZombieBlob> renderResourceOwners = [];
 		// static readonly float[] elementSizes = [1f, 1f, 1f, 1f, 1f, 1f, 1f, 1f, 1f];
 
 		struct Metaball
@@ -66,7 +67,14 @@ namespace ZombieLand
 			blob?.AddCell(cell);
 		}
 
-		void ReleaseRenderResources()
+		internal static void ReleaseAllRenderResources()
+		{
+			foreach (var blob in renderResourceOwners.ToArray())
+				blob.ReleaseRenderResources(false);
+			renderResourceOwners.Clear();
+		}
+
+		void ReleaseRenderResources(bool unregister = true)
 		{
 			if (metaballMaterial != null)
 			{
@@ -83,6 +91,8 @@ namespace ZombieLand
 				Object.Destroy(mesh);
 				mesh = null;
 			}
+			if (unregister)
+				renderResourceOwners.Remove(this);
 		}
 
 		public override void DeSpawn(DestroyMode mode = DestroyMode.Vanish)
@@ -183,6 +193,8 @@ namespace ZombieLand
 			metaballBuffer ??= new ComputeBuffer(MAX_METABALLS, Marshal.SizeOf(typeof(Metaball)));
 			if (metaballMaterial == null && Assets.MetaballShader != null)
 				metaballMaterial = new Material(Assets.MetaballShader);
+			if (metaballBuffer != null || metaballMaterial != null || mesh != null)
+				renderResourceOwners.Add(this);
 		}
 
 		float GetSize(IntVec3 cell)

@@ -106,9 +106,9 @@ namespace ZombieLand
 			};
 		}
 
-		[Tool("zombieland/infection_medical_state", Description = "Run compact medical/death patch contracts for zombie-bite healing, Pawn.Tick state sync, Pawn.Kill infection/loot behavior, ShouldRemove persistence, and remove-body-part surgery targeting.")]
+		[Tool("zombieland/infection_medical_state", Description = "Run compact medical/death patch contracts for zombie-bite healing, health-card UI, Pawn.Tick state sync, Pawn.Kill infection/loot behavior, ShouldRemove persistence, and remove-body-part surgery targeting.")]
 		public static object InfectionMedicalState(
-			[ToolParameter(Description = "Action mode: all or pawn-kill.", Required = false, DefaultValue = "all")] string actionMode = "all")
+			[ToolParameter(Description = "Action mode: all, pawn-kill, health-card-living, or health-card-dead.", Required = false, DefaultValue = "all")] string actionMode = "all")
 		{
 			var map = CurrentMap;
 			if (map == null)
@@ -123,13 +123,15 @@ namespace ZombieLand
 			var normalizedMode = (actionMode ?? "all").Trim().ToLowerInvariant();
 			if (normalizedMode == "pawn-kill")
 				return VerifyPawnKillPatch(map, new IntVec3(map.Size.x / 2, 0, map.Size.z / 2));
+			if (normalizedMode == "health-card-living" || normalizedMode == "health-card-dead")
+				return PrepareHealthCardFixture(map, normalizedMode == "health-card-dead");
 			if (normalizedMode != "all")
 			{
 				return new
 				{
 					success = false,
 					actionMode = normalizedMode,
-					error = "Unsupported infection_medical_state actionMode. Use all or pawn-kill."
+					error = "Unsupported infection_medical_state actionMode. Use all, pawn-kill, health-card-living, or health-card-dead."
 				};
 			}
 
@@ -250,6 +252,107 @@ namespace ZombieLand
 				ZombieSettings.Values.zombieBiteInfectionChance = oldInfectionChance;
 				foreach (var pawn in spawnedPawns.Where(pawn => pawn != null && pawn.Destroyed == false).ToArray())
 					pawn.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object PrepareHealthCardFixture(Map map, bool dead)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("HealthCardUtility_DrawOverviewTab_Patch");
+			if (TryFindClearSpawnCell(map, new IntVec3(map.Size.x / 2, 0, map.Size.z / 2), 24f, out var cell, out var spawnError) == false)
+				return spawnError;
+
+			var oldHoursAfterDeath = ZombieSettings.Values.hoursAfterDeathToBecomeZombie;
+			try
+			{
+				ZombieSettings.Values.hoursAfterDeathToBecomeZombie = 2;
+				var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(pawn, cell, map, WipeMode.Vanish);
+				DisablePawnWork(pawn);
+
+				if (ZombieRuntimeActions.AddZombieBite(pawn, "final", out var bite, out var biteError) == false)
+				{
+					return new
+					{
+						success = false,
+						patchTargets,
+						pawn = DescribePawn(pawn),
+						error = biteError
+					};
+				}
+				var biteState = bite.TendDuration?.GetInfectionState() ?? InfectionState.None;
+				pawn.SetInfectionState(biteState);
+
+				Thing selectedThing = pawn;
+				Corpse corpse = null;
+				if (dead)
+				{
+					if (ZombieRuntimeActions.KillPawnToCorpse(pawn, out corpse, out var killError) == false)
+					{
+						return new
+						{
+							success = false,
+							patchTargets,
+							pawn = DescribePawn(pawn),
+							error = killError
+						};
+					}
+					selectedThing = corpse;
+				}
+
+				Find.Selector.ClearSelection();
+				Find.Selector.Select(selectedThing, false, false);
+				var openedTab = InspectPaneUtility.OpenTab(typeof(ITab_Pawn_Health));
+				var expectedLabel = "BodyIsInfectedLabel".Translate().ToString();
+				var expectedTooltip = "BodyIsInfectedTooltip".Translate().ToString();
+				var zombieBites = pawn.GetHediffsList<Hediff_Injury_ZombieBite>().ToArray();
+				var infectionHediffs = new List<Hediff_ZombieInfection>();
+				pawn.health.hediffSet.GetHediffs(ref infectionHediffs);
+				var expectedEligible = patchTargets.Length > 0
+					&& pawn.health?.hediffSet?.GetBrain() != null
+					&& (dead
+						? zombieBites.Any(zombieBite => zombieBite.mayBecomeZombieWhenDead)
+						: pawn.InfectionState() >= InfectionState.BittenInfectable);
+
+				return new
+				{
+					success = expectedEligible && openedTab != null && Find.Selector.IsSelected(selectedThing),
+					action = dead ? "health-card-dead" : "health-card-living",
+					patchTargets,
+					expectedLabel,
+					expectedTooltip,
+					selected = new
+					{
+						id = ZombieRuntimeActions.StableThingId(selectedThing),
+						thingId = selectedThing?.ThingID,
+						defName = selectedThing?.def?.defName,
+						className = selectedThing?.GetType().FullName,
+						spawned = selectedThing?.Spawned ?? false,
+						position = selectedThing?.Spawned == true ? ZombieRuntimeActions.DescribeCell(selectedThing.Position) : null
+					},
+					openedTab = openedTab?.GetType().FullName,
+					pawn = DescribePawn(pawn),
+					corpse = DescribeCorpse(corpse),
+					bite = new
+					{
+						state = biteState.ToString(),
+						bite.mayBecomeZombieWhenDead,
+						partDefName = bite.Part?.def?.defName
+					},
+					zombieBiteCount = zombieBites.Length,
+					mayBecomeZombieBiteCount = zombieBites.Count(zombieBite => zombieBite.mayBecomeZombieWhenDead),
+					infectionHediffCount = infectionHediffs.Count,
+					infectionTicks = infectionHediffs.Select(hediff => hediff.ticksWhenBecomingZombie).ToArray(),
+					expectedEligible,
+					selection = new
+					{
+						isSelected = Find.Selector.IsSelected(selectedThing),
+						selectedCount = Find.Selector.SelectedObjects.Count
+					}
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.hoursAfterDeathToBecomeZombie = oldHoursAfterDeath;
 			}
 		}
 

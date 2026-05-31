@@ -314,6 +314,150 @@ namespace ZombieLand
 				return faction;
 			}
 
+			object DescribeInspectPaneWidth(Thing thing, string role)
+			{
+				if (thing == null || thing.Destroyed)
+				{
+					return new
+					{
+						success = false,
+						role,
+						error = "No selectable thing was available for inspect-pane width measurement."
+					};
+				}
+
+				Find.Selector.ClearSelection();
+				Find.Selector.Select(thing, false, false);
+				var pane = new MainTabWindow_Inspect();
+				var tabs = (pane.CurTabs ?? Enumerable.Empty<InspectTabBase>()).ToArray();
+				var visibleTabs = tabs.Count(tab => tab.IsVisible && tab.Hidden == false);
+				var vanillaBaseWidth = 72f * Mathf.Max(6, visibleTabs);
+				var patchedWidth = InspectPaneUtility.PaneWidthFor(pane);
+				return new
+				{
+					success = Find.Selector.IsSelected(thing)
+						&& patchedWidth > vanillaBaseWidth
+						&& Approximately(patchedWidth - vanillaBaseWidth, 146f, 0.001f),
+					role,
+					selected = Find.Selector.IsSelected(thing),
+					thing = DescribeContaminationThing(thing),
+					visibleTabs,
+					vanillaBaseWidth,
+					patchedWidth,
+					addedWidth = patchedWidth - vanillaBaseWidth,
+					expectedAddedWidth = 146f
+				};
+			}
+
+			string PatchValueString(object patchResult)
+			{
+				if (patchResult == null)
+					return null;
+				var successProperty = patchResult.GetType().GetProperty("success");
+				var valueProperty = patchResult.GetType().GetProperty("value");
+				if (successProperty == null || valueProperty == null || (bool)successProperty.GetValue(patchResult) == false)
+					return null;
+				return valueProperty.GetValue(patchResult)?.ToString();
+			}
+
+			object DescribeUiPresentation(Thing thing, IntVec3 cell, string role)
+			{
+				if (thing == null || thing.Destroyed || cell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						role,
+						error = "No spawned thing/cell was available for UI presentation checks."
+					};
+				}
+
+				var statEntryValues = thing.SpecialDisplayStats().ToArray();
+				var contaminationStatValues = statEntryValues
+					.Where(entry => string.Equals(entry.LabelCap, "ZombieContamination".Translate().ToString(), StringComparison.OrdinalIgnoreCase))
+					.Select(entry => entry.ValueString)
+					.ToArray();
+				var thingMouseover = PatchValueString(InvokePatchHelper("ZombieLand.MouseoverReadout_MouseoverReadoutOnGUI_Patch", "LabelMouseover", thing));
+				var glowMouseover = PatchValueString(InvokePatchHelper("ZombieLand.MouseoverReadout_MouseoverReadoutOnGUI_Patch", "GetGlowLabelByValue", map.glowGrid.GroundGlowAt(cell), cell));
+				var thingContamination = thing.GetContamination();
+				var cellContamination = map.GetContamination(cell);
+				var expectedStatValue = $"{100 * thingContamination:F2}%";
+				var thingMouseoverHasContamination = thingMouseover?.IndexOf("contaminated", StringComparison.OrdinalIgnoreCase) >= 0;
+				var glowMouseoverHasContamination = glowMouseover?.IndexOf("Contaminated", StringComparison.OrdinalIgnoreCase) >= 0;
+				var expectedThingMouseoverContamination = thingContamination >= ContaminationFactors.minContaminationThreshold;
+				var expectedGlowContamination = cellContamination >= ContaminationFactors.minContaminationThreshold;
+
+				return new
+				{
+					success = contaminationStatValues.Length == 1
+						&& contaminationStatValues[0] == expectedStatValue
+						&& thingMouseover != null
+						&& glowMouseover != null
+						&& thingMouseoverHasContamination == expectedThingMouseoverContamination
+						&& glowMouseoverHasContamination == expectedGlowContamination,
+					role,
+					thing = DescribeContaminationThing(thing),
+					cell = ZombieRuntimeActions.DescribeCell(cell),
+					cellContamination,
+					expectedStatValue,
+					contaminationStatValues,
+					thingMouseover,
+					thingMouseoverHasContamination,
+					expectedThingMouseoverContamination,
+					glowMouseover,
+					glowMouseoverHasContamination,
+					expectedGlowContamination
+				};
+			}
+
+			object DescribeInspectPaneWidthComparison()
+			{
+				if (visualThing == null || visualThing.Destroyed || visualCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						error = "The visual fixture was not available for inspect-pane width comparison."
+					};
+				}
+
+				Thing cleanThing = null;
+				try
+				{
+					var cleanCell = visualCell + new IntVec3(1, 0, 0);
+					if (cleanCell.InBounds(map) == false || cleanCell.Walkable(map) == false)
+						cleanCell = visualCell;
+					cleanThing = ThingMaker.MakeThing(ThingDefOf.Steel);
+					cleanThing.stackCount = 25;
+					GenSpawn.Spawn(cleanThing, cleanCell, map, WipeMode.Vanish);
+					map.SetContamination(cleanCell, 0f);
+					cleanThing.SetContamination(0f);
+
+					var clean = DescribeInspectPaneWidth(cleanThing, "clean");
+					var contaminated = DescribeInspectPaneWidth(visualThing, "contaminated");
+					var cleanPresentation = DescribeUiPresentation(cleanThing, cleanCell, "clean");
+					var contaminatedPresentation = DescribeUiPresentation(visualThing, visualCell, "contaminated");
+					return new
+					{
+						success = (bool)clean.GetType().GetProperty("success").GetValue(clean)
+							&& (bool)contaminated.GetType().GetProperty("success").GetValue(contaminated)
+							&& ObjectSuccess(cleanPresentation)
+							&& ObjectSuccess(contaminatedPresentation),
+						clean,
+						contaminated,
+						cleanPresentation,
+						contaminatedPresentation
+					};
+				}
+				finally
+				{
+					if (cleanThing != null && cleanThing.Destroyed == false)
+						cleanThing.Destroy(DestroyMode.Vanish);
+					Find.Selector.ClearSelection();
+					Find.Selector.Select(visualThing, false, false);
+				}
+			}
+
 			if (createVisualFixture)
 			{
 				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
@@ -330,6 +474,7 @@ namespace ZombieLand
 				Find.Selector.ClearSelection();
 				Find.Selector.Select(visualThing, false, false);
 				ContaminationManager.Instance.showContaminationOverlay = true;
+				Find.PlaySettings.showBeauty = true;
 			}
 			else
 			{
@@ -390,6 +535,7 @@ namespace ZombieLand
 			var patchedGlowMouseover = visualCell.IsValid == false
 				? null
 				: InvokePatchHelper("ZombieLand.MouseoverReadout_MouseoverReadoutOnGUI_Patch", "GetGlowLabelByValue", map.glowGrid.GroundGlowAt(visualCell), visualCell);
+			var inspectPaneWidth = DescribeInspectPaneWidthComparison();
 
 			var selected = visualThing != null && Find.Selector.IsSelected(visualThing);
 			var manager = ContaminationManager.Instance;
@@ -418,8 +564,9 @@ namespace ZombieLand
 					&& (createQuest == false || pickupPathAvailable)
 					&& createdQuestException == null
 					&& (createQuest == false || decontaminationQuestPresent)
-					&& decontaminationRatingSuppressed
-					&& ordinaryRatingPreserved,
+					&& (createQuest == false || decontaminationRatingSuppressed)
+					&& ordinaryRatingPreserved
+					&& ObjectSuccess(inspectPaneWidth),
 				fixture = new
 				{
 					createdVisualFixture = createVisualFixture,
@@ -429,14 +576,16 @@ namespace ZombieLand
 					visualCell = visualCell.IsValid ? ZombieRuntimeActions.DescribeCell(visualCell) : null,
 					visualThing = DescribeContaminationThing(visualThing),
 					selected,
-					overlayEnabled = manager.showContaminationOverlay
+					overlayEnabled = manager.showContaminationOverlay,
+					beautyOverlayEnabled = Find.PlaySettings.showBeauty
 				},
 				ui = new
 				{
 					statEntries,
 					contaminationStatPresent,
 					patchedThingMouseover,
-					patchedGlowMouseover
+					patchedGlowMouseover,
+					inspectPaneWidth
 				},
 				quest = new
 				{
@@ -761,6 +910,7 @@ namespace ZombieLand
 				var destroyCleanup = VerifyDestroyCleanup(map, itemCell + new IntVec3(3, 0, 0));
 				var thingCompMakeThing = VerifyThingCompMakeThingFanout(map, itemCell + new IntVec3(6, 0, 0));
 				var minifiedSplit = VerifyMinifiedThingSplit(map, itemCell + new IntVec3(9, 0, 0));
+				var worldGenerationReset = VerifyWorldGenerationReset();
 
 			static bool Close(float? value, float expected) => value.HasValue && Mathf.Abs(value.Value - expected) < 0.0001f;
 			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
@@ -1040,9 +1190,10 @@ namespace ZombieLand
 						&& splitPropagated
 						&& ObjectSuccess(needGate)
 						&& ObjectSuccess(groundRepair)
-						&& ObjectSuccess(destroyCleanup)
-						&& ObjectSuccess(thingCompMakeThing)
-						&& ObjectSuccess(minifiedSplit),
+					&& ObjectSuccess(destroyCleanup)
+					&& ObjectSuccess(thingCompMakeThing)
+						&& ObjectSuccess(minifiedSplit)
+						&& ObjectSuccess(worldGenerationReset),
 				human = DescribePawn(human),
 				humanCell = ZombieRuntimeActions.DescribeCell(humanCell),
 				itemCell = ZombieRuntimeActions.DescribeCell(itemCell),
@@ -1066,6 +1217,7 @@ namespace ZombieLand
 				componentAfterSplitContamination,
 				splitContamination,
 				groundRepair,
+				worldGenerationReset,
 				destroyCleanup,
 				minifiedSplit,
 				initialClean,
@@ -1079,6 +1231,55 @@ namespace ZombieLand
 					,
 					thingCompMakeThing
 				};
+			}
+
+			static object VerifyWorldGenerationReset()
+			{
+				var patchTargets = PatchedMethodsForPatchClass("WorldGenerator_GenerateWorld_Patch");
+				var instanceField = typeof(ContaminationManager).GetField("_instance", BindingFlags.Static | BindingFlags.NonPublic);
+				var currentWorld = Current.Game?.World;
+				var realComponent = currentWorld?.GetComponent<ContaminationManager>();
+				var postfix = typeof(WorldGenerator_GenerateWorld_Patch).GetMethod("Postfix", BindingFlags.Static | BindingFlags.Public);
+				if (instanceField == null || currentWorld == null || realComponent == null || postfix == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						error = "World generation reset probe requires the ContaminationManager singleton field, current world component, and patch postfix."
+					};
+				}
+
+				var originalCached = instanceField.GetValue(null);
+				var sentinel = new ContaminationManager(currentWorld);
+				try
+				{
+					instanceField.SetValue(null, sentinel);
+					var sentinelInstalled = ReferenceEquals(instanceField.GetValue(null), sentinel);
+					postfix.Invoke(null, null);
+					var fieldAfterPostfix = instanceField.GetValue(null);
+					var clearedByPostfix = fieldAfterPostfix == null;
+					var rebound = ContaminationManager.Instance;
+					return new
+					{
+						success = patchTargets.Length > 0
+							&& sentinelInstalled
+							&& clearedByPostfix
+							&& ReferenceEquals(rebound, realComponent)
+							&& ReferenceEquals(rebound, sentinel) == false,
+						targets = CompactPatchTargets(patchTargets),
+						target = "RimWorld.Planet.WorldGenerator.GenerateWorld",
+						sentinelInstalled,
+						clearedByPostfix,
+						reboundToCurrentWorldComponent = ReferenceEquals(rebound, realComponent),
+						reboundToSentinel = ReferenceEquals(rebound, sentinel),
+						currentWorldComponentPresent = realComponent != null
+					};
+				}
+				finally
+				{
+					instanceField.SetValue(null, originalCached ?? realComponent);
+				}
 			}
 
 			static object VerifyThingCompMakeThingFanout(Map map, IntVec3 root)

@@ -758,6 +758,9 @@ namespace ZombieLand
 				downed = pawn?.Downed ?? false,
 				faction = pawn?.Faction?.Name,
 				position = pawn == null ? null : ZombieRuntimeActions.DescribeCell(pawn.Position),
+				lastGotoPosition = zombie != null && zombie.lastGotoPosition.IsValid ? ZombieRuntimeActions.DescribeCell(zombie.lastGotoPosition) : null,
+				gridAtPosition = zombie?.Spawned == true ? zombie.Map.GetGrid().GetZombieCount(zombie.Position) : 0,
+				gridAtLastGotoPosition = zombie?.Spawned == true && zombie.lastGotoPosition.IsValid ? zombie.Map.GetGrid().GetZombieCount(zombie.lastGotoPosition) : 0,
 				state = zombie?.state.ToString() ?? spitter?.state.ToString(),
 				raging = zombie?.raging ?? 0,
 				kind = DescribeZombieKind(zombie, blob, spitter),
@@ -778,7 +781,9 @@ namespace ZombieLand
 				spitterSpitInterval = spitter?.spitInterval,
 				spitterTickCounter = spitter?.tickCounter,
 				currentJob = pawn?.CurJobDef?.defName,
-				currentJobReport = pawn?.CurJob?.GetReport(pawn)
+				currentJobReport = pawn?.CurJob?.GetReport(pawn),
+				patherMoving = pawn?.pather?.Moving ?? false,
+				patherDestination = pawn?.pather?.Moving == true ? ZombieRuntimeActions.DescribeCell(pawn.pather.Destination.Cell) : null
 			};
 		}
 
