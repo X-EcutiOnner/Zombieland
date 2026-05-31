@@ -4,6 +4,7 @@ using RimWorld.Planet;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using Verse;
 using static ZombieLand.Patches;
 
@@ -29,6 +30,7 @@ namespace ZombieLand
 				_ = battle.Entries.RemoveAll(entry => entry.GetConcerns().Any(th => th is ZombieSpitter));
 				return battle.concerns.Any(RemoveItem);
 			});
+			ClearRemovedBattleReferences();
 			_ = Find.TaleManager.AllTalesListForReading.RemoveAll(tale =>
 			{
 				var singlePawnTale = tale as Tale_SinglePawn;
@@ -115,8 +117,6 @@ namespace ZombieLand
 
 		static void CleanMap(Map map)
 		{
-			_ = map.components.RemoveAll(component => component.IsZombieType());
-
 			PathFinder_FindPath_Patch.tickManagerCache = new Dictionary<Map, TickManager>();
 
 			var zombies = PawnsOfType<Zombie>(map);
@@ -144,6 +144,8 @@ namespace ZombieLand
 			map.listerThings.AllThings.SelectMany(ContentOfFields<StorageSettings>)
 				.Select(settings => settings?.filter ?? new ThingFilter())
 				.Do(RemoveFromFilter);
+
+			_ = map.components.RemoveAll(component => component.IsZombieType());
 		}
 
 		static IEnumerable<T> ContentOfFields<T>(object instance) where T : class
@@ -202,6 +204,7 @@ namespace ZombieLand
 			_ = pawn.filth?.carriedFilth?.RemoveAll(filth => filth.IsZombieThing());
 			RemovePawnHeldZombieThings(pawn);
 			RemovePawnZombieJobsAndMentalStates(pawn);
+			RemovePawnZombieNeeds(pawn);
 
 			pawn.needs?.AllNeeds?.Do(need =>
 			{
@@ -229,6 +232,53 @@ namespace ZombieLand
 			if (memory.otherPawn is Zombie || memory.otherPawn is ZombieBlob || memory.otherPawn is ZombieSpitter)
 				return true;
 			return false;
+		}
+
+		static readonly FieldInfo f_PawnRecordsBattleActive = AccessTools.Field(typeof(Pawn_RecordsTracker), "battleActive");
+		static readonly FieldInfo f_PawnRecordsBattleExitTick = AccessTools.Field(typeof(Pawn_RecordsTracker), "battleExitTick");
+		static readonly FieldInfo f_NeedsTrackerNeeds = AccessTools.Field(typeof(Pawn_NeedsTracker), "needs");
+		static readonly FieldInfo f_NeedsTrackerMiscNeeds = AccessTools.Field(typeof(Pawn_NeedsTracker), "needsMisc");
+
+		static void ClearRemovedBattleReferences()
+		{
+			var remainingBattles = Find.BattleLog?.Battles?.ToHashSet() ?? new HashSet<Battle>();
+			foreach (var pawn in Current.Game.Maps.SelectMany(PawnsOfType<Pawn>).Concat(EnumerateWorldPawns()))
+			{
+				var records = pawn.records;
+				if (records == null)
+					continue;
+				if (f_PawnRecordsBattleActive.GetValue(records) is not Battle battle)
+					continue;
+				if (remainingBattles.Contains(battle))
+					continue;
+				f_PawnRecordsBattleActive.SetValue(records, null);
+				f_PawnRecordsBattleExitTick.SetValue(records, 0);
+			}
+		}
+
+		static IEnumerable<Pawn> EnumerateWorldPawns()
+		{
+			var fieldNames = new string[] { nameof(RimWorld.Planet.WorldPawns.pawnsAlive), nameof(RimWorld.Planet.WorldPawns.pawnsMothballed), nameof(RimWorld.Planet.WorldPawns.pawnsDead), nameof(RimWorld.Planet.WorldPawns.pawnsForcefullyKeptAsWorldPawns) };
+			var trvWorldPawns = Traverse.Create(Current.Game.World.worldPawns);
+			foreach (var fieldName in fieldNames)
+				if (trvWorldPawns.Field(fieldName).GetValue<HashSet<Pawn>>() is HashSet<Pawn> pawnSet)
+					foreach (var pawn in pawnSet)
+						yield return pawn;
+		}
+
+		static void RemovePawnZombieNeeds(Pawn pawn)
+		{
+			var needs = pawn?.needs;
+			if (needs == null)
+				return;
+
+			RemoveZombieNeedsFromList(f_NeedsTrackerNeeds.GetValue(needs) as List<Need>);
+			RemoveZombieNeedsFromList(f_NeedsTrackerMiscNeeds.GetValue(needs) as List<Need>);
+		}
+
+		static void RemoveZombieNeedsFromList(List<Need> needs)
+		{
+			_ = needs?.RemoveAll(need => need.IsZombieType() || need.def.IsZombieDef());
 		}
 
 		static void RemovePawnZombieJobsAndMentalStates(Pawn pawn)
@@ -271,7 +321,7 @@ namespace ZombieLand
 
 		static void RemoveWorldPawns()
 		{
-			var fieldNames = new string[] { nameof(WorldPawns.pawnsAlive), nameof(WorldPawns.pawnsMothballed), nameof(WorldPawns.pawnsDead), nameof(WorldPawns.pawnsForcefullyKeptAsWorldPawns) };
+			var fieldNames = new string[] { nameof(RimWorld.Planet.WorldPawns.pawnsAlive), nameof(RimWorld.Planet.WorldPawns.pawnsMothballed), nameof(RimWorld.Planet.WorldPawns.pawnsDead), nameof(RimWorld.Planet.WorldPawns.pawnsForcefullyKeptAsWorldPawns) };
 			var trvWorldPawns = Traverse.Create(Current.Game.World.worldPawns);
 			foreach (var fieldName in fieldNames)
 			{

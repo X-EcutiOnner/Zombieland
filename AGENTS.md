@@ -33,5 +33,6 @@ Operating model:
 - Treat logs and screenshots as first-class evidence. For UI, rendering, quests, and native crashes, no warning-or-higher logs after build/save/load/runtime steps is a useful regression signal, not fluff.
 - Use hard session boundaries. A good session ends with build status, tests run, save names touched, files changed, temporary diagnostics removed or explicitly marked, docs updated, and next blocker or next slice.
 - Do not add artificial pauses to stretch token usage unless the user explicitly asks again.
+- Use `coverage/ZL_COVERAGE_INDEX.tsv` as a planning index when starting a new coverage slice or when the next target is unclear. It is advisory, not authoritative: verify rows against local source, `TEST_COVERAGE.md`, `TEST_SCENARIOS.md`, `TEST_PATCH_AUDIT.md`, local inventory scripts, decompiler evidence, logs, and live RimBridge results before claiming coverage. Do not pivot away from an active named scenario solely because the index suggests another high-priority row; finish or explicitly park the active scenario first.
 
 Anything else should be solved in the same spirit as what I just wrote above.

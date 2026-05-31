@@ -1,5 +1,6 @@
 ﻿using HarmonyLib;
 using RimWorld;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Verse;
@@ -41,11 +42,13 @@ namespace ZombieLand
 		public ZombiePathing(Map map)
 		{
 			this.map = map;
-			pathGrid = map.pathing.For(MapInfo.traverseParms).pathGrid;
+			pathGrid = map?.pathing?.For(MapInfo.traverseParms).pathGrid;
 		}
 
 		public IntVec3 GetWanderDestination(IntVec3 cell)
 		{
+			if (map?.regionGrid == null)
+				return IntVec3.Invalid;
 			var region = map.regionGrid.GetRegionAt_NoRebuild_InvalidAllowed(cell);
 			if (region == null)
 				return IntVec3.Invalid;
@@ -59,6 +62,19 @@ namespace ZombieLand
 
 		public void UpdateRegions()
 		{
+			if (map?.regionGrid?.allRooms == null || map.fogGrid == null || map.listerThings == null || pathGrid == null)
+				return;
+
+			Room[] rooms;
+			try
+			{
+				rooms = map.regionGrid.allRooms.ToArray();
+			}
+			catch (InvalidOperationException)
+			{
+				return;
+			}
+
 			var finalRegionIndices = new Dictionary<Region, int>();
 			var finalRegions = new List<BackpointingRegion>();
 
@@ -78,8 +94,20 @@ namespace ZombieLand
 				finalRegionIndices[aRegion.region] = finalRegions.Count - 1;
 			}
 
-			map.regionGrid.allRooms
-				.Where(r => r.IsDoorway == false && r.Fogged == false && r.IsHuge == false && r.ProperRoom)
+			bool RoomUsable(Room room)
+			{
+				try
+				{
+					return room != null && room.IsDoorway == false && room.Fogged == false && room.IsHuge == false && room.ProperRoom;
+				}
+				catch (NullReferenceException)
+				{
+					return false;
+				}
+			}
+
+			rooms
+				.Where(RoomUsable)
 				.SelectMany(r => r.Regions)
 				.Where(r => r != null && r.valid && r.Cells.Any(cell => pathGrid.WalkableFast(cell)))
 				.Distinct()

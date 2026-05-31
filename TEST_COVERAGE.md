@@ -31,6 +31,8 @@ git log --reverse --format='%h %ad %s' --date=short a0de6c309ab789a488a6bc106d28
 
 Use `scripts/coverage-inventory.sh` for a compact current-state inventory of source files, Harmony patch density, bridge tool density, gameplay classes, serialization/tick/UI hooks, and evidence commit subjects. Use `scripts/coverage-inventory.sh --patch-groups` for the TSV patch-group inventory used by `S-Source-Patch-Audit`; its `targeting` column distinguishes concrete `static` targets, `dynamic` `TargetMethod(s)` lookups, and class-level `base` rows that only provide a Harmony type context. Use `scripts/coverage-inventory.sh --dynamic-patches` to split dynamic patch targets into closure search, multi-target, typed-reflection, external string, external type-name, and owner buckets before doing decompiler or optional-mod checks. Use `scripts/coverage-inventory.sh --static-summary` to group static rows into scenario-owned audit slices. Record target-level dispositions in `TEST_PATCH_AUDIT.md` when the detail would make this matrix noisy.
 
+`coverage/ZL_COVERAGE_INDEX.tsv` is an advisory coverage ledger for planning and de-duplication. Use it at the start of a new slice, or when the next target is unclear, to group work by `owner_cluster`, identify `required_passes`, and read the row's `duplicate_guard`. Do not treat the index as proof by itself: refresh any row against this file, `TEST_SCENARIOS.md`, `TEST_PATCH_AUDIT.md`, current local source, decompiler evidence, RimWorld logs, and live bridge results before changing evidence state. Do not interrupt an active named scenario solely because the index ranks another row highly; finish or explicitly park the current scenario with a hard boundary first.
+
 ## Evidence Tiers
 
 | Tier | Meaning | Use when |
@@ -454,6 +456,7 @@ Code surface: `Source/ZombieRemover.cs`, `Source/Dialog_SaveThenUninstall.cs`, s
 Already evidenced:
 - No specific post-baseline coverage found in the commit subjects beyond baseline compile.
 - Source/decompiler audit started 2026-05-31. RimWorld 1.6 `GameDataSaveLoader.SaveGame(string)` still deep-scribes `Current.Game`; `WorldPawns.ExposeData()` persists `pawnsAlive`, `pawnsMothballed`, `pawnsDead`, and `pawnsForcefullyKeptAsWorldPawns`; `FactionManager.ExposeData()` persists `allFactions`; and `Dialog_SaveFileList`/`Dialog_SaveFileList_Save` still use the protected `DoFileInteraction(string)` override shape that `Dialog_SaveThenUninstall` relies on. The source pass found and fixed remover blind spots before runtime: `IsZombieDef` now treats the owning Zombieland mod package as authoritative instead of relying only on fragile `Zombie_`/`_Zombie` naming or custom classes; work-table bill stacks now remove Zombieland recipes as well as ingredient filters; pawn cleanup now removes Zombieland hediff defs/classes, memories such as `ZombieScare`, pawn-held Zombieland apparel/equipment/inventory/carrying contents, and active Zombieland jobs/mental states.
+- Live destructive-copy runtime evidence added 2026-05-31 through `S-Uninstall-Hygiene`: `zombieland/uninstall_hygiene_state actionMode=setup` created `ZL_Uninstall_Hygiene_source.rws` from `EMPTY.rws` with zombies/specials/corpse/faction/components/hediffs/jobs/mental state/memory/items/filters/bills/battle/tale refs. `actionMode=remove` wrote `ZL_Uninstall_Hygiene_no_zl.rws`; warning-or-higher logs were empty after source save and after removal; source XML retained 80 Zombieland matches while output XML scan for Zombieland classes, mod id, defs, needs, jobs, thoughts, items, zombie faction, and battle refs returned no matches. This pass found and fixed additional remover/runtime hygiene gaps: Zombieland needs are removed, removed battle refs are cleared from pawn records, map components are removed after other map cleanup, and `ZombiePathing` tolerates teardown/pre-finalized map grids.
 
 Required tests:
 - Save-then-uninstall scenario: create a save with zombies, zombie faction, corpses, hediffs, thoughts, tales, battle logs, filters, map/world components, contamination, and special things; run remover; load resulting save without Zombieland; verify no unresolved def/type references and no zombie faction/components remain.
@@ -461,7 +464,7 @@ Required tests:
 - World-pawn hygiene scenario: world pawns, dead pawns, relations, memories, and battle log entries referencing zombies are removed or made safe.
 
 Current gap:
-- This is high risk and still lacks destructive-copy runtime evidence. The first source/decompiler pass found and fixed several save-hygiene blind spots, but the row is not covered until a dirty source save is copied through `ZombieRemover.RemoveZombieland`, the output XML scans clean of Zombieland refs, and the copy either loads without Zombieland or reaches an equivalent no-mod load/log gate.
+- The dirty source/save-copy/XML/log gate is covered. Remaining optional strengthening is to automate a true load of `ZL_Uninstall_Hygiene_no_zl.rws` with Zombieland disabled, if mod-list switching becomes reliable through GABS.
 
 ## Next Test Definitions To Write
 
