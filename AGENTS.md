@@ -24,4 +24,14 @@ Rules:
 - keep track of what you are doing but make sure you do not simply pile up work log after work log
 - make sure you read the *important* work documents regularily - they have no purpose if you only creete but never read them
 
+Operating model:
+
+- Static/decompiler pass first. For every Harmony patch group, prove the target exists, the signature still matches, closure/delegate targets still have the same role, and the patch still makes semantic sense in RimWorld 1.6 before launching the game. This catches stale targets and 1.4-era assumptions early.
+- Generic bridge primitives second. Prefer broad reusable tools such as spawn thing, spawn pawn, set contamination, select, hover, run ticks, save, load, list logs, screenshot, and read semantic state. These are the stable automation surface.
+- Custom bridge contracts only when they become reusable evidence. A contract is justified when it covers a named matrix row or scenario cluster. A one-off tool that only proves one hunch should usually be deleted, folded into a generic helper, or promoted into a broader scenario contract afterward.
+- Scenario fixtures over microscopic contract sprawl. Use isolated contracts to find and fix narrow behavior, then escalate to combined save-load fixtures that prove the behaviors coexist in one map/session.
+- Treat logs and screenshots as first-class evidence. For UI, rendering, quests, and native crashes, no warning-or-higher logs after build/save/load/runtime steps is a useful regression signal, not fluff.
+- Use hard session boundaries. A good session ends with build status, tests run, save names touched, files changed, temporary diagnostics removed or explicitly marked, docs updated, and next blocker or next slice.
+- Do not add artificial pauses to stretch token usage unless the user explicitly asks again.
+
 Anything else should be solved in the same spirit as what I just wrote above.
