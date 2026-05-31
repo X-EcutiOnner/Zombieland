@@ -1,3 +1,4 @@
+using HarmonyLib;
 using RimBridgeServer.Annotations;
 using RimWorld;
 using System;
@@ -16,7 +17,7 @@ namespace ZombieLand
 
 			[Tool("zombieland/settings_state", Description = "Read, prepare, or verify reusable Zombieland settings/new-game/keyframe/colonist-toggle persistence fixtures.")]
 			public static object SettingsState(
-				[ToolParameter(Description = "Action mode: read, prepare, verify, modal, behavior, gizmos, or new-game.", Required = false, DefaultValue = "read")] string actionMode = "read",
+				[ToolParameter(Description = "Action mode: read, prepare, verify, modal, behavior, gizmos, new-game, apparel-generation, or defaults-write-test.", Required = false, DefaultValue = "read")] string actionMode = "read",
 			[ToolParameter(Description = "Open RimWorld's real Zombieland game-settings page/dialog while reading or preparing.", Required = false, DefaultValue = false)] bool openSettingsDialog = false)
 		{
 			var normalizedMode = (actionMode ?? "read").Trim().ToLowerInvariant();
@@ -87,6 +88,28 @@ namespace ZombieLand
 						newGameVerification
 					};
 				}
+				if (normalizedMode == "apparel-generation")
+				{
+					var apparelGeneration = VerifyApparelGenerationPatch();
+					return new
+					{
+						success = ObjectSuccess(apparelGeneration),
+						actionMode = normalizedMode,
+						state = ReadSettingsPersistenceFixture(openSettingsDialog),
+						apparelGeneration
+					};
+				}
+				if (normalizedMode == "defaults-write-test")
+				{
+					var defaultsWrite = WriteDefaultSettingsPersistenceFixture();
+					return new
+					{
+						success = ObjectSuccess(defaultsWrite),
+						actionMode = normalizedMode,
+						state = ReadSettingsPersistenceFixture(openSettingsDialog),
+						defaultsWrite
+					};
+				}
 				if (normalizedMode == "read")
 				{
 				var state = ReadSettingsPersistenceFixture(openSettingsDialog);
@@ -101,7 +124,7 @@ namespace ZombieLand
 				{
 					success = false,
 					actionMode,
-					error = "Unsupported settings actionMode. Use read, prepare, verify, modal, behavior, gizmos, or new-game."
+					error = "Unsupported settings actionMode. Use read, prepare, verify, modal, behavior, gizmos, new-game, apparel-generation, or defaults-write-test."
 				};
 			}
 
@@ -179,6 +202,14 @@ namespace ZombieLand
 				day3 = DescribeSettingsGroup(ZombieSettings.CalculateInterpolation(valuesOverTime, 3 * GenDate.TicksPerDay)),
 				day6 = DescribeSettingsGroup(ZombieSettings.CalculateInterpolation(valuesOverTime, 6 * GenDate.TicksPerDay))
 			};
+			var defaultSamples = defaultValuesOverTime == null ? null : new
+			{
+				day0 = DescribeSettingsGroup(ZombieSettings.CalculateInterpolation(defaultValuesOverTime, 0)),
+				day1 = DescribeSettingsGroup(ZombieSettings.CalculateInterpolation(defaultValuesOverTime, GenDate.TicksPerDay)),
+				day2 = DescribeSettingsGroup(ZombieSettings.CalculateInterpolation(defaultValuesOverTime, 2 * GenDate.TicksPerDay)),
+				day3 = DescribeSettingsGroup(ZombieSettings.CalculateInterpolation(defaultValuesOverTime, 3 * GenDate.TicksPerDay)),
+				day6 = DescribeSettingsGroup(ZombieSettings.CalculateInterpolation(defaultValuesOverTime, 6 * GenDate.TicksPerDay))
+			};
 
 			return new
 			{
@@ -187,8 +218,10 @@ namespace ZombieLand
 				values = DescribeSettingsGroup(values),
 				keyframes = DescribeSettingsKeyframes(valuesOverTime),
 				defaultValues = DescribeSettingsGroup(defaultValues),
+				defaultKeyframes = DescribeSettingsKeyframes(defaultValuesOverTime),
 				defaultKeyframeCount = defaultValuesOverTime?.Count ?? 0,
 				interpolationSamples = samples,
+				defaultInterpolationSamples = defaultSamples,
 				colonist = DescribePawn(pawn),
 				colonistConfig = DescribeColonistConfig(config),
 				colonistSettingsCount = ColonistSettings.colonists?.Count ?? 0,
@@ -258,6 +291,44 @@ namespace ZombieLand
 			};
 		}
 
+		static object WriteDefaultSettingsPersistenceFixture()
+		{
+			var mod = LoadedModManager.GetMod<ZombielandMod>();
+			var before = ReadSettingsPersistenceFixture(false);
+			var fixtureGroup = CreateDefaultSettingsPersistenceGroup();
+			ZombieSettingsDefaults.group = fixtureGroup.MakeCopy();
+			ZombieSettingsDefaults.groupOverTime = new List<SettingsKeyFrame>
+			{
+				new()
+				{
+					amount = 0,
+					unit = SettingsKeyFrame.Unit.Days,
+					values = fixtureGroup.MakeCopy()
+				}
+			};
+			DialogTimeHeader.Reset();
+			mod?.WriteSettings();
+
+			var day0 = ZombieSettings.CalculateInterpolation(ZombieSettingsDefaults.groupOverTime, 0);
+			var persistedInMemory = mod != null
+				&& MatchesDefaultSettingsPersistenceFixture(ZombieSettingsDefaults.group)
+				&& ZombieSettingsDefaults.groupOverTime.Count == 1
+				&& ZombieSettingsDefaults.groupOverTime[0].Ticks == 0
+				&& MatchesDefaultSettingsPersistenceFixture(ZombieSettingsDefaults.groupOverTime[0].values)
+				&& MatchesDefaultSettingsPersistenceFixture(day0);
+			return new
+			{
+				success = persistedInMemory,
+				hasMod = mod != null,
+				wroteVia = "ZombielandMod.WriteSettings",
+				expected = DescribeSettingsGroup(fixtureGroup),
+				actualGroup = DescribeSettingsGroup(ZombieSettingsDefaults.group),
+				actualKeyframes = DescribeSettingsKeyframes(ZombieSettingsDefaults.groupOverTime),
+				actualDay0 = DescribeSettingsGroup(day0),
+				before
+			};
+		}
+
 		static object VerifySettingsModalFixtures(bool openSettingsDialog)
 		{
 			var map = CurrentMap;
@@ -275,12 +346,7 @@ namespace ZombieLand
 			var biome = VerifyBiomeListModal(settings);
 			var advanced = VerifyAdvancedSettingsModal();
 			var thumper = VerifyThumperSettingsModal(map);
-			var saveThenUninstall = new
-			{
-				success = true,
-				coveredHere = false,
-				reason = "Dialog_SaveThenUninstall is intentionally left to the destructive save-hygiene scenario."
-			};
+			var saveThenUninstall = VerifySaveThenUninstallModal();
 			var dialogState = MaybeOpenSettingsDialog(openSettingsDialog);
 
 			return new
@@ -288,7 +354,8 @@ namespace ZombieLand
 				success = ObjectSuccess(apparel)
 					&& ObjectSuccess(biome)
 					&& ObjectSuccess(advanced)
-					&& ObjectSuccess(thumper),
+					&& ObjectSuccess(thumper)
+					&& ObjectSuccess(saveThenUninstall),
 				apparel,
 				biome,
 				advanced,
@@ -297,6 +364,89 @@ namespace ZombieLand
 				dialogState,
 				values = DescribeSettingsGroup(settings)
 			};
+		}
+
+		static object VerifySaveThenUninstallModal()
+		{
+			var windowStack = Find.WindowStack;
+			var directDialog = null as Dialog_SaveThenUninstall;
+			try
+			{
+				if (windowStack == null || Current.ProgramState != ProgramState.Playing || Faction.OfPlayer == null)
+				{
+					return new
+					{
+						success = false,
+						hasWindowStack = windowStack != null,
+						programState = Current.ProgramState.ToString(),
+						hasPlayerFaction = Faction.OfPlayer != null,
+						error = "Save-then-uninstall modal verification requires a playable game because the settings button is only shown in ProgramState.Playing."
+					};
+				}
+
+				_ = windowStack.TryRemove(typeof(Dialog_SaveThenUninstall), false);
+				_ = windowStack.TryRemove(typeof(Dialog_MessageBox), false);
+				directDialog = new Dialog_SaveThenUninstall();
+				var shouldType = directDialog.ShouldDoTypeInField;
+				var interactLabel = AccessTools.Field(typeof(Dialog_FileList), "interactButLabel")?.GetValue(directDialog)?.ToString();
+				var bottomAreaHeight = AccessTools.Field(typeof(Dialog_FileList), "bottomAreaHeight")?.GetValue(directDialog);
+				var typingName = AccessTools.Field(typeof(Dialog_FileList), "typingName")?.GetValue(directDialog)?.ToString();
+				var overrideMethod = AccessTools.Method(typeof(Dialog_SaveThenUninstall), nameof(Dialog_SaveThenUninstall.DoFileInteraction), new[] { typeof(string) });
+				var baseMethod = AccessTools.Method(typeof(Dialog_FileList), "DoFileInteraction", new[] { typeof(string) });
+
+				windowStack.Add(directDialog);
+				var directDialogOpened = windowStack.IsOpen(typeof(Dialog_SaveThenUninstall));
+				_ = windowStack.TryRemove(directDialog, false);
+
+				Dialog_SaveThenUninstall.Run();
+				var confirmation = windowStack.Windows.OfType<Dialog_MessageBox>().LastOrDefault();
+				var confirmText = AccessTools.Field(typeof(Dialog_MessageBox), "text")?.GetValue(confirmation)?.ToString();
+				var confirmAction = AccessTools.Field(typeof(Dialog_MessageBox), "buttonAAction")?.GetValue(confirmation) as Action;
+				var confirmDestructive = (bool?)AccessTools.Field(typeof(Dialog_MessageBox), "buttonADestructive")?.GetValue(confirmation) == true;
+				_ = windowStack.TryRemove(typeof(Dialog_MessageBox), false);
+
+				return new
+				{
+					success = shouldType
+						&& interactLabel == "OverwriteButton".Translate().ToString()
+						&& bottomAreaHeight is float height
+						&& Approximately(height, 85f)
+						&& typingName.NullOrEmpty() == false
+						&& overrideMethod?.DeclaringType == typeof(Dialog_SaveThenUninstall)
+						&& baseMethod?.DeclaringType == typeof(Dialog_FileList)
+						&& directDialogOpened
+						&& confirmation != null
+						&& confirmText.NullOrEmpty() == false
+						&& confirmAction != null
+						&& confirmDestructive,
+					shouldType,
+					interactLabel,
+					bottomAreaHeight,
+					typingName,
+					doFileInteractionOverride = overrideMethod?.FullDescription(),
+					baseDoFileInteraction = baseMethod?.FullDescription(),
+					directDialogOpened,
+					confirmation = new
+					{
+						opened = confirmation != null,
+						text = confirmText,
+						hasConfirmAction = confirmAction != null,
+						destructive = confirmDestructive
+					},
+					destructiveRemoveExecuted = false,
+					destructiveBehaviorCoveredBy = "S-Uninstall-Hygiene"
+				};
+			}
+			finally
+			{
+				if (windowStack != null)
+				{
+					if (directDialog != null)
+						_ = windowStack.TryRemove(directDialog, false);
+					_ = windowStack.TryRemove(typeof(Dialog_SaveThenUninstall), false);
+					_ = windowStack.TryRemove(typeof(Dialog_MessageBox), false);
+				}
+			}
 		}
 
 		static object VerifySettingsBehaviorFixtures()
@@ -1129,6 +1279,92 @@ namespace ZombieLand
 			};
 		}
 
+		static object VerifyApparelGenerationPatch()
+		{
+			var possibleSetType = AccessTools.Inner(typeof(PawnApparelGenerator), "PossibleApparelSet");
+			var pairOverlapsMethod = possibleSetType == null ? null : AccessTools.Method(possibleSetType, "PairOverlapsAnything", new[] { typeof(ThingStuffPair) });
+			var resetMethod = possibleSetType == null ? null : AccessTools.Method(possibleSetType, "Reset", new[] { typeof(BodyDef), typeof(ThingDef) });
+			var patchInfo = pairOverlapsMethod == null ? null : Harmony.GetPatchInfo(pairOverlapsMethod);
+			var zombiLandPrefixes = patchInfo?.Prefixes?
+				.Where(prefix => prefix.owner == "net.pardeike.zombieland")
+				.Select(prefix => prefix.PatchMethod?.DeclaringType?.FullName + "." + prefix.PatchMethod?.Name)
+				.ToArray() ?? Array.Empty<string>();
+
+			if (possibleSetType == null || pairOverlapsMethod == null || resetMethod == null)
+			{
+				return new
+				{
+					success = false,
+					hasPossibleSetType = possibleSetType != null,
+					hasPairOverlapsMethod = pairOverlapsMethod != null,
+					hasResetMethod = resetMethod != null,
+					error = "Could not resolve RimWorld PawnApparelGenerator.PossibleApparelSet reflection surface."
+				};
+			}
+
+			var ordinaryPairFound = TryGetOrdinaryZombieApparelCandidate(out var ordinaryPair);
+			var zombieApparel = DefDatabase<ThingDef>.GetNamedSilentFail("Apparel_BombVest");
+			var zombiePair = zombieApparel == null ? default : new ThingStuffPair(zombieApparel, GenStuff.DefaultStuffFor(zombieApparel));
+
+			if (ordinaryPairFound == false || zombieApparel == null)
+			{
+				return new
+				{
+					success = false,
+					ordinaryPairFound,
+					zombieApparel = zombieApparel?.defName,
+					error = "Could not find both an ordinary generated apparel pair and the Zombieland bomb vest apparel def."
+				};
+			}
+
+			var possibleSet = Activator.CreateInstance(possibleSetType, true);
+			resetMethod.Invoke(possibleSet, new object[] { ThingDefOf.Human.race.body, ThingDefOf.Human });
+			var ordinaryEmptySetOverlap = (bool)pairOverlapsMethod.Invoke(possibleSet, new object[] { ordinaryPair });
+			var zombieThingOverlap = (bool)pairOverlapsMethod.Invoke(possibleSet, new object[] { zombiePair });
+			var zombieApparelIsZombieDef = zombieApparel.IsZombieDef();
+
+			return new
+			{
+				success = zombiLandPrefixes.Length > 0
+					&& ordinaryEmptySetOverlap == false
+					&& zombieThingOverlap
+					&& zombieApparelIsZombieDef,
+				method = pairOverlapsMethod.FullDescription(),
+				zombiLandPrefixes,
+				ordinaryCandidate = new
+				{
+					thing = ordinaryPair.thing?.defName,
+					stuff = ordinaryPair.stuff?.defName,
+					overlapsEmptySet = ordinaryEmptySetOverlap
+				},
+				zombieCandidate = new
+				{
+					thing = zombiePair.thing?.defName,
+					stuff = zombiePair.stuff?.defName,
+					isZombieDef = zombieApparelIsZombieDef,
+					overlapsEmptySet = zombieThingOverlap
+				}
+			};
+		}
+
+		static bool TryGetOrdinaryZombieApparelCandidate(out ThingStuffPair pair)
+		{
+			if (ZombieGenerator.AllApparel.TryGetValue(false, out var apparelByBody))
+			{
+				foreach (var candidate in apparelByBody.SelectMany(item => item.Value))
+				{
+					if (candidate.thing != null && candidate.thing.IsZombieDef() == false)
+					{
+						pair = candidate;
+						return true;
+					}
+				}
+			}
+
+			pair = default;
+			return false;
+		}
+
 		static object VerifyBiomeListModal(SettingsGroup settings)
 		{
 			var candidate = DefDatabase<BiomeDef>.AllDefsListForReading
@@ -1310,6 +1546,31 @@ namespace ZombieLand
 			group.blacklistedApparel = new List<string> { "ZL_Settings_Apparel_" + maximumNumberOfZombies };
 			group.biomesWithoutZombies = new HashSet<string> { "ZL_Settings_Biome_" + maximumNumberOfZombies };
 			return group;
+		}
+
+		static SettingsGroup CreateDefaultSettingsPersistenceGroup()
+		{
+			var group = CreateSettingsGroup(0.37f, 137, AttackMode.Everything, SpawnWhenType.WhenDark, SpawnHowType.FromTheEdges, SmashMode.AnyBuilding, false, true, 0.12345f, 1.37f);
+			group.blacklistedApparel = new List<string> { "ZL_Defaults_Write_Test_Apparel" };
+			group.biomesWithoutZombies = new HashSet<string> { "ZL_Defaults_Write_Test_Biome" };
+			return group;
+		}
+
+		static bool MatchesDefaultSettingsPersistenceFixture(SettingsGroup group)
+		{
+			return group != null
+				&& Approximately(group.threatScale, 0.37f)
+				&& group.maximumNumberOfZombies == 137
+				&& group.attackMode == AttackMode.Everything
+				&& group.spawnWhenType == SpawnWhenType.WhenDark
+				&& group.spawnHowType == SpawnHowType.FromTheEdges
+				&& group.smashMode == SmashMode.AnyBuilding
+				&& group.doubleTapRequired == false
+				&& group.betterZombieAvoidance
+				&& Approximately(group.zombieBiteInfectionChance, 0.12345f)
+				&& Approximately(group.contaminationBaseFactor, 1.37f)
+				&& group.blacklistedApparel?.Contains("ZL_Defaults_Write_Test_Apparel") == true
+				&& group.biomesWithoutZombies?.Contains("ZL_Defaults_Write_Test_Biome") == true;
 		}
 
 		static Pawn FindSettingsScenarioPawn(Map map)

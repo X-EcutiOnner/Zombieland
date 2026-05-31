@@ -368,6 +368,18 @@ namespace ZombieLand
 			var zombieEffectCount = ListenerEffectCount(zombie);
 			var spitterEffectCount = ListenerEffectCount(spitter);
 			var blobEffectCount = ListenerEffectCount(blob);
+
+			var impactTick = Find.TickManager.TicksGame;
+			var resetCanSleepTick = impactTick - 1000;
+			listener.mindState.canSleepTick = resetCanSleepTick;
+			zombie.mindState.canSleepTick = resetCanSleepTick;
+			GenClamor.DoClamor(humanSource, humanSource.Position, 20f, ClamorDefOf.Impact);
+			var expectedImpactCanSleepTick = impactTick + 1000;
+			var listenerCanSleepAfterHumanImpact = listener.mindState.canSleepTick;
+			var zombieCanSleepAfterHumanImpact = zombie.mindState.canSleepTick;
+			var humanHearerReceivesHumanImpact = listenerCanSleepAfterHumanImpact == expectedImpactCanSleepTick;
+			var zombieHearerIgnoresHumanImpact = zombieCanSleepAfterHumanImpact == resetCanSleepTick;
+
 			var listenerDescription = DescribePawn(listener);
 			var humanSourceDescription = DescribePawn(humanSource);
 			var zombieDescription = DescribeZombie(zombie);
@@ -385,7 +397,9 @@ namespace ZombieLand
 				success = humanEffectCount > 0
 					&& zombieEffectCount == 0
 					&& spitterEffectCount == 0
-					&& blobEffectCount == 0,
+					&& blobEffectCount == 0
+					&& humanHearerReceivesHumanImpact
+					&& zombieHearerIgnoresHumanImpact,
 				destroyedZombies,
 				listener = listenerDescription,
 				humanSource = humanSourceDescription,
@@ -395,7 +409,18 @@ namespace ZombieLand
 				humanEffectCount,
 				zombieEffectCount,
 				spitterEffectCount,
-				blobEffectCount
+				blobEffectCount,
+				humanImpact = new
+				{
+					clamorType = ClamorDefOf.Impact.defName,
+					tick = impactTick,
+					resetCanSleepTick,
+					expectedImpactCanSleepTick,
+					listenerCanSleepAfterHumanImpact,
+					zombieCanSleepAfterHumanImpact,
+					humanHearerReceivesHumanImpact,
+					zombieHearerIgnoresHumanImpact
+				}
 			};
 		}
 

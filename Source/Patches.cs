@@ -5579,9 +5579,9 @@ namespace ZombieLand
 		static class Pawn_HearClamor_Patch
 		{
 			[HarmonyPriority(Priority.First)]
-			static bool Prefix(Thing source)
+			static bool Prefix(Pawn __instance, Thing source)
 			{
-				return IsZombielandPawn(source as Pawn) == false;
+				return IsZombielandPawn(__instance) == false && IsZombielandPawn(source as Pawn) == false;
 			}
 		}
 
