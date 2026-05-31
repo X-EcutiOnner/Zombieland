@@ -46,6 +46,7 @@ namespace ZombieLand
 		{
 			var baseDef = CustomDefs.SuicideBomb;
 			Traverse.IterateFields(baseDef, this, Traverse.CopyFields);
+			defName = baseDef.defName;
 
 			defaultDamage = ScaledValueBetween(8, 120);
 			var damageFactor = ScaledValueBetween(10, 320);
