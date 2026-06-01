@@ -836,14 +836,14 @@ namespace ZombieLand
 				actor.jobs.StartJob(draftedWait, JobCondition.InterruptForced, null, false, true);
 				for (var tick = 0; tick < 5; tick++)
 					AdvanceGameTicks(1);
-				var draftedJob = actor.CurJobDef?.defName;
-				var draftedInterruptedToFlee = actor.CurJobDef == JobDefOf.Flee;
-				actor.drafter.Drafted = false;
-				actor.jobs.EndCurrentJob(JobCondition.InterruptForced);
+					var draftedJob = actor.CurJobDef?.defName;
+					var draftedInterruptedToFlee = actor.CurJobDef == JobDefOf.Flee;
+					actor.drafter.Drafted = false;
+					actor.jobs.EndCurrentJob(JobCondition.InterruptForced);
 
-				var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
-				waitJob.playerForced = false;
-				actor.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+					var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+					waitJob.playerForced = false;
+					actor.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
 				var startedJob = actor.CurJobDef?.defName;
 				var tickHit = -1;
 				var samples = new List<object>();
@@ -872,27 +872,31 @@ namespace ZombieLand
 				var fleeJob = actor.CurJob;
 				var fleeDestination = fleeJob?.targetA.Cell ?? IntVec3.Invalid;
 				var fleeDestinationAvoids = fleeDestination.IsValid && avoidGrid.ShouldAvoid(map, fleeDestination) == false;
+				var fleeDestinationInAssignedArea = fleeDestination.IsValid && colonistInsideArea[fleeDestination];
 				var hostilityResponse = VerifyAreaWorkflowHostilityResponse(map, actor, zombie, actorCell);
 				var meleeInterruption = VerifyAreaWorkflowMeleeInterruption(map, actorCell, zombie, avoidGrid);
 				var destroyCleanup = VerifyAreaWorkflowPawnDestroyCleanup(map, actorCell + new IntVec3(6, 0, 0), colonistInsideArea, zombieInsideArea);
+				var assignedAreaFleePolicy = VerifyAreaWorkflowAssignedAreaFleePolicy(map, colonistInsideArea, zombie, avoidGrid);
 
 				return new
 				{
-					success = colonistInDangerArea
-						&& zombieInDangerArea
-						&& actor.playerSettings.AreaRestrictionInPawnCurrentMap == colonistInsideArea
-						&& actorShouldAvoid
-						&& actorAvoidCost > 0
-						&& normalDanger == Danger.Deadly
-						&& forcedDanger != Danger.Deadly
-						&& draftedInterruptedToFlee == false
-						&& startedJob == JobDefOf.Wait_Combat.defName
-						&& tickHit > 0
+						success = colonistInDangerArea
+							&& zombieInDangerArea
+							&& actor.playerSettings.AreaRestrictionInPawnCurrentMap == colonistInsideArea
+							&& actorShouldAvoid
+							&& actorAvoidCost > 0
+							&& normalDanger == Danger.Deadly
+							&& forcedDanger != Danger.Deadly
+							&& draftedInterruptedToFlee == false
+							&& startedJob == JobDefOf.Wait_Combat.defName
+							&& tickHit > 0
 						&& fleeJob?.playerForced == true
 						&& fleeDestinationAvoids
+						&& fleeDestinationInAssignedArea == false
 						&& ObjectSuccess(hostilityResponse)
 						&& ObjectSuccess(meleeInterruption)
-						&& ObjectSuccess(destroyCleanup),
+						&& ObjectSuccess(destroyCleanup)
+						&& ObjectSuccess(assignedAreaFleePolicy),
 					actor = DescribePawn(actor),
 					zombie = DescribeZombie(zombie),
 					assignedArea = actor.playerSettings.AreaRestrictionInPawnCurrentMap?.Label,
@@ -920,11 +924,13 @@ namespace ZombieLand
 						fleeJobPlayerForced = fleeJob?.playerForced,
 						fleeDestination = fleeDestination.IsValid ? ZombieRuntimeActions.DescribeCell(fleeDestination) : null,
 						fleeDestinationAvoids,
+						fleeDestinationInAssignedArea,
 						samples
 					},
 					hostilityResponse,
 					meleeInterruption,
-					destroyCleanup
+					destroyCleanup,
+					assignedAreaFleePolicy
 				};
 			}
 			finally
@@ -1100,6 +1106,299 @@ namespace ZombieLand
 			return liveMessagesField?.GetValue(null) is System.Collections.ICollection collection
 				? collection.Count
 				: -1;
+		}
+
+		static object VerifyAreaWorkflowAssignedAreaFleePolicy(Map map, Area_Allowed assignedArea, Zombie zombie, AvoidGrid avoidGrid)
+		{
+			var preferInArea = VerifyAreaWorkflowAssignedAreaFleeCase(map, assignedArea, zombie, avoidGrid, "PreferInArea", true);
+			var emergencyFallback = VerifyAreaWorkflowAssignedAreaFleeCase(map, assignedArea, zombie, avoidGrid, "EmergencyFallback", false);
+			var vanillaFleeAndCower = VerifyAreaWorkflowVanillaFleeAndCowerPolicy(map, assignedArea, zombie);
+			return new
+			{
+				success = ObjectSuccess(preferInArea) && ObjectSuccess(emergencyFallback) && ObjectSuccess(vanillaFleeAndCower),
+				preferInArea,
+				emergencyFallback,
+				vanillaFleeAndCower
+			};
+		}
+
+		static object VerifyAreaWorkflowAssignedAreaFleeCase(Map map, Area_Allowed assignedArea, Zombie zombie, AvoidGrid avoidGrid, string label, bool includeSafeAllowedCell)
+		{
+			if (TryFindAvoidDangerSpawnCell(map, avoidGrid, zombie.Position, out var pawnCell, out var pawnCellError) == false)
+				return pawnCellError;
+
+			var pawn = GenerateAreaWorkflowPawn(Faction.OfPlayer, false);
+			pawn.Name = new NameSingle($"ZL_Area_{label}Flee");
+			GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+			DisablePawnWork(pawn);
+			pawn.playerSettings.AreaRestrictionInPawnCurrentMap = assignedArea;
+			var config = ColonistSettings.Values.ConfigFor(pawn);
+			if (config != null)
+				config.autoAvoidZombies = true;
+
+			try
+			{
+				var candidateDestinations = CollectAvoidanceFleeDestinations(map, pawn, avoidGrid);
+				var allowedSafeDestination = IntVec3.Invalid;
+				if (includeSafeAllowedCell)
+				{
+					allowedSafeDestination = candidateDestinations
+						.OrderByDescending(dest => (pawn.Position - dest).LengthHorizontalSquared)
+						.FirstOrDefault();
+					if (allowedSafeDestination.IsValid == false)
+					{
+						return new
+						{
+							success = false,
+							label,
+							pawn = DescribePawn(pawn),
+							candidateCount = candidateDestinations.Count,
+							error = "No safe flee destination candidate was available for the assigned-area preference probe."
+						};
+					}
+					SetAreaCells(map, assignedArea, pawn.Position, allowedSafeDestination);
+				}
+				else
+					SetAreaCells(map, assignedArea, pawn.Position);
+
+					var pawnAvoidCost = AvoidCost(avoidGrid, map, pawn.Position);
+					var pawnShouldAvoid = avoidGrid.ShouldAvoid(map, pawn.Position);
+					var waitJob = JobMaker.MakeJob(JobDefOf.Wait);
+					waitJob.playerForced = false;
+					pawn.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+				var startedJob = pawn.CurJobDef?.defName;
+				var tickHit = -1;
+				var samples = new List<object>();
+				for (var tick = 1; tick <= 30; tick++)
+				{
+					AdvanceGameTicks(1);
+					var currentJob = pawn.CurJob;
+					if (tick == 1 || tick == 30 || currentJob?.def == JobDefOf.Flee)
+					{
+						samples.Add(new
+						{
+							tick,
+							job = pawn.CurJobDef?.defName,
+							currentJob?.playerForced,
+							target = currentJob?.targetA.Cell.IsValid == true ? ZombieRuntimeActions.DescribeCell(currentJob.targetA.Cell) : null
+						});
+					}
+					if (currentJob?.def == JobDefOf.Flee)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var fleeJob = pawn.CurJob;
+				var fleeDestination = fleeJob?.targetA.Cell ?? IntVec3.Invalid;
+				var fleeDestinationAvoids = fleeDestination.IsValid && avoidGrid.ShouldAvoid(map, fleeDestination) == false;
+				var fleeDestinationInAssignedArea = fleeDestination.IsValid && assignedArea[fleeDestination];
+				var expectedInAssignedArea = includeSafeAllowedCell;
+				return new
+					{
+						success = pawnShouldAvoid
+							&& pawnAvoidCost > 0
+							&& startedJob == JobDefOf.Wait.defName
+							&& tickHit > 0
+						&& fleeJob?.playerForced == true
+						&& fleeDestinationAvoids
+						&& fleeDestinationInAssignedArea == expectedInAssignedArea
+						&& (includeSafeAllowedCell == false || fleeDestination == allowedSafeDestination),
+					label,
+					pawn = DescribePawn(pawn),
+					assignedArea = assignedArea?.Label,
+					pawnAvoidCost,
+					pawnShouldAvoid,
+					startedJob,
+					tickHit,
+					fleeJob = fleeJob?.def?.defName,
+					fleeJobPlayerForced = fleeJob?.playerForced,
+					allowedSafeDestination = allowedSafeDestination.IsValid ? ZombieRuntimeActions.DescribeCell(allowedSafeDestination) : null,
+					fleeDestination = fleeDestination.IsValid ? ZombieRuntimeActions.DescribeCell(fleeDestination) : null,
+					fleeDestinationAvoids,
+					fleeDestinationInAssignedArea,
+					expectedInAssignedArea,
+					samples
+				};
+			}
+			finally
+			{
+				ColonistSettings.Values.RemoveColonist(pawn);
+					if (pawn.Destroyed == false)
+						pawn.Destroy(DestroyMode.Vanish);
+				}
+			}
+
+			static object VerifyAreaWorkflowVanillaFleeAndCowerPolicy(Map map, Area_Allowed assignedArea, Zombie zombie)
+			{
+			var tryGetFleeJob = AccessTools.Method(typeof(JobGiver_ConfigurableHostilityResponse), "TryGetFleeJob", new[] { typeof(Pawn) });
+			if (tryGetFleeJob == null)
+			{
+				return new
+				{
+					success = false,
+					error = "RimWorld.JobGiver_ConfigurableHostilityResponse.TryGetFleeJob was not found."
+				};
+			}
+
+			var pawnCell = GenRadial.RadialCellsAround(zombie.Position, 7.5f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => cell.InHorDistOf(zombie.Position, 7.9f))
+				.Where(cell => GenSight.LineOfSight(cell, zombie.Position, map))
+				.OrderByDescending(cell => cell.DistanceToSquared(zombie.Position))
+				.FirstOrDefault();
+			if (pawnCell.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					zombie = DescribeZombie(zombie),
+					error = "No clear vanilla flee-and-cower pawn cell was available near the zombie."
+				};
+			}
+
+			var pawn = GenerateAreaWorkflowPawn(Faction.OfPlayer, false);
+			pawn.Name = new NameSingle("ZL_Area_VanillaFleeAndCower");
+			GenSpawn.Spawn(pawn, pawnCell, map, Rot4.South);
+			DisablePawnWork(pawn);
+			pawn.playerSettings.AreaRestrictionInPawnCurrentMap = assignedArea;
+
+			try
+			{
+				var threats = new List<Thing> { zombie };
+				var unrestrictedDestination = CellFinderLoose.GetFleeDest(pawn, threats);
+				if (unrestrictedDestination.IsValid == false || unrestrictedDestination == pawn.Position)
+				{
+					return new
+					{
+						success = false,
+						pawn = DescribePawn(pawn),
+						zombie = DescribeZombie(zombie),
+						unrestrictedDestination = unrestrictedDestination.IsValid ? ZombieRuntimeActions.DescribeCell(unrestrictedDestination) : null,
+						error = "Vanilla CellFinderLoose.GetFleeDest did not produce a useful flee destination."
+					};
+				}
+
+				var allowedDestination = IntVec3.Invalid;
+				var expectedDestination = IntVec3.Invalid;
+				foreach (var candidate in GenRadial.RadialCellsAround(pawn.Position, 30f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell != pawn.Position && cell != unrestrictedDestination)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => pawn.CanReach(cell, PathEndMode.OnCell, Danger.Deadly))
+					.OrderByDescending(cell => cell.DistanceToSquared(zombie.Position)))
+				{
+					SetAreaCells(map, assignedArea, pawn.Position, candidate);
+					if (Patches.TryFindAreaRestrictedZombieFleeDestination(pawn, threats, 23f, assignedArea, out var areaDestination))
+					{
+						allowedDestination = candidate;
+						expectedDestination = areaDestination;
+						break;
+					}
+				}
+
+				if (allowedDestination.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						pawn = DescribePawn(pawn),
+						zombie = DescribeZombie(zombie),
+						unrestrictedDestination = ZombieRuntimeActions.DescribeCell(unrestrictedDestination),
+						error = "No assigned-area vanilla flee destination candidate was found."
+					};
+				}
+
+				var unrestrictedDestinationInAssignedArea = assignedArea[unrestrictedDestination];
+				var giver = Activator.CreateInstance(typeof(JobGiver_ConfigurableHostilityResponse));
+				var fleeJob = tryGetFleeJob.Invoke(giver, new object[] { pawn }) as Job;
+				var fleeDestination = fleeJob?.targetA.Cell ?? IntVec3.Invalid;
+				var fleeDestinationInAssignedArea = fleeDestination.IsValid && assignedArea[fleeDestination];
+				var oldActiveJob = JobMaker.MakeJob(JobDefOf.FleeAndCower, unrestrictedDestination);
+				pawn.jobs.StartJob(oldActiveJob, JobCondition.InterruptForced, null, false, true);
+				AdvanceGameTicks(1);
+				var activeRetargetedDestination = pawn.CurJob?.targetA.Cell ?? IntVec3.Invalid;
+				var activeRetargetedDestinationInAssignedArea = activeRetargetedDestination.IsValid && assignedArea[activeRetargetedDestination];
+
+				return new
+				{
+					success = fleeJob?.def == JobDefOf.FleeAndCower
+						&& unrestrictedDestinationInAssignedArea == false
+						&& fleeDestinationInAssignedArea
+						&& fleeDestination == expectedDestination
+						&& activeRetargetedDestinationInAssignedArea
+						&& activeRetargetedDestination == expectedDestination,
+					pawn = DescribePawn(pawn),
+					zombie = DescribeZombie(zombie),
+					assignedArea = assignedArea?.Label,
+					unrestrictedDestination = ZombieRuntimeActions.DescribeCell(unrestrictedDestination),
+					unrestrictedDestinationInAssignedArea,
+					allowedDestination = ZombieRuntimeActions.DescribeCell(allowedDestination),
+					expectedDestination = ZombieRuntimeActions.DescribeCell(expectedDestination),
+					fleeJob = fleeJob?.def?.defName,
+					fleeDestination = fleeDestination.IsValid ? ZombieRuntimeActions.DescribeCell(fleeDestination) : null,
+					fleeDestinationInAssignedArea,
+					activeRetargetedDestination = activeRetargetedDestination.IsValid ? ZombieRuntimeActions.DescribeCell(activeRetargetedDestination) : null,
+					activeRetargetedDestinationInAssignedArea
+				};
+			}
+			finally
+			{
+				ColonistSettings.Values.RemoveColonist(pawn);
+				if (pawn.Destroyed == false)
+					pawn.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+			static bool TryFindAvoidDangerSpawnCell(Map map, AvoidGrid avoidGrid, IntVec3 root, out IntVec3 result, out object error)
+			{
+				result = GenRadial.RadialCellsAround(root, 8f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => avoidGrid.ShouldAvoid(map, cell))
+					.OrderBy(cell => cell.DistanceToSquared(root))
+					.FirstOrDefault();
+			error = null;
+			if (result.IsValid)
+				return true;
+
+			error = new
+			{
+				success = false,
+				root = ZombieRuntimeActions.DescribeCell(root),
+				error = "No clear avoid-danger pawn cell was available for the assigned-area flee policy probe."
+			};
+			return false;
+		}
+
+		static List<IntVec3> CollectAvoidanceFleeDestinations(Map map, Pawn pawn, AvoidGrid avoidGrid)
+		{
+			var safeDestinations = new List<IntVec3>();
+			var pos = pawn.Position;
+			map.floodFiller.FloodFill(pos, cell =>
+			{
+				if (cell.x == pos.x && cell.z == pos.z)
+					return true;
+				if (cell.Walkable(map) == false)
+					return false;
+				if (cell.GetEdifice(map) is Building_Door buildingDoor && buildingDoor.CanPhysicallyPass(pawn) == false)
+					return false;
+				return PawnUtility.AnyPawnBlockingPathAt(cell, pawn, true, false, false) == false;
+			}, cell =>
+			{
+				if (cell.Standable(map) && avoidGrid.ShouldAvoid(map, cell) == false)
+					safeDestinations.Add(cell);
+				return false;
+			}, 64, false, null);
+			return safeDestinations;
 		}
 
 		static object VerifyAreaWorkflowHostilityResponse(Map map, Pawn fleeingPawn, Zombie nearbyZombie, IntVec3 root)

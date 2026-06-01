@@ -1654,6 +1654,14 @@ namespace ZombieLand
 				if (___pawn.health.Downed || ___pawn.InMentalState || ___pawn.Drafted)
 					return;
 
+				var runningJobDef = __instance.job?.def;
+				if (runningJobDef == JobDefOf.Flee || runningJobDef == JobDefOf.FleeAndCower)
+				{
+					var fleeJob = __instance.job;
+					RetargetAssignedAreaFleeJob(___pawn, ZombieFleeThreatsFor(___pawn), 23, ref fleeJob);
+					return;
+				}
+
 				if (__instance.job == null || __instance.job.playerForced || Tools.ShouldAvoidZombies(___pawn) == false)
 					return;
 
@@ -1698,8 +1706,17 @@ namespace ZombieLand
 
 				if (safeDestinations.Count > 0)
 				{
-					safeDestinations.SortByDescending(dest => (pos - dest).LengthHorizontalSquared);
-					var destination = safeDestinations.First();
+					var allowedArea = ___pawn.playerSettings?.AreaRestrictionInPawnCurrentMap;
+					var destinations = safeDestinations;
+					if (allowedArea != null)
+					{
+						var areaDestinations = safeDestinations.Where(dest => allowedArea[dest]).ToList();
+						if (areaDestinations.Count > 0)
+							destinations = areaDestinations;
+					}
+
+					destinations.SortByDescending(dest => (pos - dest).LengthHorizontalSquared);
+					var destination = destinations.First();
 					if (destination.IsValid)
 					{
 						var flee = JobMaker.MakeJob(JobDefOf.Flee, destination);
@@ -1710,6 +1727,157 @@ namespace ZombieLand
 				}
 			}
 		}
+
+		[HarmonyPatch(typeof(FleeUtility))]
+		[HarmonyPatch(nameof(FleeUtility.FleeJob))]
+		static class FleeUtility_FleeJob_Patch
+		{
+			static void Postfix(Pawn pawn, Thing danger, int fleeDistance, ref Job __result)
+			{
+				if (__result == null || danger == null)
+					return;
+				if (IsZombielandFleeThreat(danger) == false)
+					return;
+				RetargetAssignedAreaFleeJob(pawn, new[] { danger }, fleeDistance, ref __result);
+			}
+		}
+
+		[HarmonyPatch]
+		static class JobGiver_ConfigurableHostilityResponse_TryGetFleeJob_Patch
+		{
+			static MethodBase TargetMethod()
+			{
+				var method = AccessTools.Method(typeof(JobGiver_ConfigurableHostilityResponse), "TryGetFleeJob", new[] { typeof(Pawn) });
+				if (method == null)
+					Error("Cannot find RimWorld.JobGiver_ConfigurableHostilityResponse.TryGetFleeJob");
+				return method;
+			}
+
+			static void Postfix(Pawn pawn, ref Job __result)
+			{
+				if (__result?.def != JobDefOf.FleeAndCower)
+					return;
+				var threats = ZombieFleeThreatsFor(pawn);
+				if (threats.Count == 0)
+					return;
+				RetargetAssignedAreaFleeJob(pawn, threats, 23, ref __result);
+			}
+		}
+
+		static bool IsZombielandFleeThreat(Thing thing)
+		{
+			return thing is Pawn pawn && ZombieAreaManager.IsZombielandPawn(pawn);
+		}
+
+		static List<Thing> ZombieFleeThreatsFor(Pawn pawn)
+		{
+			var threats = new List<Thing>();
+			var map = pawn?.Map;
+			if (map == null)
+				return threats;
+
+			var potentialTargets = map.attackTargetsCache.GetPotentialTargetsFor(pawn);
+			for (var i = 0; i < potentialTargets.Count; i++)
+			{
+				var thing = potentialTargets[i].Thing;
+				if (IsZombielandFleeThreat(thing) && FleeUtility.ShouldFleeFrom(thing, pawn, false, false))
+					threats.Add(thing);
+			}
+
+			var alwaysFlee = map.listerThings.ThingsInGroup(ThingRequestGroup.AlwaysFlee);
+			for (var i = 0; i < alwaysFlee.Count; i++)
+			{
+				var thing = alwaysFlee[i];
+				if (IsZombielandFleeThreat(thing) && FleeUtility.ShouldFleeFrom(thing, pawn, false, false))
+					threats.Add(thing);
+			}
+
+			return threats.Distinct().ToList();
+		}
+
+		static void RetargetAssignedAreaFleeJob(Pawn pawn, IEnumerable<Thing> threats, int fleeDistance, ref Job job)
+		{
+			if (pawn?.Map == null || pawn.IsColonist == false)
+				return;
+
+			var allowedArea = pawn.playerSettings?.AreaRestrictionInPawnCurrentMap;
+			if (allowedArea == null)
+				return;
+
+			var currentDestination = job.targetA.Cell;
+			if (currentDestination.IsValid == false || allowedArea[currentDestination])
+				return;
+
+			if (TryFindAreaRestrictedZombieFleeDestination(pawn, threats, fleeDistance, allowedArea, out var destination))
+				job.SetTarget(TargetIndex.A, destination);
+		}
+
+		internal static bool TryFindAreaRestrictedZombieFleeDestination(Pawn pawn, IEnumerable<Thing> threats, float distance, Area allowedArea, out IntVec3 destination)
+		{
+			destination = IntVec3.Invalid;
+			var threatList = threats?
+				.Where(thing => thing?.Spawned == true && thing.Map == pawn?.Map)
+				.ToList();
+			var map = pawn?.Map;
+			var region = pawn?.GetRegion();
+			if (map == null || allowedArea == null || region == null || threatList == null || threatList.Count == 0)
+				return false;
+
+			var bestPos = pawn.Position;
+			var bestScore = -1f;
+			var traverseParms = TraverseParms.For(pawn);
+			RegionTraverser.BreadthFirstTraverse(region, (from, reg) => reg.Allows(traverseParms, false), delegate (Region reg)
+			{
+				var danger = reg.DangerFor(pawn);
+				foreach (var cell in reg.Cells)
+				{
+					if (allowedArea[cell] == false || cell.Standable(map) == false || reg.IsDoorway)
+						continue;
+					if (cell.GetTerrain(map).dangerous)
+						return false;
+
+					var closestThreat = default(Thing);
+					var closestDistSq = 0f;
+					for (var i = 0; i < threatList.Count; i++)
+					{
+						var distSq = cell.DistanceToSquared(threatList[i].Position);
+						if (closestThreat == null || distSq < closestDistSq)
+						{
+							closestThreat = threatList[i];
+							closestDistSq = distSq;
+						}
+					}
+
+					var closestDist = Mathf.Sqrt(closestDistSq);
+					var score = Mathf.Pow(Mathf.Min(closestDist, distance), 1.2f);
+					score *= Mathf.InverseLerp(50f, 0f, (cell - pawn.Position).LengthHorizontal);
+					if (cell.GetRoom(map) != closestThreat.GetRoom())
+						score *= 4.2f;
+					else if (closestDist < 8f)
+						score *= 0.05f;
+					if (map.pawnDestinationReservationManager.CanReserve(cell, pawn) == false)
+						score *= 0.5f;
+					if (danger == Danger.Deadly)
+						score *= 0.8f;
+					if (ModsConfig.AnomalyActive && (pawn.RaceProps.Humanlike || pawn.IsPlayerControlled) && map.gameConditionManager.MapBrightness < 0.1f && map.glowGrid.PsychGlowAt(cell) == PsychGlow.Dark)
+						score *= 0.1f;
+
+					if (score > bestScore)
+					{
+						bestPos = cell;
+						bestScore = score;
+					}
+				}
+				return false;
+			}, 20);
+
+			if (bestPos == pawn.Position || bestScore < 0f)
+				return false;
+
+			destination = bestPos;
+			return true;
+		}
+
 		[HarmonyPatch(typeof(JobGiver_ConfigurableHostilityResponse))]
 		[HarmonyPatch(nameof(JobGiver_ConfigurableHostilityResponse.TryGetAttackNearbyEnemyJob))]
 		static class JobGiver_ConfigurableHostilityResponse_TryGetAttackNearbyEnemyJob_Patch
