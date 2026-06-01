@@ -288,18 +288,24 @@ namespace ZombieLand
 	[HarmonyPatch(typeof(Building_GeneExtractor), nameof(Building_GeneExtractor.Finish))]
 	static class Building_GeneExtractor_Finish_Patch
 	{
+		[ThreadStatic] static Pawn containedPawn;
+
 		static bool Prepare() => Constants.CONTAMINATION;
 
-		static Thing MakeThing(ThingDef def, ThingDef stuff, Building_GeneExtractor extractor)
+		static void Prefix(Building_GeneExtractor __instance)
+			=> containedPawn = __instance.ContainedPawn;
+
+		static void Finalizer()
+			=> containedPawn = null;
+
+		static bool TryPlaceThing(Thing thing, IntVec3 center, Map map, ThingPlaceMode mode, Action<Thing, int> placedAction, Predicate<IntVec3> nearPlaceValidator, Rot4? rot, int squareRadius, Building_GeneExtractor extractor)
 		{
-			var result = ThingMaker.MakeThing(def, stuff);
-			var pawn = extractor.ContainedPawn;
-			pawn.TransferContamination(ZombieSettings.Values.contamination.geneExtractorTransfer, result);
-			return result;
+			containedPawn?.TransferContamination(ZombieSettings.Values.contamination.geneExtractorTransfer, thing);
+			return GenPlace.TryPlaceThing(thing, center, map, mode, placedAction, nearPlaceValidator, rot, squareRadius);
 		}
 
 		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-			=> instructions.ExtraArgumentsTranspiler(typeof(ThingMaker), () => MakeThing(default, default, default), new[] { Ldarg_0 }, 1);
+			=> instructions.ExtraArgumentsTranspiler(typeof(GenPlace), () => TryPlaceThing(default, default, default, default, default, default, default, default, default), new[] { Ldarg_0 }, 1);
 	}
 
 	[HarmonyPatch(typeof(Building_NutrientPasteDispenser), nameof(Building_NutrientPasteDispenser.TryDispenseFood))]

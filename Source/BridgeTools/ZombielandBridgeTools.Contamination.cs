@@ -6570,6 +6570,464 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/contamination_biotech_product_handoffs_contract", Description = "Verify Biotech gene extractor, subcore scanner, and mech disassembly product handoffs transfer contamination.")]
+		public static object ContaminationBiotechProductHandoffsContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (Constants.CONTAMINATION == false)
+			{
+				return new
+				{
+					success = false,
+					error = "Contamination is disabled in Zombieland advanced settings."
+				};
+			}
+
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			var geneExtractor = VerifyGeneExtractorProductTransfer(map, root + new IntVec3(-8, 0, 8));
+			var subcoreScanner = VerifySubcoreScannerProductTransfer(map, root + new IntVec3(0, 0, 8));
+			var disassembleMech = VerifyDisassembleMechProductTransfer(map, root + new IntVec3(8, 0, 8));
+			return new
+			{
+				success = ObjectSuccess(geneExtractor)
+					&& ObjectSuccess(subcoreScanner)
+					&& ObjectSuccess(disassembleMech),
+				geneExtractor,
+				subcoreScanner,
+				disassembleMech
+			};
+		}
+
+		static object VerifyGeneExtractorProductTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Building_GeneExtractor_Finish_Patch");
+			var extractorDef = DefDatabase<ThingDef>.GetNamedSilentFail("GeneExtractor");
+			var genepackDef = ThingDefOf.Genepack;
+			var geneDef = DefDatabase<GeneDef>.AllDefsListForReading
+				.Where(def => def.biostatArc == 0 && def.endogeneCategory != EndogeneCategory.Melanin && def.passOnDirectly)
+				.OrderBy(def => def.defName)
+				.FirstOrDefault();
+			var finishMethod = typeof(Building_GeneExtractor).GetMethod("Finish", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (ModLister.BiotechInstalled == false || extractorDef == null || genepackDef == null || geneDef == null || finishMethod == null)
+			{
+				return new
+				{
+					success = patchTargets.Length > 0,
+					skipped = true,
+					targets = CompactPatchTargets(patchTargets),
+					reason = "Biotech gene extractor product path cannot run in the active configuration.",
+					biotechInstalled = ModLister.BiotechInstalled,
+					extractorDef = extractorDef?.defName,
+					genepackDef = genepackDef?.defName,
+					geneDef = geneDef?.defName,
+					finishMethodFound = finishMethod != null
+				};
+			}
+
+			if (TryFindClearBuildingFootprint(map, extractorDef, root, 24f, out var extractorCell, out var extractorCellError) == false)
+				return extractorCellError;
+			if (TryFindClearSpawnCell(map, extractorCell + IntVec3.East, 8f, out var pawnCell, out var pawnCellError) == false)
+				return pawnCellError;
+
+			var extractor = (Building_GeneExtractor)null;
+			var pawn = (Pawn)null;
+			var genepack = (Thing)null;
+			try
+			{
+				extractor = ThingMaker.MakeThing(extractorDef) as Building_GeneExtractor;
+				if (extractor == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						extractorDef = extractorDef.defName,
+						error = "GeneExtractor def did not create Building_GeneExtractor."
+					};
+				}
+
+				GenSpawn.Spawn(extractor, extractorCell, map, Rot4.South, WipeMode.Vanish, false);
+				var powerComp = extractor.TryGetComp<CompPowerTrader>();
+				if (powerComp != null)
+					powerComp.PowerOn = true;
+				pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(pawn, pawnCell, map, Rot4.West, WipeMode.Vanish);
+				if (pawn.genes != null && pawn.genes.GenesListForReading.All(gene => gene.def != geneDef))
+					pawn.genes.AddGene(geneDef, false);
+				var geneCountBefore = pawn.genes?.GenesListForReading.Count ?? -1;
+				var existingGenepacks = map.listerThings.ThingsOfDef(genepackDef).ToHashSet();
+
+				extractor.TryAcceptPawn(pawn);
+				var containedBeforeFinish = extractor.ContainedPawn != null;
+				const float pawnContamination = 0.68f;
+				pawn.SetContamination(pawnContamination);
+				var pawnBefore = pawn.GetContamination(false);
+				Rand.PushState(81643);
+				try
+				{
+					finishMethod.Invoke(extractor, Array.Empty<object>());
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				genepack = map.listerThings.ThingsOfDef(genepackDef)
+					.FirstOrDefault(thing => existingGenepacks.Contains(thing) == false);
+				var pawnAfter = pawn.GetContamination(false);
+				var productContamination = genepack?.GetContamination() ?? -1f;
+				var expectedProductContamination = pawnBefore - pawnAfter;
+				var transferFactor = ZombieSettings.Values.contamination.geneExtractorTransfer;
+				var productCreated = genepack != null
+					&& genepack.Spawned
+					&& genepack.def == genepackDef;
+				var contaminationTransferred = productCreated
+					&& expectedProductContamination > 0f
+					&& Approximately(productContamination, expectedProductContamination);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& containedBeforeFinish
+						&& productCreated
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.Building_GeneExtractor::Finish()",
+					extractor = ZombieRuntimeActions.StableThingId(extractor),
+					extractorCell = ZombieRuntimeActions.DescribeCell(extractorCell),
+					extractorDef = extractor.def?.defName,
+					pawn = DescribePawn(pawn),
+					pawnBefore,
+					pawnAfter,
+					geneDef = geneDef.defName,
+					geneCountBefore,
+					transferFactor,
+					genepack = ZombieRuntimeActions.StableThingId(genepack),
+					genepackDef = genepack?.def?.defName,
+					genepackPosition = genepack?.Spawned == true ? ZombieRuntimeActions.DescribeCell(genepack.Position) : null,
+					productContamination,
+					expectedProductContamination,
+					containedBeforeFinish,
+					productCreated,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				extractor?.ClearContamination();
+				pawn?.ClearContamination();
+				genepack?.ClearContamination();
+				if (genepack is { Destroyed: false, Spawned: true })
+					genepack.Destroy();
+				if (pawn is { Destroyed: false, Spawned: true })
+					pawn.Destroy();
+				if (extractor is { Destroyed: false, Spawned: true })
+					extractor.Destroy();
+			}
+		}
+
+		static object VerifySubcoreScannerProductTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("Building_SubcoreScanner_Tick_Patch");
+			var scannerDef = DefDatabase<ThingDef>.GetNamedSilentFail("SubcoreSoftscanner")
+				?? DefDatabase<ThingDef>.GetNamedSilentFail("SubcoreRipscanner");
+			var outputDef = scannerDef?.building?.subcoreScannerOutputDef;
+			var tickMethod = typeof(Building_SubcoreScanner).GetMethod("Tick", BindingFlags.Instance | BindingFlags.NonPublic);
+			var initScannerField = typeof(Building_SubcoreScanner).GetField("initScanner", BindingFlags.Instance | BindingFlags.NonPublic);
+			var disableIngredientsField = typeof(Building_SubcoreScanner).GetField("debugDisableNeedForIngredients", BindingFlags.Instance | BindingFlags.NonPublic);
+			var fabricationTicksField = typeof(Building_SubcoreScanner).GetField("fabricationTicksLeft", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (ModLister.BiotechInstalled == false || scannerDef == null || outputDef == null || tickMethod == null || initScannerField == null || disableIngredientsField == null || fabricationTicksField == null)
+			{
+				return new
+				{
+					success = patchTargets.Length > 0,
+					skipped = true,
+					targets = CompactPatchTargets(patchTargets),
+					reason = "Biotech subcore scanner product path cannot run in the active configuration.",
+					biotechInstalled = ModLister.BiotechInstalled,
+					scannerDef = scannerDef?.defName,
+					outputDef = outputDef?.defName,
+					tickMethodFound = tickMethod != null,
+					initScannerFieldFound = initScannerField != null,
+					disableIngredientsFieldFound = disableIngredientsField != null,
+					fabricationTicksFieldFound = fabricationTicksField != null
+				};
+			}
+
+			if (TryFindClearBuildingFootprint(map, scannerDef, root, 24f, out var scannerCell, out var scannerCellError) == false)
+				return scannerCellError;
+			if (TryFindClearSpawnCell(map, scannerCell + IntVec3.East, 8f, out var occupantCell, out var occupantCellError) == false)
+				return occupantCellError;
+
+			var scanner = (Building_SubcoreScanner)null;
+			var occupant = (Pawn)null;
+			var product = (Thing)null;
+			try
+			{
+				scanner = ThingMaker.MakeThing(scannerDef) as Building_SubcoreScanner;
+				if (scanner == null)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						scannerDef = scannerDef.defName,
+						error = "Subcore scanner def did not create Building_SubcoreScanner."
+					};
+				}
+
+				GenSpawn.Spawn(scanner, scannerCell, map, Rot4.South, WipeMode.Vanish, false);
+				var powerComp = scanner.TryGetComp<CompPowerTrader>();
+				if (powerComp != null)
+					powerComp.PowerOn = true;
+				initScannerField.SetValue(scanner, true);
+				disableIngredientsField.SetValue(scanner, true);
+
+				occupant = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(occupant, occupantCell, map, Rot4.West, WipeMode.Vanish);
+				scanner.TryAcceptPawn(occupant);
+				const float scannerContamination = 0.58f;
+				scanner.SetContamination(scannerContamination);
+				var scannerBefore = scanner.GetContamination();
+				var existingProducts = map.listerThings.ThingsOfDef(outputDef).ToHashSet();
+				var stateBefore = scanner.State.ToString();
+				fabricationTicksField.SetValue(scanner, 1);
+
+				tickMethod.Invoke(scanner, Array.Empty<object>());
+
+				product = map.listerThings.ThingsOfDef(outputDef)
+					.FirstOrDefault(thing => existingProducts.Contains(thing) == false);
+				var scannerAfter = scanner.GetContamination();
+				var productContamination = product?.GetContamination() ?? -1f;
+				var expectedProductContamination = scannerBefore - scannerAfter;
+				var transferFactor = ZombieSettings.Values.contamination.subcoreScannerTransfer;
+				var productCreated = product != null
+					&& product.Spawned
+					&& product.def == outputDef;
+				var contaminationTransferred = productCreated
+					&& expectedProductContamination > 0f
+					&& Approximately(productContamination, expectedProductContamination);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& stateBefore == SubcoreScannerState.Occupied.ToString()
+						&& productCreated
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.Building_SubcoreScanner::Tick()",
+					scanner = ZombieRuntimeActions.StableThingId(scanner),
+					scannerCell = ZombieRuntimeActions.DescribeCell(scannerCell),
+					scannerDef = scanner.def?.defName,
+					stateBefore,
+					stateAfter = scanner.State.ToString(),
+					powerOn = scanner.PowerOn,
+					occupant = DescribePawn(occupant),
+					outputDef = outputDef.defName,
+					product = ZombieRuntimeActions.StableThingId(product),
+					productPosition = product?.Spawned == true ? ZombieRuntimeActions.DescribeCell(product.Position) : null,
+					scannerBefore,
+					scannerAfter,
+					transferFactor,
+					productContamination,
+					expectedProductContamination,
+					productCreated,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				scanner?.ClearContamination();
+				occupant?.ClearContamination();
+				product?.ClearContamination();
+				if (product is { Destroyed: false, Spawned: true })
+					product.Destroy();
+				if (occupant is { Destroyed: false, Spawned: true })
+					occupant.Destroy();
+				if (scanner is { Destroyed: false, Spawned: true })
+					scanner.Destroy();
+			}
+		}
+
+		static object VerifyDisassembleMechProductTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("JobDriver_DisassembleMech_MakeNewToils_Patch");
+			var disassembleJobDef = DefDatabase<JobDef>.GetNamedSilentFail("DisassembleMech");
+			var mechKindDef = PawnKindDefOf.Mech_Scyther
+				?? DefDatabase<PawnKindDef>.AllDefs.FirstOrDefault(def => def.race?.race?.IsMechanoid == true);
+			if (ModLister.BiotechInstalled == false || disassembleJobDef == null || mechKindDef == null)
+			{
+				return new
+				{
+					success = patchTargets.Length > 0,
+					skipped = true,
+					targets = CompactPatchTargets(patchTargets),
+					reason = "Biotech mech disassembly product path cannot run in the active configuration.",
+					biotechInstalled = ModLister.BiotechInstalled,
+					disassembleJobDef = disassembleJobDef?.defName,
+					mechKindDef = mechKindDef?.defName
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, root, 16f, out var mechCell, out var mechCellError) == false)
+				return mechCellError;
+			if (TryFindClearSpawnCell(map, mechCell + IntVec3.East, 8f, out var workerCell, out var workerCellError) == false)
+				return workerCellError;
+
+			var worker = (Pawn)null;
+			var mech = (Pawn)null;
+			var products = new List<Thing>();
+			try
+			{
+				worker = GenerateWorkCapableColonist(WorkTypeDefOf.Crafting, SkillDefOf.Crafting, 20);
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.West, WipeMode.Vanish);
+				worker.ClearContamination();
+				worker.jobs?.StopAll(false, true);
+				worker.pather?.StopDead();
+
+				var request = new PawnGenerationRequest(
+					mechKindDef,
+					Faction.OfPlayer,
+					PawnGenerationContext.NonPlayer,
+					forceGenerateNewPawn: true,
+					canGeneratePawnRelations: false,
+					colonistRelationChanceFactor: 0f,
+					forceNoIdeo: true);
+				mech = PawnGenerator.GeneratePawn(request);
+				GenSpawn.Spawn(mech, mechCell, map, Rot4.East, WipeMode.Vanish);
+				mech.ClearContamination();
+				mech.jobs?.StopAll(false, true);
+				mech.pather?.StopDead();
+
+				var expectedIngredients = MechanitorUtility.IngredientsFromDisassembly(mech.def).ToArray();
+				if (expectedIngredients.Length == 0)
+				{
+					return new
+					{
+						success = false,
+						targets = CompactPatchTargets(patchTargets),
+						mech = DescribePawn(mech),
+						error = "Selected mech has no disassembly products."
+					};
+				}
+
+				const float mechContamination = 0.74f;
+				const float workerContamination = 0.12f;
+				mech.SetContamination(mechContamination);
+				worker.SetContamination(workerContamination);
+				var workerBefore = worker.GetContamination(false);
+				var mechBefore = mech.GetContamination(false);
+				var existingThings = map.listerThings.AllThings.ToHashSet();
+				var expectedDefs = expectedIngredients.Select(ingredient => ingredient.thingDef).ToHashSet();
+				var job = JobMaker.MakeJob(disassembleJobDef, mech);
+				job.playerForced = true;
+				var started = worker.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
+				var tickHit = -1;
+				var samples = new List<object>();
+
+				for (var tick = 1; tick <= 420; tick++)
+				{
+					AdvanceGameTicks(1);
+					products = map.listerThings.AllThings
+						.Where(thing => existingThings.Contains(thing) == false)
+						.Where(thing => expectedDefs.Contains(thing.def))
+						.ToList();
+					var mechConsumed = mech.Destroyed;
+					if (tick == 1 || tick % 60 == 0 || mechConsumed || products.Count > 0)
+					{
+						samples.Add(new
+						{
+							tick,
+							workerJob = worker.CurJobDef?.defName,
+							mechDestroyed = mech.Destroyed,
+							productCount = products.Count,
+							workerContamination = worker.GetContamination(false),
+							productContaminationTotal = products.Sum(thing => thing.GetContamination())
+						});
+					}
+					if (mechConsumed && products.Count > 0)
+					{
+						tickHit = tick;
+						break;
+					}
+				}
+
+				var workerAfter = worker.GetContamination(false);
+				var productContaminationTotal = products.Sum(thing => thing.GetContamination());
+				var expectedWorkerGain = productContaminationTotal;
+				var workerGain = workerAfter - workerBefore;
+				var contaminationTransferred = products.Count > 0
+					&& productContaminationTotal > 0f
+					&& workerGain > 0f
+					&& Approximately(workerGain, expectedWorkerGain, 0.0001f);
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& started
+						&& tickHit > 0
+						&& mech.Destroyed
+						&& products.Count > 0
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					method = "RimWorld.JobDriver_DisassembleMech::<MakeNewToils>b__placedAction",
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					mech = DescribePawn(mech),
+					mechCell = ZombieRuntimeActions.DescribeCell(mechCell),
+					mechKindDef = mechKindDef.defName,
+					disassembleJobDef = disassembleJobDef.defName,
+					started,
+					tickHit,
+					mechBefore,
+					workerBefore,
+					workerAfter,
+					workerGain,
+					expectedWorkerGain,
+					transferFactor = ZombieSettings.Values.contamination.disassembleTransfer,
+					expectedProducts = expectedIngredients.Select(ingredient => new
+					{
+						defName = ingredient.thingDef?.defName,
+						count = ingredient.count
+					}).ToArray(),
+					products = products.Select(thing => new
+					{
+						id = ZombieRuntimeActions.StableThingId(thing),
+						defName = thing.def?.defName,
+						stackCount = thing.stackCount,
+						contamination = thing.GetContamination(),
+						position = thing.Spawned ? ZombieRuntimeActions.DescribeCell(thing.Position) : null
+					}).ToArray(),
+					productContaminationTotal,
+					contaminationTransferred,
+					samples
+				};
+			}
+			finally
+			{
+				worker?.ClearContamination();
+				mech?.ClearContamination();
+				foreach (var product in products)
+				{
+					product?.ClearContamination();
+					if (product is { Destroyed: false, Spawned: true })
+						product.Destroy();
+				}
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+				if (mech is { Destroyed: false, Spawned: true })
+					mech.Destroy();
+			}
+		}
+
 		[Tool("zombieland/contamination_repair_contract", Description = "Verify real repair jobs transfer contamination through patched repair handoff points.")]
 		public static object ContaminationRepairContract()
 		{
@@ -6603,6 +7061,33 @@ namespace ZombieLand
 			};
 		}
 
+		static Pawn GenerateWorkCapableColonist(WorkTypeDef workType, SkillDef skillDef, int skillLevel)
+		{
+			for (var attempt = 0; attempt < 24; attempt++)
+			{
+				var candidate = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				if (workType == null || candidate.WorkTypeIsDisabled(workType) == false)
+				{
+					candidate.workSettings?.EnableAndInitializeIfNotAlreadyInitialized();
+					if (workType != null)
+						candidate.workSettings?.SetPriority(workType, 1);
+					if (skillDef != null)
+						candidate.skills?.GetSkill(skillDef).Level = skillLevel;
+					return candidate;
+				}
+
+				candidate.Destroy();
+			}
+
+			var fallback = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			fallback.workSettings?.EnableAndInitializeIfNotAlreadyInitialized();
+			if (workType != null && fallback.WorkTypeIsDisabled(workType) == false)
+				fallback.workSettings?.SetPriority(workType, 1);
+			if (skillDef != null)
+				fallback.skills?.GetSkill(skillDef).Level = skillLevel;
+			return fallback;
+		}
+
 		static object VerifyBuildingRepairTransfer(Map map, IntVec3 root)
 		{
 			var patchTargets = PatchedMethodsForPatchClass("JobDriver_Repair_MakeNewToils_Patch");
@@ -6628,13 +7113,11 @@ namespace ZombieLand
 			var building = (Building)null;
 			try
 			{
-				worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				worker = GenerateWorkCapableColonist(WorkTypeDefOf.Construction, SkillDefOf.Construction, 20);
 				GenSpawn.Spawn(worker, workerCell, map, Rot4.West, WipeMode.Vanish);
 				worker.ClearContamination();
 				worker.jobs?.StopAll(false, true);
 				worker.pather?.StopDead();
-				worker.workSettings?.EnableAndInitializeIfNotAlreadyInitialized();
-				worker.skills.GetSkill(SkillDefOf.Construction).Level = 20;
 
 				building = ThingMaker.MakeThing(buildingDef, stuffDef) as Building;
 				if (building == null)
@@ -6771,13 +7254,11 @@ namespace ZombieLand
 			Hediff_Injury wound = null;
 			try
 			{
-				worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+					worker = GenerateWorkCapableColonist(WorkTypeDefOf.Crafting, SkillDefOf.Crafting, 20);
 				GenSpawn.Spawn(worker, workerCell, map, Rot4.West, WipeMode.Vanish);
 				worker.ClearContamination();
 				worker.jobs?.StopAll(false, true);
 				worker.pather?.StopDead();
-				worker.workSettings?.EnableAndInitializeIfNotAlreadyInitialized();
-				worker.skills.GetSkill(SkillDefOf.Crafting).Level = 20;
 
 				var request = new PawnGenerationRequest(
 					mechKindDef,
