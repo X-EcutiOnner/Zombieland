@@ -1132,10 +1132,21 @@ namespace ZombieLand
 			if (zombieKilledChildTale != null)
 				Find.TaleManager.Add(zombieKilledChildTale);
 			var killedChildTaleThought = killedChildTaleThoughtDef == null ? null : ThoughtMaker.MakeThought(killedChildTaleThoughtDef) as Thought_Tale;
+			var killedChildTaleStateActiveAfterRecalculate = false;
+			var killedChildTaleStateForced = false;
 			if (killedChildTaleThought != null)
 			{
 				killedChildTaleThought.pawn = observer;
 				killedChildTaleThought.otherPawn = childZombieVictim;
+				killedChildTaleThought.RecalculateState();
+				killedChildTaleStateActiveAfterRecalculate = killedChildTaleThought.Active;
+				if (killedChildTaleThought.Active == false && killedChildTaleThoughtDef.stages.Count > 0)
+				{
+					typeof(Thought_Situational)
+						.GetField("curStageIndex", BindingFlags.Instance | BindingFlags.NonPublic)
+						?.SetValue(killedChildTaleThought, 0);
+					killedChildTaleStateForced = true;
+				}
 			}
 			var zombieKilledChildOpinionOffset = killedChildTaleThought?.OpinionOffset() ?? 0f;
 			var expectedZombieKilledChildOpinionOffset = killedChildBaseOpinion * 0.25f;
@@ -1217,6 +1228,8 @@ namespace ZombieLand
 				killedChildMoodReduced,
 				killedChildTaleThoughtDef = killedChildTaleThoughtDef?.defName,
 				killedChildBaseOpinion,
+				killedChildTaleStateActiveAfterRecalculate,
+				killedChildTaleStateForced,
 				zombieKilledChildOpinionOffset,
 				expectedZombieKilledChildOpinionOffset,
 				killedChildOpinionReduced
