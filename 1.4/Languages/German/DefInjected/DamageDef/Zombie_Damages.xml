@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<LanguageData>
+
+	<ZombieBite.label>Zombiebiss</ZombieBite.label>
+	<ZombieBite.deathMessage>{0} ist von einem Zombie zu Tode gebissen worden.</ZombieBite.deathMessage>
+
+	<SuicideBomb.label>Selbstmordbombe</SuicideBomb.label>
+	<SuicideBomb.deathMessage>{0} ist bei einem Zombie-Selbstmordanschlag ums Leben gekommen.</SuicideBomb.deathMessage>
+
+	<ToxicSplatter.label>Fleck</ToxicSplatter.label>
+	<ToxicSplatter.deathMessage>{0} 被杀死了。</ToxicSplatter.deathMessage>
+
+	<ElectricalShock.label>Stromschlag</ElectricalShock.label>
+	<ElectricalShock.deathMessage>{0} wurde durch einen Stromschlag getötet.</ElectricalShock.deathMessage>
+
+	<SeismicWave.label>Seismische Welle</SeismicWave.label>
+
+</LanguageData>

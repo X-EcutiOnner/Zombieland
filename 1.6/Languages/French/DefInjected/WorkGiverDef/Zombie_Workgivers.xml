@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<ExtractZombieSerum.label>récolter de l'extrait de zombie sur les cadavres de zombies</ExtractZombieSerum.label>
+	<ExtractZombieSerum.verb>récolter</ExtractZombieSerum.verb>
+	<ExtractZombieSerum.gerund>récolte</ExtractZombieSerum.gerund>
+
+	<DoubleTap.label>achever les cadavres pour les empêcher de devenir zombies</DoubleTap.label>
+	<DoubleTap.verb>achever</DoubleTap.verb>
+	<DoubleTap.gerund>achève</DoubleTap.gerund>
+
+</LanguageData>

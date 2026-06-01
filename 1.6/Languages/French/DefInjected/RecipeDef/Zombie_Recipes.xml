@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<CureZombieInfection.label>soigner l'infection zombie</CureZombieInfection.label>
+	<CureZombieInfection.description>Retire une infection zombie à un stade précoce d'une partie du corps. Nécessite un sérum zombie ; un meilleur pourcentage réduit le risque d'échec.</CureZombieInfection.description>
+	<CureZombieInfection.jobString>Soigne l'infection zombie.</CureZombieInfection.jobString>
+
+	<MakeZombieSerum.label>fabriquer du sérum avec de l'extrait de zombie</MakeZombieSerum.label>
+	<MakeZombieSerum.description>Fabrique un sérum zombie à partir d'extrait de zombie. Le sérum zombie soigne les infections zombies pendant les opérations.</MakeZombieSerum.description>
+
+</LanguageData>

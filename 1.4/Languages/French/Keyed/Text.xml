@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<Zombieland_Settings>Survolez un élément pour lire un texte d'aide à son sujet à droite. Tous les paramètres peuvent être modifiés dans le jeu et sont actifs immédiatement, ils sont sauvegardés avec le jeu.\NPour définir les paramètres par défaut pour les nouvelles parties, modifiez les paramètres à partir de l'écran principal (Options/Mod Settings/Zombieland).</Zombieland_Settings>
+	<ZombieLandKeyframes>Ajoutez des images clés définissant le temps. Vérifiez les valeurs avec le curseur. Seuls images clés sont modifiables.</ZombieLandKeyframes>
+	<ZombieLandKeyframe0>&lt;- première image clé (début du jeu) . . . temps de jeu futur -&gt;</ZombieLandKeyframe0>
+
+	<Difficulty_ZombielandThreatScale_Info>Contrôle la difficulté de presque tout dans Zombieland, comme les capacités des zombies, la prévision des menaces et bien plus encore.</Difficulty_ZombielandThreatScale_Info>
+	<Difficulty_ZombielandThreatScale_Label>L'échelle de menace de Zombieland</Difficulty_ZombielandThreatScale_Label>
+
+	<LetterLabelZombiesRising>Attaque de Zombie</LetterLabelZombiesRising>
+	<ZombiesRising>Un groupe de zombie est apparu</ZombiesRising>
+
+	<LetterLabelZombiesRisingNearYourBase>Attaque direct de Zombie</LetterLabelZombiesRisingNearYourBase>
+	<ZombiesRisingNearYourBase>Un groupe de zombie est apparu prêt de votre base</ZombiesRisingNearYourBase>
+
+	<LetterLabelZombiesSpitter>Attaque d'un zombie cracheur</LetterLabelZombiesSpitter>
+	<ZombiesSpitter>Un zombie cracheur est entré sur la carte et va vous assiéger</ZombiesSpitter>
+
+	<LetterLabelXDaysUntilZombies>{0} avant que les zombies arrivent</LetterLabelXDaysUntilZombies>
+	<XDaysUntilZombies>Les zombies vont apparaitre là où il y a du sol meuble, de poussière, de sable ou de pierre. La construction de plancher empêche les zombies d’apparaitre</XDaysUntilZombies>
+
+	<ZombielandDefaultSettings>Paramètres par défaut de zombieland</ZombielandDefaultSettings>
+	<ZombielandGameSettings>Options de zombieland</ZombielandGameSettings>
+	<JumpToNow>Sauter au présent</JumpToNow>
+	<AdvancedSettings>Réglages avancés</AdvancedSettings>
+	<Seasons>saisons</Seasons>
+	<Years>années</Years>
+
+	<ZombielandDifficultyTitle>Difficulté globale</ZombielandDifficultyTitle>
+	<ZombielandDifficulty>Échelle des menaces</ZombielandDifficulty>
+
+	<ZombielandContaminationTitle>Contamination</ZombielandContaminationTitle>
+	<ContaminationEnabled>Globalement activée</ContaminationEnabled>
+	<ZombielandRestartRequired>La modification de ce paramètre nécessite un redémarrage de RimWorld</ZombielandRestartRequired>
+	<ZombielandContamination>Intensité</ZombielandContamination>
+
+	<WhenDoZombiesSpawn>Quand les Zombies arrivent-ils ? </WhenDoZombiesSpawn>
+	<SpawnWhenType_AllTheTime>Tout le temps</SpawnWhenType_AllTheTime>
+	<SpawnWhenType_WhenDark>Quand il fait nuit</SpawnWhenType_WhenDark>
+	<SpawnWhenType_InEventsOnly>Seulement comme evenement</SpawnWhenType_InEventsOnly>
+
+	<HowDoZombiesSpawn>De où les Zombies arrivent ?</HowDoZombiesSpawn>
+	<SpawnHowType_AllOverTheMap>Là où il y a du sol meuble</SpawnHowType_AllOverTheMap>
+	<SpawnHowType_FromTheEdges>Des bords de la carte</SpawnHowType_FromTheEdges>
+	<SmartWandering>Style de mouvement</SmartWandering>
+	<SmartWandering_Random>Aléatoire</SmartWandering_Random>
+	<SmartWandering_Simple>Simple</SmartWandering_Simple>
+	<SmartWandering_Smart>Intelligente</SmartWandering_Smart>
+	<BlacklistedBiomes>Biomes sans zombies</BlacklistedBiomes>
+	<Biomes>Biomes</Biomes>
+
+	<WhatDoZombiesAttack>Que vont attaquer les Zombies ?</WhatDoZombiesAttack>
+	<AttackMode_Everything>Toutes les créatures</AttackMode_Everything>
+	<AttackMode_OnlyHumans>Les créatures proches des humains</AttackMode_OnlyHumans>
+	<AttackMode_OnlyColonists>Seulement les colons</AttackMode_OnlyColonists>
+	<EnemiesAttackZombies>Les ennemis attaquent les zombies</EnemiesAttackZombies>
+	<AnimalsAttackZombies>Les animaux attaquent les zombies</AnimalsAttackZombies>
+
+	<WhatDoZombiesSmash>Que vont détruire les Zombies ?</WhatDoZombiesSmash>
+	<SmashMode_Nothing>Rien</SmashMode_Nothing>
+	<SmashMode_DoorsOnly>Seulement les portes</SmashMode_DoorsOnly>
+	<SmashMode_AnyBuilding>Tous ce qui est construit</SmashMode_AnyBuilding>
+	<SmashOnlyWhenAgitated>Seulement quand ils sont agités</SmashOnlyWhenAgitated>
+
+	<NewGameTitle>Nouveau jeu</NewGameTitle>
+	<DaysBeforeZombiesCome>Jours avant que les Zombies arrivent</DaysBeforeZombiesCome>
+
+	<ZombiesOnTheMap>Zombies sur la carte</ZombiesOnTheMap>
+	<MaximumNumberOfZombies>Jamais plus de</MaximumNumberOfZombies>
+	<Zombies>Zombies</Zombies>
+	<ColonyMultiplier>Multiplicateur de colonies</ColonyMultiplier>
+	<DoubleTapping>Mort à double sécurité</DoubleTapping>
+
+	<DynamicThreatLevelTitle>Niveau de menace dynamique</DynamicThreatLevelTitle>
+	<UseDynamicThreatLevel>Utiliser le niveau de menace dynamique</UseDynamicThreatLevel>
+	<DynamicThreatSmoothness>Lissage de la courbe de menace</DynamicThreatSmoothness>
+	<DynamicThreatStretch>Étirement de la courbe de menace</DynamicThreatStretch>
+	<ZombiesDieOnZeroThreat>Zombies meurent au cours de 0% menace</ZombiesDieOnZeroThreat>
+	<ThreatLevel>niveau de menace</ThreatLevel>
+	<ThreatForecast>Prévision des menaces</ThreatForecast>
+	<Next14Days>14 prochains jours</Next14Days>
+	<Next4Quadrums>4 prochains trimestres</Next4Quadrums>
+
+	<ZombieEventTitle>Apparition de Zombie</ZombieEventTitle>
+	<ZombiesPerColonistInEvent>Zombies par colon</ZombiesPerColonistInEvent>
+	<ExtraDaysBetweenEvents>Jours supplémentaires entre les événements</ExtraDaysBetweenEvents>
+	<InfectedRaidsChance>Les groupes d'arrivée sont infectés</InfectedRaidsChance>
+
+	<ZombieSpeedTitle>Vitesse des Zombies</ZombieSpeedTitle>
+	<MoveSpeedIdle>Si ils sont calmes</MoveSpeedIdle>
+	<MoveSpeedTracking>Si ils sont enervés</MoveSpeedTracking>
+
+	<ZombieDamageTitle>Dommages causés par les zombies</ZombieDamageTitle>
+	<ZombieDamageFactor>Multiplicateur de dégâts</ZombieDamageFactor>
+	<SafeMeleeLimit>Limite de mêlée sûre</SafeMeleeLimit>
+	<SafeMeleeExample>Exemple : [_]{0}[_] niveau de mêlée, [_]{1}[_] zombies => {2} % de chances</SafeMeleeExample>
+	<ZombiesCauseManhunting>Les zombies déclenchent les animaux</ZombiesCauseManhunting>
+
+	<ZombieGameTweaks>Jeu peaufiner</ZombieGameTweaks>
+	<ReduceTurretConsumption>Réduire la consommation des armes à feu de la tourelle</ReduceTurretConsumption>
+
+	<ZombieBiteInfectionChance>Risque qu’une morsure de Zombie soit infectieuse</ZombieBiteInfectionChance>
+	<ZombieBiteInfectionUnknown>Temps avant que l’infection soit connu</ZombieBiteInfectionUnknown>
+	<ZombieBiteInfectionTreatable>Temps où l'infection est traitable</ZombieBiteInfectionTreatable>
+	<ZombieBiteInfectionPersists>Durée de l’infection</ZombieBiteInfectionPersists>
+	<AnyTreatmentStopsInfection>Le traitement au lit arête l’infection</AnyTreatmentStopsInfection>
+	<HoursAfterDeathToBecomeZombie>Des heures pour devenir un zombie après la mort</HoursAfterDeathToBecomeZombie>
+	<Immediately>Aussitôt</Immediately>
+	<DeadBecomesZombieMessage>Montrer un message quand quelqu'un se transforme en zombie</DeadBecomesZombieMessage>
+	<DangerousSituationMessage>Afficher un message en cas de danger</DangerousSituationMessage>
+
+	<ZombieHarvestingTitle>Butin de zombies</ZombieHarvestingTitle>
+	<CorpsesExtractAmount>Quantité d'extrait de zombie par zombie</CorpsesExtractAmount>
+	<CorpsesExtractChance>Chance</CorpsesExtractChance>
+	<LootExtractAmount>Quantité de butin après que les zombies meurent</LootExtractAmount>
+	<CorpsesDaysToDessicated>Des heures avant que les cadavres de zombies disparaissent</CorpsesDaysToDessicated>
+	<ExtractZombieArea>Limiter l'extraction à la zone</ExtractZombieArea>
+	<Everywhere>Partout</Everywhere>
+	<BlacklistedApparel>Vêtements sur liste noire</BlacklistedApparel>
+	<SelectAll>Sélectionner tout</SelectAll>
+	<DeselectAll>Désélectionner tout</DeselectAll>
+
+	<ZombieInstinctTitle>Senses des zombies</ZombieInstinctTitle>
+	<ZombieInstinct_Dull>limité</ZombieInstinct_Dull>
+	<ZombieInstinct_Normal>Normal</ZombieInstinct_Normal>
+	<ZombieInstinct_Sensitive>Elevé</ZombieInstinct_Sensitive>
+	<RagingZombies>Les zombies s’enragent si un groupe devient trop grand</RagingZombies>
+	<RageLevel>Niveau de rage</RageLevel>
+	<RageLevelVeryLow>Très bas</RageLevelVeryLow>
+	<RageLevelLow>Faible</RageLevelLow>
+	<RageLevelNormal>Normal</RageLevelNormal>
+	<RageLevelHigh>Haut</RageLevelHigh>
+	<RageLevelVeryHigh>Très haut</RageLevelVeryHigh>
+
+	<ZombieHealthTitle>Vitalités des zombies</ZombieHealthTitle>
+	<ZombieHealthFactor>Santé</ZombieHealthFactor>
+	<DoubleTapRequired>Les zombies se remettent de leurs blessures</DoubleTapRequired>
+	<ZombiesDieVeryEasily>Les Zombies sont faciles à tuer</ZombiesDieVeryEasily>
+
+	<ZombieEatingTitle>Les Zombies vont manger</ZombieEatingTitle>
+	<ZombiesEatDowned>Les créatures blessés</ZombiesEatDowned>
+	<ZombiesEatCorpses>Les corps</ZombiesEatCorpses>
+
+	<SpecialZombiesTitle>Zombies spéciaux</SpecialZombiesTitle>
+	<SuicideBomberChance>Zombies de Kamikaze</SuicideBomberChance>
+	<ToxicSplasherChance>Zombies vénéneux</ToxicSplasherChance>
+	<TankyOperatorChance>Zombies lourds et blindés</TankyOperatorChance>
+	<MinerChance>Zombies miniers</MinerChance>
+	<ElectrifierChance>Zombies électrisants</ElectrifierChance>
+	<AlbinoChance>Zombies albinos</AlbinoChance>
+	<DarkSlimerChance>Zombies gluants sombres</DarkSlimerChance>
+	<HealerChance>Zombies guérisseurs</HealerChance>
+	<NormalZombieChance>Zombies ordinaires: {0}</NormalZombieChance>
+	<ChildZombieChance>es enfants zombies</ChildZombieChance>
+	<SpitterThreat>Difficulté du cracheur de zombies</SpitterThreat>
+	<WallPushing>Quantité de zombies qui poussent les zombies par-dessus les murs</WallPushing>
+
+	<ZombieMiscTitle>Divers</ZombieMiscTitle>
+	<UseCustomTextures>Utiliser des textures personnalisées </UseCustomTextures>
+	<ReplaceTwinkie>Change les repas de survie en Twinkies (miam!)</ReplaceTwinkie>
+	<ZombiesTriggerDangerMusic>Les Zombies influences la musique de danger</ZombiesTriggerDangerMusic>
+	<PlayCreepyAmbientSound>Jouer le bruit ambiant effrayant la nuit</PlayCreepyAmbientSound>
+	<BetterZombieAvoidance>Evitement automatique des Zombies</BetterZombieAvoidance>
+	<ZombiesDropBlood>Les zombies lache du sang</ZombiesDropBlood>
+	<ZombiesBurnLonger>Les zombies brûlent plus longtemps</ZombiesBurnLonger>
+
+	<ZombieActionsTitle>Actions</ZombieActionsTitle>
+	<ZombieSettingsReset>Restaurer les paramètres par defaut</ZombieSettingsReset>
+	<FactoryResetButton>Réinitialisation d'usine</FactoryResetButton>
+	<ResetButton>Réinitialiser</ResetButton>
+	<UninstallZombieland>Effacer Zombieland du jeu</UninstallZombieland>
+	<ConfirmUninstallZombieland> Si vous continuez, vous pourrez choisir un nouveau nom de sauvegarde et vous reviendrez au menu principal après la sauvegarde. La nouvelle sauvegarde peut être chargée sans Zombieland. \n\nVoulez-vous vraiment supprimer tout le contenu de Zombieland du jeu en cours?</ConfirmUninstallZombieland>
+	<UninstallButton>Désinstaller</UninstallButton>
+
+	<ClipboardActionTitle>Presse-papiers</ClipboardActionTitle>
+	<CopySettings>Paramètres de copie</CopySettings>
+	<CopyButton>Copie</CopyButton>
+	<DuplicateButton>Dupliquer</DuplicateButton>
+	<PasteSettings>Paramètres de collage</PasteSettings>
+	<PasteButton>Coller</PasteButton>
+	<RopeZombie>Capturer ce zombie</RopeZombie>
+
+	<Activate>Activer</Activate>
+	<ActivateDescription>Active le périphérique. Les zombies dans la chambre perdent la conscience.</ActivateDescription>
+	<WrongPlacementZombieShocker>L'appareil ne peut pas être placé ici.</WrongPlacementZombieShocker>
+
+	<ColonistsBittenByZombie>Colon mordu par un zombie</ColonistsBittenByZombie>
+	<ColonistsBittenByZombieDesc>Ce colon a été mordu par un zombie. A ce stade, on ne sait pas s’il va développer l’infection. Surveillez les blessures car les infections prennent du temps à se développer</ColonistsBittenByZombieDesc>
+
+	<ImminentZombiInfection>Zombification imminente</ImminentZombiInfection>
+	<ImminentZombiInfectionDesc>Ce colon est sur le point d’être infecté par une morsure de zombie:\n\n{0}\Vous pouvez encore le sauver en lui donnant immédiatement un traitement optimal dans les meilleurs conditions. Mais il est nécessaire d’avoir un bon docteur, un lit médical et une sale stérile avec un moniteur vital.</ImminentZombiInfectionDesc>
+
+	<ZombieInfection>Zombification</ZombieInfection>
+	<ZombieInfectionDesc>Ce colon est infecté et va devenir un Zombie. Il n’y a plus moyen de le sauver. Pendant l’infection il est indifférent aux pensés, aux sentiments, à la douleur et à la faim. A la fin, il meurt et devient un Zombie.</ZombieInfectionDesc>
+
+	<NoInfectionRisk>Pas de risque d’infection</NoInfectionRisk>
+	<HoursBeforeBecomingInfected>{0} avant l’infection</HoursBeforeBecomingInfected>
+	<HoursBeforeBecomingAZombie>{0} avant de devenir un Zombie</HoursBeforeBecomingAZombie>
+
+	<DangerousSituation>Situation dangeureuse</DangerousSituation>
+	<ZombiesAreBeingPushedOverYourWalls>Il y a des zombies poussés sur vos murs! Empêchez les zombies de s'accumuler en groupes denses.</ZombiesAreBeingPushedOverYourWalls>
+
+	<ColonistBecameAZombieLabel>Un colon transformé en zombie</ColonistBecameAZombieLabel>
+	<OtherBecameAZombieLabel>Un colon est devenu un zombie</OtherBecameAZombieLabel>
+	<BecameAZombieDesc>{0} devenus de puissant Zombie.</BecameAZombieDesc>
+
+	<BodyIsInfectedLabel>Ce corps est infecté par le virus zombie!</BodyIsInfectedLabel>
+	<BodyIsInfectedTooltip>Les corps infectés se transforment en zombies quand ils commencent à pourrir.</BodyIsInfectedTooltip>
+
+	<CureZombieInfection>Guérir l'infection zombie</CureZombieInfection>
+	<ExtractingZombieSerum>Extraction de sérum zombie</ExtractingZombieSerum>
+	<AutoExtractDisabledDescription>Impossible d'extraire le sérum zombie (pas de médecin)</AutoExtractDisabledDescription>
+	<AutoExtractAllowedDescription>Extraire automatiquement le sérum de zombie quand il n'y a pas de zombies à proximité</AutoExtractAllowedDescription>
+	<AutoExtractForbiddenDescription>N'extrayez le sérum zombie que lorsque vous le commandez</AutoExtractForbiddenDescription>
+	<AutoDoubleTapDisabledDescription>Impossible d'appuyer deux fois (pas un chasseur)</AutoDoubleTapDisabledDescription>
+	<AutoDoubleTapAllowedDescription>Appuyez deux fois automatiquement sur les cadavres pour les empêcher de devenir des zombies</AutoDoubleTapAllowedDescription>
+	<AutoDoubleTapForbiddenDescription>Appuyez deux fois uniquement lors de la commande</AutoDoubleTapForbiddenDescription>
+
+	<AutoAvoidZombiesEnabledDescription>Évite automatiquement les zombies, sauf lorsque la personne est mobilisée et debout</AutoAvoidZombiesEnabledDescription>
+	<AutoAvoidZombiesDisabledDescription>Ignorer les zombies. Vous devez contrôler manuellement toutes les actions</AutoAvoidZombiesDisabledDescription>
+
+	<ZapZombies>Démarrer Zombie Shocker</ZapZombies>
+	<ZombieShockerWrongPlacement>L'appareil ne peut pas être placé ici</ZombieShockerWrongPlacement>
+	<ZombieShockerHasNoBattery>L'appareil n'a pas de batterie fixée</ZombieShockerHasNoBattery>
+	<ZombieShockerHasNoRoom>L'appareil n'a aucune pièce valide attachée</ZombieShockerHasNoRoom>
+	<ZombieShockerLowBatteryState>L'appareil a appauvri les piles attachées</ZombieShockerLowBatteryState>
+
+	<ShowHealthBar>Barre de santé de zombies</ShowHealthBar>
+	<ShowZombieStats>Afficher les statistiques des zombies</ShowZombieStats>
+
+	<ShowZombieRisk>Afficher le risque zombie</ShowZombieRisk>
+	<ColonistInside>Colon à l'intérieur</ColonistInside>
+	<ColonistOutside>Colon dehors</ColonistOutside>
+	<ZombieInside>Zombie à l'intérieur</ZombieInside>
+	<ZombieOutside>Zombie dehors</ZombieOutside>
+	<HighlightDangerousAreas>Mettre en lumière les zones à risque</HighlightDangerousAreas>
+	<DisableRandomApparel>Désactiver les vêtements aléatoires pour les zombies</DisableRandomApparel>
+	<FloatingZombiesInSOS2>Les zombies flottent dans l'espace</FloatingZombiesInSOS2>
+
+	<Broken>Cassé</Broken>
+	<StatsFuel>{0}% de carburant</StatsFuel>
+
+	<ChainsawBroken>La tronçonneuse est cassée</ChainsawBroken>.
+	<ChainsawDisabled>La scie à chaîne ne peut pas être utilisée pour le moment</ChainsawDisabled>.
+	<ChainsawNoFuel>La scie à chaîne a besoin d'être ravitaillée</ChainsawNoFuel>.
+	<ChainsawTurnOn>Mettre la tronçonneuse en marche pour attaquer tous les zombies proches</ChainsawTurnOn>.
+	<ChainsawTurnOff>Eteindre la tronçonneuse pour économiser du carburant</ChainsawTurnOff>.
+	<ChainsawStalling>(décrochage)</ChainsawStalling>
+	<ChainsawDesc>Tronçonneuse</ChainsawDesc>
+	<ChainsawDescBroken>Tronçonneuse cassée</ChainsawDescBroken>.
+	<ChainsawDescStalling>Tronçonneuse en panne</ChainsawDescStalling>
+	<ChainsawDescFuel> avec {0}% de carburant</ChainsawDescFuel>
+	<ChainsawDescNoFuel> sans carburant</ChainsawDescNoFuel>
+	<ChainsawDescBlockingChance> bloquant {0}% des attaques entrantes</ChainsawDescBlockingChance>
+
+	<ThumperControl>Paramètres</ThumperControl>
+	<ThumperControlDesc>Définir l'intensité et l'intervalle pour ce Zombie Thumper</ThumperControlDesc>
+	<Intensity>Intensité</Intensity>
+	<Interval>Intervalle</Interval>
+
+	<ToggleStateLabel>Marche / Arrêt</ToggleStateLabel>
+	<ToggleStateDesc>Permet d'allumer ou d'éteindre l'appareil.</ToggleStateDesc>
+
+	<SpitterStateIdle>Inactif</SpitterStateIdle>
+	<SpitterStateSearching>Recherche</SpitterStateSearching>
+	<SpitterStateMoving>En mouvement</SpitterStateMoving>
+	<SpitterStatePreparing>Préparer</SpitterStatePreparing>
+	<SpitterStateSpitting>Cracher</SpitterStateSpitting>
+	<SpitterStateLeaving>Partir</SpitterStateLeaving>
+	<Mode>Mode</Mode>
+	<Waves>Ondes</Waves>
+	<Aggressive>Agressif</Aggressive>
+	<Calm>Calme</Calm>
+
+	<ZombieContamination>Contamination Zombie</ZombieContamination>
+	<ContaminationHelp>La contamination causée par l'apocalypse zombie est transmise par le toucher et la manipulation d'objets. Elle se propage et peut entraîner des comportements étranges chez les colons.</ContaminationHelp>
+	<ShowContaminationOverlayToggleButton>Basculer l'overlay de contamination zombie.\n\nCela montre à quel point les choses et le sol sont contaminés, ce qui affecte à son tour les pions.</ShowContaminationOverlayToggleButton>
+
+</LanguageData>

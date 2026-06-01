@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<CureZombieInfection.label>zombi enfeksiyonunu tedavi et</CureZombieInfection.label>
+	<CureZombieInfection.description>Bir vücut parçasından erken aşama zombi enfeksiyonunu kaldırır. Bir zombi serumu gerekir; daha iyi yüzde daha düşük başarısızlık riski verir.</CureZombieInfection.description>
+	<CureZombieInfection.jobString>Zombi enfeksiyonu tedavi ediliyor.</CureZombieInfection.jobString>
+	<MakeZombieSerum.label>zombi özünden serum yap</MakeZombieSerum.label>
+	<MakeZombieSerum.description>Zombi özünden bir zombi serumu üretir. Zombi serumu, operasyonlar sırasında zombi enfeksiyonlarını tedavi eder.</MakeZombieSerum.description>
+
+</LanguageData>

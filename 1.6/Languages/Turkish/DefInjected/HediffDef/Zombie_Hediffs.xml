@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<ZombieBite.label>zombi ısırığı</ZombieBite.label>
+	<ZombieBite.injuryProps.destroyedLabel>bir zombi tarafından ısırılıp koparıldı</ZombieBite.injuryProps.destroyedLabel>
+	<ZombieBite.injuryProps.destroyedOutLabel>bir zombi tarafından ısırılıp çıkarıldı</ZombieBite.injuryProps.destroyedOutLabel>
+
+</LanguageData>

@@ -1,0 +1,8 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<LanguageData>
+
+  <ZombieBite.label>丧尸咬伤</ZombieBite.label>
+  <ZombieBite.injuryProps.destroyedLabel>被丧尸咬掉</ZombieBite.injuryProps.destroyedLabel>
+  <ZombieBite.injuryProps.destroyedOutLabel>被丧尸咬掉</ZombieBite.injuryProps.destroyedOutLabel>
+
+</LanguageData>

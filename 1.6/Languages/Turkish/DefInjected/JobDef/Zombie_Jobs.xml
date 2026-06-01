@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<Stumble.reportString>sendeleyerek yürüyor.</Stumble.reportString>
+	<Sabotage.reportString>sabote ediyor.</Sabotage.reportString>
+	<ExtractZombieSerum.reportString>TargetA üzerinden zombi özü topluyor.</ExtractZombieSerum.reportString>
+	<DoubleTap.reportString>TargetA için güvenli öldürme yapıyor.</DoubleTap.reportString>
+	<RopeZombie.reportString>TargetA bağlanıyor.</RopeZombie.reportString>
+	<ZapZombies.reportString>zombi şoklayıcıyı başlatıyor.</ZapZombies.reportString>
+
+</LanguageData>

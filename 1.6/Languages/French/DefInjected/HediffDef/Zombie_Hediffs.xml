@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<ZombieBite.label>morsure de zombie</ZombieBite.label>
+	<ZombieBite.injuryProps.destroyedLabel>arraché par une morsure de zombie</ZombieBite.injuryProps.destroyedLabel>
+	<ZombieBite.injuryProps.destroyedOutLabel>arraché par une morsure de zombie</ZombieBite.injuryProps.destroyedOutLabel>
+
+</LanguageData>

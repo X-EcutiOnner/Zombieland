@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<ExtractZombieSerum.label>zombi cesetlerinden zombi özü topla</ExtractZombieSerum.label>
+	<ExtractZombieSerum.verb>topla</ExtractZombieSerum.verb>
+	<ExtractZombieSerum.gerund>topluyor</ExtractZombieSerum.gerund>
+	<DoubleTap.label>zombi olmalarını önlemek için cesetleri güvenli öldür</DoubleTap.label>
+	<DoubleTap.verb>güvenli öldür</DoubleTap.verb>
+	<DoubleTap.gerund>güvenli öldürüyor</DoubleTap.gerund>
+
+</LanguageData>
