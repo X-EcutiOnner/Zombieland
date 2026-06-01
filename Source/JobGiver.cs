@@ -95,43 +95,4 @@ namespace ZombieLand
 		}
 	}
 
-	public class JobGiver_ExtractZombieSerum : ThinkNode_JobGiver
-	{
-		public override ThinkNode DeepCopy(bool resolve = true)
-		{
-			return (JobGiver_ExtractZombieSerum)base.DeepCopy(resolve);
-		}
-
-		public override Job TryGiveJob(Pawn pawn)
-		{
-			return JobMaker.MakeJob(DefDatabase<JobDef>.GetNamed("ExtractZombieSerum"));
-		}
-
-		public override ThinkResult TryIssueJobPackage(Pawn pawn, JobIssueParams jobParams)
-		{
-			if (ZombieSettings.Values.corpsesExtractAmount == 0)
-				return ThinkResult.NoJob;
-			return base.TryIssueJobPackage(pawn, jobParams);
-		}
-	}
-
-	public class JobGiver_DoubleTap : ThinkNode_JobGiver
-	{
-		public override ThinkNode DeepCopy(bool resolve = true)
-		{
-			return (JobGiver_DoubleTap)base.DeepCopy(resolve);
-		}
-
-		public override Job TryGiveJob(Pawn pawn)
-		{
-			return JobMaker.MakeJob(DefDatabase<JobDef>.GetNamed("DoubleTap"));
-		}
-
-		public override ThinkResult TryIssueJobPackage(Pawn pawn, JobIssueParams jobParams)
-		{
-			if (ZombieSettings.Values.hoursAfterDeathToBecomeZombie == -1)
-				return ThinkResult.NoJob;
-			return base.TryIssueJobPackage(pawn, jobParams);
-		}
-	}
 }
