@@ -5308,19 +5308,109 @@ namespace ZombieLand
 			var medicalHediffThings = VerifyMedicalHediffSpawnTransfer(map, root + new IntVec3(8, 0, 6));
 			var medicalNaturalPart = VerifyMedicalNaturalPartSpawnTransfer(map, root + new IntVec3(12, 0, 6));
 			var removedImplant = VerifyRecipeRemoveImplantSpawnTransfer(map, root + new IntVec3(16, 0, 6));
+			var tunnelJelly = VerifyTunnelJellySpawnTransfer(map, root + new IntVec3(20, 0, 6));
 			return new
 			{
 				success = ObjectSuccess(lifespanContaminated)
 					&& ObjectSuccess(lifespanClean)
 					&& ObjectSuccess(medicalHediffThings)
 					&& ObjectSuccess(medicalNaturalPart)
-					&& ObjectSuccess(removedImplant),
+					&& ObjectSuccess(removedImplant)
+					&& ObjectSuccess(tunnelJelly),
 				lifespanContaminated,
 				lifespanClean,
 				medicalHediffThings,
 				medicalNaturalPart,
-				removedImplant
+				removedImplant,
+				tunnelJelly
 			};
+		}
+
+		static object VerifyTunnelJellySpawnTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("GenSpawn_Spawn_Replacement_Patch");
+			var spawnMethod = typeof(TunnelJellySpawner).GetMethod("Spawn", BindingFlags.Instance | BindingFlags.NonPublic);
+			if (spawnMethod == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "TunnelJellySpawner.Spawn protected method was not found."
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, root, 24f, out var cell, out var cellError) == false)
+				return cellError;
+
+			const float groundContamination = 0.58f;
+			const int jellyCount = 18;
+			var radiusCells = GenRadial.RadialCellsAround(cell, 2f, true)
+				.Where(candidate => candidate.InBounds(map))
+				.ToArray();
+			var oldContamination = radiusCells.ToDictionary(candidate => candidate, candidate => map.GetContamination(candidate));
+			var existingThings = radiusCells.SelectMany(candidate => candidate.GetThingList(map)).ToHashSet();
+			var spawner = new TunnelJellySpawner { jellyCount = jellyCount };
+			var spawnedJelly = new List<Thing>();
+			try
+			{
+				foreach (var radiusCell in radiusCells)
+					map.SetContamination(radiusCell, groundContamination);
+
+				spawnMethod.Invoke(spawner, new object[] { map, cell });
+
+				spawnedJelly = radiusCells.SelectMany(candidate => candidate.GetThingList(map))
+					.Where(thing => existingThings.Contains(thing) == false && thing.def == ThingDefOf.InsectJelly)
+					.ToList();
+				var contaminations = spawnedJelly.Select(thing => thing.GetContamination()).ToArray();
+				var expectedContamination = groundContamination * ZombieSettings.Values.contamination.jellyAdd;
+				var allJellySpawned = spawnedJelly.Count > 0 && spawnedJelly.All(thing => thing.Spawned);
+				var stackCount = spawnedJelly.Sum(thing => thing.stackCount);
+				var contaminationTransferred = allJellySpawned
+					&& contaminations.All(value => Approximately(value, expectedContamination, 0.0001f));
+
+				return new
+				{
+					success = patchTargets.Length > 0
+						&& spawner.jellyCount == 0
+						&& allJellySpawned
+						&& stackCount == jellyCount
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					method = $"{spawnMethod.DeclaringType?.FullName}::{spawnMethod}",
+					cell = ZombieRuntimeActions.DescribeCell(cell),
+					radiusCellCount = radiusCells.Length,
+					jellyCount,
+					spawnerJellyCountAfter = spawner.jellyCount,
+					jellyAdd = ZombieSettings.Values.contamination.jellyAdd,
+					expectedContamination,
+					spawnedThings = spawnedJelly.Select(thing => new
+					{
+						thing = ZombieRuntimeActions.StableThingId(thing),
+						cell = ZombieRuntimeActions.DescribeCell(thing.Position),
+						stackCount = thing.stackCount,
+						contamination = thing.GetContamination()
+					}).ToArray(),
+					spawnedThingCount = spawnedJelly.Count,
+					stackCount,
+					contaminations,
+					allJellySpawned,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				foreach (var thing in spawnedJelly.Where(thing => thing is { Destroyed: false, Spawned: true }).ToArray())
+				{
+					thing.ClearContamination();
+					thing.Destroy();
+				}
+				foreach (var entry in oldContamination)
+				{
+					if (entry.Key.InBounds(map))
+						map.SetContamination(entry.Key, entry.Value);
+				}
+			}
 		}
 
 		static object VerifyLifespanExpirePlantSpawnTransfer(Map map, IntVec3 root, float parentContamination, string caseName)

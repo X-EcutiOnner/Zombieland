@@ -16,7 +16,7 @@ namespace ZombieLand
 
 		static IEnumerable<MethodBase> TargetMethods()
 		{
-			yield return SymbolExtensions.GetMethodInfo((TunnelJellySpawner spawner) => spawner.Spawn(null, IntVec3.Zero));
+			yield return AccessTools.Method(typeof(TunnelJellySpawner), "Spawn", new[] { typeof(Map), typeof(IntVec3) });
 		}
 
 		static Thing Spawn(Thing newThing, IntVec3 loc, Map map, WipeMode wipeMode)
