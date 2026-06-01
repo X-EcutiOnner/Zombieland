@@ -985,6 +985,117 @@ print("dependency-gate distribution matches generated output")
 PY
 }
 
+coverage_report_bridge_counts() {
+	python3 - <<'PY'
+import collections
+import csv
+import re
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+with Path("coverage/ZL_COVERAGE_INDEX.tsv").open(newline="") as handle:
+	coverage_rows = list(csv.DictReader(handle, delimiter="\t"))
+
+bridge_rows = [row for row in coverage_rows if row["row_type"] == "bridge_contract"]
+individual_bridge_rows = [
+	row for row in bridge_rows
+	if row["id"].startswith("BRIDGE.") and row["id"] != "J.BRIDGE.TOOLS"
+]
+
+bridge_tools_output = subprocess.check_output(
+	["bash", "scripts/coverage-inventory.sh", "--bridge-tools"],
+	text=True,
+)
+tool_rows = list(csv.DictReader(bridge_tools_output.splitlines(), delimiter="\t"))
+tool_files = {
+	row["location"].split(":", 1)[0]
+	for row in tool_rows
+}
+kind_counts = collections.Counter(row["kind_hint"] for row in tool_rows)
+expected_kind_counts = {
+	"generic-primitive": kind_counts.get("generic-primitive", 0),
+	"scenario-fixture": kind_counts.get("scenario-fixture", 0),
+	"narrow-contract": kind_counts.get("narrow-contract", 0),
+	"evidence-helper": kind_counts.get("evidence-helper", 0),
+	"optional-integration": kind_counts.get("optional-integration", 0),
+}
+
+report = Path("coverage/COVERAGE_COMPLETENESS_REPORT.md").read_text(errors="ignore")
+
+rows_match = re.search(
+	r"Bridge rows generated:\s+([0-9]+)\.\s+.*?current\s+([0-9]+)\s+"
+	r"`Source/BridgeTools/ZombielandBridgeTools\.\*\.cs` files.*?"
+	r"source has\s+([0-9]+)\s+public Zombieland bridge tools across\s+"
+	r"([0-9]+)\s+Tool-bearing files",
+	report,
+	re.S,
+)
+if not rows_match:
+	print("missing bridge row/tool headline counts in report")
+	sys.exit(1)
+
+actual_headline = tuple(int(value) for value in rows_match.groups())
+expected_headline = (
+	len(bridge_rows),
+	len(tool_files),
+	len(tool_rows),
+	len(tool_files),
+)
+
+kind_match = re.search(
+	r"Current output confirms\s+([0-9]+)\s+Tool attributes across\s+"
+	r"([0-9]+)\s+Tool-bearing files:\s+"
+	r"([0-9]+)\s+`generic-primitive`,\s+"
+	r"([0-9]+)\s+`scenario-fixture`,\s+"
+	r"([0-9]+)\s+`narrow-contract`,\s+"
+	r"([0-9]+)\s+`evidence-helper`,\s+and\s+"
+	r"([0-9]+)\s+`optional-integration` tools",
+	report,
+	re.S,
+)
+if not kind_match:
+	print("missing bridge kind distribution in report")
+	sys.exit(1)
+
+actual_kind = tuple(int(value) for value in kind_match.groups())
+expected_kind = (
+	len(tool_rows),
+	len(tool_files),
+	expected_kind_counts["generic-primitive"],
+	expected_kind_counts["scenario-fixture"],
+	expected_kind_counts["narrow-contract"],
+	expected_kind_counts["evidence-helper"],
+	expected_kind_counts["optional-integration"],
+)
+
+individual_match = re.search(r"All\s+([0-9]+)\s+individual `BRIDGE\.\*` family rows", report)
+if not individual_match:
+	print("missing individual BRIDGE row count in report")
+	sys.exit(1)
+
+actual_individual = int(individual_match.group(1))
+expected_individual = len(individual_bridge_rows)
+
+failures = []
+if actual_headline != expected_headline:
+	failures.append(f"headline expected {expected_headline} but report has {actual_headline}")
+if actual_kind != expected_kind:
+	failures.append(f"kind distribution expected {expected_kind} but report has {actual_kind}")
+if actual_individual != expected_individual:
+	failures.append(f"individual rows expected {expected_individual} but report has {actual_individual}")
+
+if failures:
+	print("; ".join(failures))
+	sys.exit(1)
+
+print("bridge row/tool/kind distributions match generated output")
+PY
+}
+
 consistency_checks() {
 	local failures=0
 
@@ -1071,6 +1182,14 @@ consistency_checks() {
 		printf 'coverage_report_dependency_gate_counts\tPASS\t%s\n' "$report_dependency_gate_counts"
 	else
 		printf 'coverage_report_dependency_gate_counts\tFAIL\t%s\n' "$report_dependency_gate_counts"
+		failures=$((failures + 1))
+	fi
+
+	local report_bridge_counts
+	if report_bridge_counts="$(coverage_report_bridge_counts)"; then
+		printf 'coverage_report_bridge_counts\tPASS\t%s\n' "$report_bridge_counts"
+	else
+		printf 'coverage_report_bridge_counts\tFAIL\t%s\n' "$report_bridge_counts"
 		failures=$((failures + 1))
 	fi
 
