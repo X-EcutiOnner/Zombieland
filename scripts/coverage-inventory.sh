@@ -810,6 +810,77 @@ for row_type in sorted({row["row_type"] for row in rows}):
 PY
 }
 
+coverage_report_patch_counts() {
+	python3 - <<'PY'
+import collections
+import csv
+import re
+import signal
+import sys
+from pathlib import Path
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+coverage_path = Path("coverage/ZL_COVERAGE_INDEX.tsv")
+report_path = Path("coverage/COVERAGE_COMPLETENESS_REPORT.md")
+
+with coverage_path.open(newline="") as handle:
+	rows = [row for row in csv.DictReader(handle, delimiter="\t") if row["row_type"] == "patch"]
+
+expected = {
+	"evidence": collections.Counter(row["evidence_state"] for row in rows),
+	"port": collections.Counter(row["port_delta_state"] for row in rows),
+}
+
+report = report_path.read_text(errors="ignore")
+
+def extract_distribution(start_marker):
+	start = report.find(start_marker)
+	if start < 0:
+		return None
+	rest = report[start:].splitlines()[1:]
+	result = {}
+	seen_distribution = False
+	for line in rest:
+		if not line.strip():
+			if seen_distribution:
+				break
+			continue
+		if not line.lstrip().startswith("- "):
+			if seen_distribution:
+				break
+			continue
+		seen_distribution = True
+		match = re.match(r"- ([^:]+): ([0-9]+)$", line.strip())
+		if match:
+			result[match.group(1)] = int(match.group(2))
+		else:
+			break
+	return result
+
+actual = {
+	"evidence": extract_distribution("Patch evidence-state distribution among explicit patch rows:"),
+	"port": extract_distribution("Patch port-delta distribution among explicit patch rows"),
+}
+
+failures = []
+for section in ("evidence", "port"):
+	if actual[section] is None:
+		failures.append(f"missing {section} distribution section")
+		continue
+	expected_dict = dict(sorted(expected[section].items()))
+	actual_dict = dict(sorted(actual[section].items()))
+	if actual_dict != expected_dict:
+		failures.append(f"{section} expected {expected_dict} but report has {actual_dict}")
+
+if failures:
+	print("; ".join(failures))
+	sys.exit(1)
+
+print("patch evidence and port distributions match row-state summary")
+PY
+}
+
 consistency_checks() {
 	local failures=0
 
@@ -872,6 +943,14 @@ consistency_checks() {
 		printf 'bridge_next_local_action\tPASS\t0 bridge families with local-action backlog\n'
 	else
 		printf 'bridge_next_local_action\tFAIL\t%s bridge families with local-action backlog\n' "$bridge_next_local_action"
+		failures=$((failures + 1))
+	fi
+
+	local report_patch_counts
+	if report_patch_counts="$(coverage_report_patch_counts)"; then
+		printf 'coverage_report_patch_counts\tPASS\t%s\n' "$report_patch_counts"
+	else
+		printf 'coverage_report_patch_counts\tFAIL\t%s\n' "$report_patch_counts"
 		failures=$((failures + 1))
 	fi
 

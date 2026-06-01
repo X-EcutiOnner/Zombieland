@@ -31,6 +31,7 @@ namespace ZombieLand
 			var zombieGrid = DescribeZombieGrid(map, zombies);
 			var ideology = DescribeIdeologyLoadState(map, zombies);
 			var isSosOuterSpaceMap = map != null && map.Biome == SoSTools.sosOuterSpaceBiomeDef;
+			var ambientSound = DescribeAmbientSoundState(map, tickManager, settings, zombies.Length);
 
 			return new
 			{
@@ -89,6 +90,7 @@ namespace ZombieLand
 					frameWatchElapsedMilliseconds = ZombielandMod.frameWatch.ElapsedMilliseconds
 				},
 				ideology,
+				ambientSound,
 				zombieGrid,
 				spawnedZombieCount = zombies.Length,
 				ordinaryZombies = zombies.OfType<Zombie>().Count(),
@@ -109,6 +111,40 @@ namespace ZombieLand
 						&& Mathf.Abs(zombieRace.baseHealthScale - settings.healthFactor) < 0.0001f
 				},
 					timeSpeed = gameTickManager == null ? null : gameTickManager.CurTimeSpeed.ToString()
+				};
+			}
+
+			static object DescribeAmbientSoundState(Map map, TickManager tickManager, SettingsGroup settings, int zombieCount)
+			{
+				float? localHour = map == null ? null : GenLocalDate.HourFloat(map);
+				float? normalizedHour = null;
+				if (localHour.HasValue)
+					normalizedHour = localHour.Value < 12f ? localHour.Value + 24f : localHour.Value;
+
+				float? targetVolume = null;
+				if (map != null && ZombieStateHandler.creepyAmbientSoundVolumes.TryGetValue(map.uniqueID, out var ambientVolume))
+					targetVolume = ambientVolume;
+
+				var ambientSustainerField = tickManager == null ? null : AccessTools.Field(typeof(TickManager), "zombiesAmbientSound");
+				var ambientVolumeField = tickManager == null ? null : AccessTools.Field(typeof(TickManager), "zombiesAmbientSoundVolume");
+				var ambientSustainer = ambientSustainerField?.GetValue(tickManager) as Sustainer;
+				float? currentVolume = null;
+				if (ambientVolumeField?.GetValue(tickManager) is float volume)
+					currentVolume = volume;
+
+				return new
+				{
+					useSound = Constants.USE_SOUND,
+					playSetting = settings?.playCreepyAmbientSound,
+					zombieCount,
+					localHour,
+					normalizedHour,
+					spawningHours = Constants.ZOMBIE_SPAWNING_HOURS.ToArray(),
+					targetVolumeKnown = targetVolume.HasValue,
+					targetVolume,
+					hasSustainer = ambientSustainer != null,
+					currentVolume,
+					sustainerVolumeFactor = ambientSustainer?.info.volumeFactor
 				};
 			}
 
