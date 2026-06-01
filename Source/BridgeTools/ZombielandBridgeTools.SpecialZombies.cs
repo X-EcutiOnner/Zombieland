@@ -822,7 +822,7 @@ namespace ZombieLand
 					var colonistContact = VerifyPositionColonistContact(map, root + new IntVec3(6, 0, -18), spawnedThings, touchedCenters);
 					var attractionGates = VerifyPositionAttractionGates(map, root + new IntVec3(18, 0, -18), spawnedThings, touchedCenters);
 					var customSupportOverrides = VerifyCustomSupportOverrideGates(map, root + new IntVec3(18, 0, 0), spawnedThings, touchedCenters);
-					var vehicleHook = VerifyPositionVehicleHook();
+					var vehicleHook = VerifyPositionVehicleHook(map, root + new IntVec3(-18, 0, 0), spawnedThings, touchedCenters);
 
 					return new
 					{
@@ -1208,16 +1208,146 @@ namespace ZombieLand
 				};
 			}
 
-			static object VerifyPositionVehicleHook()
+			static object VerifyPositionVehicleHook(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
 			{
+				if (VehicleTools.vehicleType == null)
+				{
+					return new
+					{
+						success = true,
+						vehicleFrameworkInstalled = false,
+						vehicleType = (string)null,
+						status = "skipped: Vehicle Framework is not installed in the active mod set"
+					};
+				}
+
+				var vehicleDefType = VehicleTools.vehicleType.Assembly.GetType("Vehicles.VehicleDef");
+				var vehicleSpawnerType = VehicleTools.vehicleType.Assembly.GetType("Vehicles.VehicleSpawner");
+				var generateVehicle = vehicleSpawnerType?
+					.GetMethods(BindingFlags.Public | BindingFlags.Static)
+					.FirstOrDefault(method =>
+					{
+						if (method.Name != "GenerateVehicle")
+							return false;
+						var parameters = method.GetParameters();
+						return parameters.Length == 2
+							&& parameters[0].ParameterType == vehicleDefType
+							&& parameters[1].ParameterType == typeof(Faction);
+					});
+
+				var concreteDefs = vehicleDefType == null
+					? Array.Empty<ThingDef>()
+					: DefDatabase<ThingDef>.AllDefsListForReading
+						.Where(def => def.defName.NullOrEmpty() == false)
+						.Where(def => vehicleDefType.IsAssignableFrom(def.GetType()))
+						.Where(def => def.defName.StartsWith("ZLTest", StringComparison.OrdinalIgnoreCase))
+						.ToArray();
+
+				var vehicleDef = concreteDefs.FirstOrDefault();
+				if (vehicleDefType == null || generateVehicle == null || vehicleDef == null)
+				{
+					return new
+					{
+						success = false,
+						vehicleFrameworkInstalled = true,
+						vehicleType = VehicleTools.vehicleType.FullName,
+						vehicleDefType = vehicleDefType?.FullName,
+						generateVehicleResolved = generateVehicle != null,
+						concreteVehicleDefs = concreteDefs.Select(def => def.defName).ToArray(),
+						error = "Vehicle Framework is active, but no local ZLTest concrete VehicleDef fixture was available for BumpTimestamps."
+					};
+				}
+
+				if (TryFindClearSpawnCell(map, root, 16f, out var vehicleCell, out var spawnError) == false)
+					return spawnError;
+
+				Pawn vehicle;
+				try
+				{
+					vehicle = generateVehicle.Invoke(null, new object[] { vehicleDef, Faction.OfPlayer }) as Pawn;
+				}
+				catch (Exception ex)
+				{
+					return new
+					{
+						success = false,
+						vehicleFrameworkInstalled = true,
+						vehicleType = VehicleTools.vehicleType.FullName,
+						vehicleDef = vehicleDef.defName,
+						error = $"VehicleSpawner.GenerateVehicle failed: {ex.GetType().Name}: {ex.Message}"
+					};
+				}
+
+				if (vehicle == null)
+				{
+					return new
+					{
+						success = false,
+						vehicleFrameworkInstalled = true,
+						vehicleType = VehicleTools.vehicleType.FullName,
+						vehicleDef = vehicleDef.defName,
+						error = "VehicleSpawner.GenerateVehicle returned null."
+					};
+				}
+
+				GenSpawn.Spawn(vehicle, vehicleCell, map, Rot4.South);
+				spawnedThings.Add(vehicle);
+				if (TryFindAdjacentClearCell(vehicle, out var destination) == false)
+				{
+					return new
+					{
+						success = false,
+						vehicleFrameworkInstalled = true,
+						vehicleType = VehicleTools.vehicleType.FullName,
+						vehicleDef = vehicleDef.defName,
+						vehicle = DescribePawn(vehicle),
+						error = "No adjacent clear destination was available for the vehicle timestamp probe."
+					};
+				}
+
+				float moveSpeed;
+				try
+				{
+					moveSpeed = vehicle.GetMoveSpeed();
+				}
+				catch (Exception ex)
+				{
+					return new
+					{
+						success = false,
+						vehicleFrameworkInstalled = true,
+						vehicleType = VehicleTools.vehicleType.FullName,
+						vehicleDef = vehicleDef.defName,
+						vehicle = DescribePawn(vehicle),
+						error = $"VehicleTools.GetMoveSpeed failed: {ex.GetType().Name}: {ex.Message}"
+					};
+				}
+
+				var radius = Mathf.Max(2f, 1.5f * moveSpeed + 1f);
+				ClearPheromones(map, destination, radius);
+				touchedCenters.Add(destination);
+				var before = SnapshotPheromones(map, destination, radius);
+				MovePawnThroughPositionSetter(vehicle, destination);
+				var timestampAfter = map.GetGrid().GetTimestamp(destination);
+				var change = DescribePheromoneChange(map, before, out var changedCount);
+
 				return new
 				{
-					success = true,
-					vehicleFrameworkInstalled = VehicleTools.vehicleType != null,
-					vehicleType = VehicleTools.vehicleType?.FullName,
-					status = VehicleTools.vehicleType == null
-						? "skipped: Vehicle Framework is not installed in the active mod set"
-						: "available: Vehicle Framework type was discovered; a vehicle fixture should cover BumpTimestamps in an optional-integration pass"
+					success = changedCount > 0 && timestampAfter > 0,
+					vehicleFrameworkInstalled = true,
+					vehicleType = VehicleTools.vehicleType.FullName,
+					vehicleDef = vehicleDef.defName,
+					vehicle = DescribePawn(vehicle),
+					cells = new
+					{
+						start = ZombieRuntimeActions.DescribeCell(vehicleCell),
+						destination = ZombieRuntimeActions.DescribeCell(destination)
+					},
+					moveSpeed,
+					radius,
+					timestampAfter,
+					change,
+					status = "proved: concrete VehiclePawn movement through Thing.Position called VehicleTools.BumpTimestamps"
 				};
 			}
 
