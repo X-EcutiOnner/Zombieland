@@ -1096,6 +1096,81 @@ print("bridge row/tool/kind distributions match generated output")
 PY
 }
 
+coverage_report_inventory_counts() {
+	local expected
+	expected="$(
+		{
+			find Source -type f -name '*.cs' -not -path '*/obj/*' | wc -l | tr -d ' '
+			source_paths | awk -F '\t' 'NR > 1 { total++; if ($2 != "covered") unassigned++ } END { printf "\t%d\t%d", total + 0, unassigned + 0 }'
+			patch_groups | awk -F '\t' 'BEGIN { static = 0; dynamic = 0; base = 0 } $3 == "static" { static++ } $3 == "dynamic" { dynamic++ } $3 == "base" { base++ } END { printf "\t%d\t%d\t%d\t%d", static, dynamic, base, static + dynamic + base }'
+			awk -F '\t' 'NR > 1 && $2 == "def" { count++ } END { printf "\t%d", count + 0 }' coverage/ZL_COVERAGE_INDEX.tsv
+		}
+	)"
+	python3 - "$expected" <<'PY'
+import re
+import signal
+import sys
+from pathlib import Path
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+expected = tuple(int(value) for value in sys.argv[1].split("\t"))
+report = Path("coverage/COVERAGE_COMPLETENESS_REPORT.md").read_text(errors="ignore")
+
+source_found = re.search(
+	r"found\s+([0-9]+)\s+non-obj source files in the current checkout",
+	report,
+)
+source_covered = re.search(
+	r"reports\s+([0-9]+)\s+covered source paths and\s+([0-9]+)\s+unassigned paths",
+	report,
+)
+patch_inventory = re.search(
+	r"finds\s+([0-9]+)\s+static patch rows,\s+"
+	r"([0-9]+)\s+dynamic patch rows,\s+and\s+"
+	r"([0-9]+)\s+class-level base rows",
+	report,
+)
+patch_total = re.search(r"mentions all\s+([0-9]+)\s+patch classes", report)
+def_rows = re.search(r"Def-family rows generated:\s+([0-9]+)\.", report)
+
+missing = []
+for name, match in (
+	("source current count", source_found),
+	("source covered/unassigned count", source_covered),
+	("patch inventory count", patch_inventory),
+	("patch total count", patch_total),
+	("def row count", def_rows),
+):
+	if not match:
+		missing.append(name)
+
+if missing:
+	print("missing report counts: " + ", ".join(missing))
+	sys.exit(1)
+
+actual = (
+	int(source_found.group(1)),
+	int(source_covered.group(1)),
+	int(source_covered.group(2)),
+	int(patch_inventory.group(1)),
+	int(patch_inventory.group(2)),
+	int(patch_inventory.group(3)),
+	int(patch_total.group(1)),
+	int(def_rows.group(1)),
+)
+
+if actual != expected:
+	print(
+		"expected source/current/covered/unassigned/static/dynamic/base/total/defs "
+		f"{expected} but report has {actual}"
+	)
+	sys.exit(1)
+
+print("source, patch inventory, and def-row report counts match generated output")
+PY
+}
+
 consistency_checks() {
 	local failures=0
 
@@ -1190,6 +1265,14 @@ consistency_checks() {
 		printf 'coverage_report_bridge_counts\tPASS\t%s\n' "$report_bridge_counts"
 	else
 		printf 'coverage_report_bridge_counts\tFAIL\t%s\n' "$report_bridge_counts"
+		failures=$((failures + 1))
+	fi
+
+	local report_inventory_counts
+	if report_inventory_counts="$(coverage_report_inventory_counts)"; then
+		printf 'coverage_report_inventory_counts\tPASS\t%s\n' "$report_inventory_counts"
+	else
+		printf 'coverage_report_inventory_counts\tFAIL\t%s\n' "$report_inventory_counts"
 		failures=$((failures + 1))
 	fi
 
