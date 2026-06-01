@@ -881,6 +881,110 @@ print("patch evidence and port distributions match row-state summary")
 PY
 }
 
+coverage_report_patch_gap_counts() {
+	local expected
+	expected="$(patch_row_gaps | awk -F '\t' '
+		NR > 1 {
+			total++
+			count[$5]++
+		}
+		END {
+			printf "%d\t%d\t%d\t%d\t%d",
+				total + 0,
+				count["represented-by-row"] + 0,
+				count["audit-only"] + 0,
+				count["base/context"] + 0,
+				count["unrepresented"] + 0
+		}
+	')"
+	python3 - "$expected" <<'PY'
+import re
+import signal
+import sys
+from pathlib import Path
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+expected = tuple(int(value) for value in sys.argv[1].split("\t"))
+report = Path("coverage/COVERAGE_COMPLETENESS_REPORT.md").read_text(errors="ignore")
+match = re.search(
+	r"reports\s+([0-9]+)\s+exact-name misses:\s+"
+	r"([0-9]+)\s+represented\b.*?"
+	r"([0-9]+)\s+audit-only\b.*?"
+	r"([0-9]+)\s+base/context\b.*?"
+	r"([0-9]+)\s+unrepresented",
+	report,
+	re.S,
+)
+
+if not match:
+	print("missing exact-name patch-row gap distribution in report")
+	sys.exit(1)
+
+actual = tuple(int(value) for value in match.groups())
+if actual != expected:
+	print(
+		"expected total/represented/audit/base/unrepresented "
+		f"{expected} but report has {actual}"
+	)
+	sys.exit(1)
+
+print("exact-name patch-row gap distribution matches generated output")
+PY
+}
+
+coverage_report_dependency_gate_counts() {
+	local expected
+	expected="$(dependency_gates summary | awk -F '\t' '
+		{
+			count[$1] = $2
+		}
+		END {
+			printf "%d\t%d\t%d\t%d\t%d",
+				count["dlc-content-unavailable"] + 0,
+				count["parent-branch-marker"] + 0,
+				count["scenario-rollup"] + 0,
+				count["standing-governance"] + 0,
+				count["removed-target-doc"] + 0
+		}
+	')"
+	python3 - "$expected" <<'PY'
+import re
+import signal
+import sys
+from pathlib import Path
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+expected = tuple(int(value) for value in sys.argv[1].split("\t"))
+report = Path("coverage/COVERAGE_COMPLETENESS_REPORT.md").read_text(errors="ignore")
+match = re.search(
+	r"dependency-gate-summary`\s+distribution\b.*?is:\s+"
+	r"([0-9]+)\s+DLC/content gates,\s+"
+	r"([0-9]+)\s+parent branch markers,\s+"
+	r"([0-9]+)\s+scenario rollup,\s+"
+	r"([0-9]+)\s+standing-governance rows,\s+and\s+"
+	r"([0-9]+)\s+removed-target documentation row",
+	report,
+	re.S,
+)
+
+if not match:
+	print("missing dependency-gate summary distribution in report")
+	sys.exit(1)
+
+actual = tuple(int(value) for value in match.groups())
+if actual != expected:
+	print(
+		"expected dlc/parent/scenario/governance/removed "
+		f"{expected} but report has {actual}"
+	)
+	sys.exit(1)
+
+print("dependency-gate distribution matches generated output")
+PY
+}
+
 consistency_checks() {
 	local failures=0
 
@@ -951,6 +1055,22 @@ consistency_checks() {
 		printf 'coverage_report_patch_counts\tPASS\t%s\n' "$report_patch_counts"
 	else
 		printf 'coverage_report_patch_counts\tFAIL\t%s\n' "$report_patch_counts"
+		failures=$((failures + 1))
+	fi
+
+	local report_patch_gap_counts
+	if report_patch_gap_counts="$(coverage_report_patch_gap_counts)"; then
+		printf 'coverage_report_patch_gap_counts\tPASS\t%s\n' "$report_patch_gap_counts"
+	else
+		printf 'coverage_report_patch_gap_counts\tFAIL\t%s\n' "$report_patch_gap_counts"
+		failures=$((failures + 1))
+	fi
+
+	local report_dependency_gate_counts
+	if report_dependency_gate_counts="$(coverage_report_dependency_gate_counts)"; then
+		printf 'coverage_report_dependency_gate_counts\tPASS\t%s\n' "$report_dependency_gate_counts"
+	else
+		printf 'coverage_report_dependency_gate_counts\tFAIL\t%s\n' "$report_dependency_gate_counts"
 		failures=$((failures + 1))
 	fi
 
