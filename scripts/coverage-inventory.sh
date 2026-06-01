@@ -10,7 +10,9 @@ PATCH_GROUPS=0
 DYNAMIC_PATCHES=0
 STATIC_SUMMARY=0
 BRIDGE_TOOLS=0
+BRIDGE_SUMMARY=0
 DEPENDENCY_GATES=0
+SOURCE_PATHS=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -29,11 +31,17 @@ while [[ $# -gt 0 ]]; do
 		--bridge-tools)
 			BRIDGE_TOOLS=1
 			;;
+		--bridge-summary)
+			BRIDGE_SUMMARY=1
+			;;
 		--dependency-gates)
 			DEPENDENCY_GATES=1
 			;;
+		--source-paths)
+			SOURCE_PATHS=1
+			;;
 		--help|-h)
-			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--bridge-tools] [--dependency-gates] [baseline-commit]\n' "$0"
+			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--bridge-tools] [--bridge-summary] [--dependency-gates] [--source-paths] [baseline-commit]\n' "$0"
 			exit 0
 			;;
 		*)
@@ -216,6 +224,80 @@ for path in sorted(Path("Source/BridgeTools").glob("ZombielandBridgeTools*.cs"))
 PY
 }
 
+bridge_summary() {
+	local bridge_inventory
+	bridge_inventory="$(mktemp "${TMPDIR:-/tmp}/zl-bridge-inventory.XXXXXX")"
+	bridge_tools > "$bridge_inventory"
+	python3 - "$bridge_inventory" <<'PY'
+import collections
+from pathlib import Path
+import signal
+import sys
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+path = Path(sys.argv[1])
+rows = []
+for line in path.read_text().splitlines():
+	line = line.rstrip("\n")
+	if not line:
+		continue
+	parts = line.split("\t")
+	if len(parts) != 5:
+		continue
+	location, family, tool_name, kind, description = parts
+	rows.append({
+		"location": location,
+		"family": family,
+		"tool_name": tool_name,
+		"kind": kind,
+		"description": description,
+	})
+
+kind_counts = collections.Counter(row["kind"] for row in rows)
+family_counts = collections.Counter(row["family"] for row in rows)
+family_kind_counts = collections.Counter((row["family"], row["kind"]) for row in rows)
+
+print("section\tfamily\tkind_hint\tcount\tnotes")
+for kind, count in sorted(kind_counts.items()):
+	print(f"kind\tnot_applicable\t{kind}\t{count}\tall families")
+for family, count in sorted(family_counts.items()):
+	kinds = ", ".join(
+		f"{kind}={family_kind_counts[(family, kind)]}"
+		for kind in sorted(kind_counts)
+		if family_kind_counts[(family, kind)]
+	)
+	print(f"family\t{family}\tall\t{count}\t{kinds}")
+
+evidence_helpers = [row for row in rows if row["kind"] == "evidence-helper"]
+if evidence_helpers:
+	for row in evidence_helpers:
+		print(
+			"candidate_retire"
+			f"\t{row['family']}"
+			f"\t{row['kind']}"
+			"\t1"
+			f"\t{row['tool_name']} at {row['location']}"
+		)
+else:
+	print("candidate_retire\tnot_applicable\tevidence-helper\t0\tno retained evidence-helper tools classified")
+
+for row in sorted(
+	(row for row in rows if row["kind"] == "narrow-contract"),
+	key=lambda value: (value["family"], value["tool_name"]),
+):
+	if row["tool_name"].startswith("zombieland/setup_") or row["tool_name"].endswith("_observation"):
+		print(
+			"candidate_review"
+			f"\t{row['family']}"
+			f"\t{row['kind']}"
+			"\t1"
+			f"\t{row['tool_name']} at {row['location']}"
+		)
+PY
+	rm -f "$bridge_inventory"
+}
+
 dependency_gates() {
 	python3 - <<'PY'
 import csv
@@ -284,6 +366,45 @@ with path.open(newline="") as handle:
 			row["primary_scenario"],
 			row["open_questions"].replace("\t", " ").strip(),
 		]))
+PY
+}
+
+source_paths() {
+	python3 - <<'PY'
+from pathlib import Path
+import csv
+import re
+import signal
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+source_paths = sorted(
+	str(path)
+	for path in Path("Source").rglob("*.cs")
+	if "/obj/" not in str(path)
+)
+
+owners = {path: [] for path in source_paths}
+reference_columns = [
+	"source_owners",
+	"bridge_contracts",
+	"harmony_patches",
+	"notes",
+]
+
+with Path("coverage/ZL_COVERAGE_INDEX.tsv").open(newline="") as handle:
+	for row in csv.DictReader(handle, delimiter="\t"):
+		text = "\n".join(row.get(column, "") for column in reference_columns)
+		for match in re.finditer(r"Source/[A-Za-z0-9_./+-]+\.cs", text):
+			path = match.group(0)
+			if path in owners:
+				owners[path].append(row["id"])
+
+print("source_path\tstatus\towner_ids")
+for path in source_paths:
+	ids = sorted(set(owners[path]))
+	status = "covered" if ids else "unassigned"
+	print(f"{path}\t{status}\t{';'.join(ids)}")
 PY
 }
 
@@ -406,9 +527,19 @@ if [[ "$BRIDGE_TOOLS" == "1" ]]; then
 	exit 0
 fi
 
+if [[ "$BRIDGE_SUMMARY" == "1" ]]; then
+	bridge_summary
+	exit 0
+fi
+
 if [[ "$DEPENDENCY_GATES" == "1" ]]; then
 	printf 'id\trow_type\towner_cluster\tevidence_state\tport_delta_state\tgate_kind\tprimary_scenario\topen_questions\n'
 	dependency_gates
+	exit 0
+fi
+
+if [[ "$SOURCE_PATHS" == "1" ]]; then
+	source_paths
 	exit 0
 fi
 
@@ -486,9 +617,17 @@ else
 	printf 'run with --details for bridge tool names, gameplay class lines, hook lines, and evidence commits\n'
 fi
 
-section "Likely Uncovered Keywords"
-git log --format='%s' "$BASELINE"..HEAD > /tmp/zl-covered-subjects.$$
-trap 'rm -f /tmp/zl-covered-subjects.$$' EXIT
+section "Coverage Keyword Signals"
+coverage_text="/tmp/zl-coverage-text.$$"
+commit_text="/tmp/zl-covered-subjects.$$"
+trap 'rm -f "$coverage_text" "$commit_text"' EXIT
+{
+	for path in TEST_COVERAGE.md TEST_SCENARIOS.md TEST_PATCH_AUDIT.md coverage/ZL_COVERAGE_INDEX.tsv coverage/ZL_UI_SURFACE_INDEX.tsv coverage/UNASSIGNED_SURFACES.tsv coverage/COVERAGE_COMPLETENESS_REPORT.md
+	do
+		[[ -f "$path" ]] && printf '\n== %s ==\n' "$path" && cat "$path"
+	done
+} > "$coverage_text"
+git log --format='%s' "$BASELINE"..HEAD > "$commit_text"
 keywords=(
 	settings
 	keyframe
@@ -519,9 +658,13 @@ keywords=(
 )
 for keyword in "${keywords[@]}"
 do
-	if rg -qi --fixed-strings "$keyword" /tmp/zl-covered-subjects.$$; then
-		printf 'covered-subject: %s\n' "$keyword"
+	if rg -qi --fixed-strings "$keyword" "$coverage_text"; then
+		if rg -qi --fixed-strings "$keyword" "$commit_text"; then
+			printf 'documented-and-commit-subject: %s\n' "$keyword"
+		else
+			printf 'documented-only: %s\n' "$keyword"
+		fi
 	else
-		printf 'missing-subject: %s\n' "$keyword"
+		printf 'not-in-coverage-text: %s\n' "$keyword"
 	fi
 done

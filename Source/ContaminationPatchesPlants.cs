@@ -57,42 +57,40 @@ namespace ZombieLand
 	static class JobDriver_PlantWork_MakeNewToils_Patch
 	{
 		static readonly MethodInfo m_MakeThing = SymbolExtensions.GetMethodInfo(() => ThingMaker.MakeThing(default, default));
+		static FieldInfo f_JobDriver;
+		static Plant activeHarvestPlant;
 
 		static bool Prepare() => Constants.CONTAMINATION;
 
 		static MethodBase TargetMethod()
 		{
 			var type = AccessTools.FirstInner(typeof(JobDriver_PlantWork), type => type.Name.Contains("DisplayClass"));
+			f_JobDriver = AccessTools.Field(type, "<>4__this");
 			return AccessTools.FirstMethod(type, method => method.CallsMethod(m_MakeThing));
 		}
 
-		static Thing MakeThing(ThingDef def, ThingDef stuff, Plant plant)
+		static void Prefix(object __instance)
 		{
-			var result = ThingMaker.MakeThing(def, stuff);
-			plant?.TransferContamination(ZombieSettings.Values.contamination.plantTransfer, result);
-			return result;
+			var jobDriver = f_JobDriver?.GetValue(__instance) as JobDriver_PlantWork;
+			activeHarvestPlant = jobDriver?.Plant;
 		}
 
-		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-		{
-			var from = m_MakeThing;
-			var to = SymbolExtensions.GetMethodInfo(() => MakeThing(default, default, default));
+		static void Postfix() => activeHarvestPlant = null;
 
-			var matcher = new CodeMatcher(instructions)
-				.MatchEndForward(
-					new CodeMatch(name: "thing_var"),
-					new CodeMatch(Ldfld),
-					new CodeMatch(Ldfld),
-					new CodeMatch(Ldfld),
-					new CodeMatch(Ldnull),
-					new CodeMatch(operand: from)
-				)
-				.ThrowIfInvalid($"Cannot find {from.FullDescription()}");
+		static void Finalizer() => activeHarvestPlant = null;
 
-			return matcher.InsertAndAdvance(matcher.NamedMatch("thing_var"))
-				.SetInstruction(Call[to])
-				.InstructionEnumeration();
-		}
+		internal static void TransferHarvestContamination(Thing thing)
+			=> activeHarvestPlant?.TransferContamination(ZombieSettings.Values.contamination.plantTransfer, thing);
+	}
+
+	[HarmonyPatch(typeof(ThingMaker), nameof(ThingMaker.MakeThing))]
+	[HarmonyPatch(new[] { typeof(ThingDef), typeof(ThingDef) })]
+	static class ThingMaker_MakeThing_PlantHarvestContext_Patch
+	{
+		static bool Prepare() => Constants.CONTAMINATION;
+
+		static void Postfix(Thing __result)
+			=> JobDriver_PlantWork_MakeNewToils_Patch.TransferHarvestContamination(__result);
 	}
 
 	[HarmonyPatch(typeof(IncidentWorker_AmbrosiaSprout), nameof(IncidentWorker_AmbrosiaSprout.TryExecuteWorker))]
