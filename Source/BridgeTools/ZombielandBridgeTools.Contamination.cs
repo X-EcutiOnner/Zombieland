@@ -4837,16 +4837,16 @@ namespace ZombieLand
 				const float groundContaminationBefore = 0.72f;
 				if (mode == "sand")
 				{
-					var sandTerrain = DefDatabase<TerrainDef>.GetNamedSilentFail("Sand");
-					if (sandTerrain == null)
+					var sandHoldingTerrain = TerrainDefOf.Soil ?? DefDatabase<TerrainDef>.GetNamedSilentFail("Soil");
+					if (sandHoldingTerrain == null)
 					{
 						return new
 						{
 							success = false,
-							error = "TerrainDef Sand is unavailable."
+							error = "TerrainDef Soil is unavailable."
 						};
 					}
-					map.terrainGrid.SetTerrain(snowCell, sandTerrain);
+					map.terrainGrid.SetTerrain(snowCell, sandHoldingTerrain);
 					map.snowGrid.SetDepth(snowCell, 0f);
 					map.sandGrid.SetDepth(snowCell, snowDepthBefore);
 				}
@@ -4867,7 +4867,7 @@ namespace ZombieLand
 				var expectedWorkerAfter = groundBefore * snowAdd;
 				var laborSpeed = worker.GetStatValue(StatDefOf.GeneralLaborSpeed);
 				var sourceDerivedWorkTicks = Mathf.CeilToInt(50f * targetDepthBefore / laborSpeed);
-				var maxTicks = sourceDerivedWorkTicks + 10;
+				var maxTicks = sourceDerivedWorkTicks * 70 + 120;
 
 				var job = JobMaker.MakeJob(JobDefOf.ClearSnow, snowCell);
 				var jobDefAtCreation = job.def.defName;
