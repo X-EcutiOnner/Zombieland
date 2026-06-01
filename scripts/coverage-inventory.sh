@@ -9,6 +9,8 @@ DETAILS=0
 PATCH_GROUPS=0
 DYNAMIC_PATCHES=0
 STATIC_SUMMARY=0
+BRIDGE_TOOLS=0
+DEPENDENCY_GATES=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -24,8 +26,14 @@ while [[ $# -gt 0 ]]; do
 		--static-summary)
 			STATIC_SUMMARY=1
 			;;
+		--bridge-tools)
+			BRIDGE_TOOLS=1
+			;;
+		--dependency-gates)
+			DEPENDENCY_GATES=1
+			;;
 		--help|-h)
-			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [baseline-commit]\n' "$0"
+			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--bridge-tools] [--dependency-gates] [baseline-commit]\n' "$0"
 			exit 0
 			;;
 		*)
@@ -138,6 +146,147 @@ patch_groups() {
 		'
 }
 
+bridge_tools() {
+	python3 - <<'PY'
+from pathlib import Path
+import re
+import signal
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+generic_names = {
+	"zombieland/get_status",
+	"zombieland/list_zombies",
+	"zombieland/sound_events_state",
+	"zombieland/spawn_zombie",
+	"zombieland/spawn_zombie_group",
+	"zombieland/pheromone_state",
+	"zombieland/place_wall_line",
+	"zombieland/place_thing",
+	"zombieland/start_map_fire",
+	"zombieland/spawn_pawn_fixture",
+	"zombieland/read_cell_things",
+	"zombieland/spawn_colonist",
+	"zombieland/spawn_spitter_visual_fixture",
+	"zombieland/spawn_reference_lineup",
+	"zombieland/read_contamination_state",
+	"zombieland/read_contamination_effect_state",
+	"zombieland/write_contamination_state",
+	"zombieland/complete_frame_by_id",
+	"zombieland/remove_all_zombies",
+	"zombieland/get_pawn_infection",
+	"zombieland/apply_zombie_bite",
+	"zombieland/remove_pawn_infections",
+	"zombieland/convert_pawn_to_zombie",
+	"zombieland/wait_for_semantic_change",
+}
+
+scenario_fixture_names = {
+	"zombieland/defense_room_state",
+	"zombieland/incident_threat_state",
+	"zombieland/infection_medical_state",
+	"zombieland/infection_workflow_state",
+	"zombieland/area_workflow_state",
+	"zombieland/settings_state",
+	"zombieland/special_gauntlet_state",
+	"zombieland/uninstall_hygiene_state",
+}
+
+tool_pattern = re.compile(r'\[Tool\("([^"]+)"(?:,\s*Description\s*=\s*"([^"]*)")?')
+for path in sorted(Path("Source/BridgeTools").glob("ZombielandBridgeTools*.cs")):
+	lines = path.read_text(errors="ignore").splitlines()
+	family = path.stem.replace("ZombielandBridgeTools.", "").replace("ZombielandBridgeTools", "Common")
+	for line_number, line in enumerate(lines, start=1):
+		match = tool_pattern.search(line)
+		if not match:
+			continue
+		name, description = match.groups()
+		if name in generic_names:
+			kind = "generic-primitive"
+		elif name in scenario_fixture_names:
+			kind = "scenario-fixture"
+		elif family == "RimConnect":
+			kind = "optional-integration"
+		elif name.endswith("_contract") or "contract" in name or "verify" in (description or "").lower():
+			kind = "narrow-contract"
+		else:
+			kind = "evidence-helper"
+		description = (description or "").replace("\t", " ").strip()
+		print(f"{path}:{line_number}\t{family}\t{name}\t{kind}\t{description}")
+PY
+}
+
+dependency_gates() {
+	python3 - <<'PY'
+import csv
+from pathlib import Path
+
+states = {
+	"partial",
+	"partial_runtime",
+	"dependency/unavailable",
+	"removed_vanilla_target",
+}
+
+standing_governance = {
+	"A.HARMONY.INVENTORY",
+	"J.BRIDGE.TOOLS",
+	"NEG.1_6.DISCOVERY",
+}
+
+def gate_kind(row):
+	row_id = row["id"]
+	state = row["port_delta_state"]
+	owner = row["owner_cluster"]
+	row_type = row["row_type"]
+	question = row["open_questions"].lower()
+
+	if row_id in standing_governance:
+		return "standing-governance"
+	if state == "removed_vanilla_target":
+		return "removed-target-doc"
+	if row_type == "scenario":
+		return "scenario-rollup"
+	if owner == "optional_integrations":
+		return "external-mod-unavailable"
+	if state == "partial_runtime" and (
+		"branch" in question
+		or "delegated" in question
+		or "geneassembler" in question
+	):
+		return "parent-branch-marker"
+	if (
+		"biotech" in question
+		or "official dlc" in question
+		or "child" in question
+		or "killed-child" in question
+		or "pollution-capable" in question
+		or "wastepack" in question
+		or "clearpollution" in question
+		or "temporary terrain" in question
+		or "tunnel jelly" in question
+		):
+		return "dlc-content-unavailable"
+	return "actionable-gate"
+
+path = Path("coverage/ZL_COVERAGE_INDEX.tsv")
+with path.open(newline="") as handle:
+	for row in csv.DictReader(handle, delimiter="\t"):
+		if row["port_delta_state"] not in states:
+			continue
+		print("\t".join([
+			row["id"],
+			row["row_type"],
+			row["owner_cluster"],
+			row["evidence_state"],
+			row["port_delta_state"],
+			gate_kind(row),
+			row["primary_scenario"],
+			row["open_questions"].replace("\t", " ").strip(),
+		]))
+PY
+}
+
 if [[ "$PATCH_GROUPS" == "1" ]]; then
 	printf 'location\tclass\ttargeting\tpatch_attributes\n'
 	patch_groups
@@ -248,6 +397,18 @@ if [[ "$STATIC_SUMMARY" == "1" ]]; then
 			}
 		' \
 		| sort
+	exit 0
+fi
+
+if [[ "$BRIDGE_TOOLS" == "1" ]]; then
+	printf 'location\tfamily\ttool_name\tkind_hint\tdescription\n'
+	bridge_tools
+	exit 0
+fi
+
+if [[ "$DEPENDENCY_GATES" == "1" ]]; then
+	printf 'id\trow_type\towner_cluster\tevidence_state\tport_delta_state\tgate_kind\tprimary_scenario\topen_questions\n'
+	dependency_gates
 	exit 0
 fi
 

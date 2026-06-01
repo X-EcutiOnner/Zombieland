@@ -1,6 +1,7 @@
 ﻿using HarmonyLib;
 using RimWorld;
 using System;
+using System.Linq;
 using System.Reflection;
 using UnityEngine;
 using Verse;
@@ -11,6 +12,13 @@ namespace ZombieLand
 	public class CETools
 	{
 		public static bool latePatching = false;
+
+		public static Type TypeByNames(params string[] typeNames)
+		{
+			return typeNames
+				.Select(AccessTools.TypeByName)
+				.FirstOrDefault(type => type != null);
+		}
 
 		public static void Init(Harmony harmony)
 		{
@@ -29,7 +37,9 @@ namespace ZombieLand
 		static bool Prepare() => CETools.latePatching && TargetMethod() != null;
 		static MethodInfo TargetMethod()
 		{
-			var type = AccessTools.TypeByName("CombatExtended.Harmony.Harmony_DamageWorker_AddInjury_ApplyDamageToPart");
+			var type = CETools.TypeByNames(
+				"CombatExtended.HarmonyCE.Harmony_DamageWorker_AddInjury_ApplyDamageToPart",
+				"CombatExtended.Harmony.Harmony_DamageWorker_AddInjury_ApplyDamageToPart");
 			if (type == null)
 				return null;
 			var method = AccessTools.Method(type, "ArmorReroute");
@@ -113,7 +123,7 @@ namespace ZombieLand
 			return method;
 		}
 
-		static bool Prefix(ref DamageInfo originalDinfo, Pawn pawn, BodyPartRecord hitPart, out bool armorDeflected, out bool shieldAbsorbed, out bool armorReduced, ref DamageInfo __result)
+		static bool Prefix(ref DamageInfo originalDinfo, Pawn pawn, BodyPartRecord hitPart, out bool armorDeflected, out bool armorReduced, out bool shieldAbsorbed, ref DamageInfo __result)
 		{
 			__result = originalDinfo;
 			var dinfo = new DamageInfo(originalDinfo);
@@ -160,22 +170,21 @@ namespace ZombieLand
 			var type = AccessTools.TypeByName("CombatExtended.CompAmmoUser");
 			if (type == null)
 				return null;
-			var method = AccessTools.Method(type, "TryReduceAmmoCount");
+			var method = AccessTools.Method(type, "Notify_ShotFired", new Type[] { typeof(int) });
 			if (method == null)
 			{
-				Error("Combat Extended installed, but method CompAmmoUser.TryReduceAmmoCount not found");
+				Error("Combat Extended installed, but method CompAmmoUser.Notify_ShotFired(int) not found");
 				return null;
 			}
 			return method;
 		}
 
-		static bool Prefix(Building_Turret ___turret, ref bool __result)
+		static bool Prefix(Building_Turret ___turret)
 		{
 			if (___turret == null)
 				return true;
 			if (Rand.Chance(ZombieSettings.Values.reducedTurretConsumption))
 			{
-				__result = true;
 				return false;
 			}
 			return true;

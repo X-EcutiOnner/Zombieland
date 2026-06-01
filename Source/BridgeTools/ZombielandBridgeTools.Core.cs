@@ -168,10 +168,10 @@ namespace ZombieLand
 					activePackageSet,
 					new[]
 					{
-						ExternalMemberTypeMethod("armorReroute", "CombatExtended.Harmony.Harmony_DamageWorker_AddInjury_ApplyDamageToPart", "ArmorReroute"),
+						ExternalMemberTypeMethod("armorReroute", "CombatExtended.HarmonyCE.Harmony_DamageWorker_AddInjury_ApplyDamageToPart", "ArmorReroute"),
 						ExternalMemberTypeMethod("projectileLaunch", "CombatExtended.ProjectileCE", "Launch", new[] { typeof(Thing), typeof(Vector2), typeof(float), typeof(float), typeof(float), typeof(float), typeof(Thing), typeof(float) }),
 						ExternalMemberTypeMethod("afterArmorDamage", "CombatExtended.ArmorUtilityCE", "GetAfterArmorDamage", new[] { typeof(DamageInfo), typeof(Pawn), typeof(BodyPartRecord), typeof(bool).MakeByRefType(), typeof(bool).MakeByRefType(), typeof(bool).MakeByRefType() }),
-						ExternalMemberTypeMethod("ammoUser", "CombatExtended.CompAmmoUser", "TryReduceAmmoCount")
+						ExternalMemberTypeMethod("ammoUser", "CombatExtended.CompAmmoUser", "Notify_ShotFired", new[] { typeof(int) })
 					},
 					PatchedMethodsForPatchClass("CETools_Patch1")
 						.Concat(PatchedMethodsForPatchClass("CETools_Patch2"))
@@ -202,15 +202,7 @@ namespace ZombieLand
 						ExternalMemberStringMethod("vehicleFleeDestination", "Vehicles.VehicleDamager:TryFindDirectFleeDestination")
 					},
 					PatchedMethodsForPatchOwner("net.pardeike.zombieland.vehicles")),
-				DescribeOptionalIntegration(
-					"Dubs Performance Analyzer",
-					"Dubwise.DubsPerformanceAnalyzer.steam",
-					activePackageSet,
-					new[]
-					{
-						ExternalMemberStringMethod("drawNamesPrefix", "Analyzer.Fixes.H_DrawNamesFix:Prefix")
-					},
-					PatchedMethodsForPatchOwner("net.pardeike.zombieland.dubs")),
+				DescribeDubsIntegration(activePackageSet),
 				DescribeOptionalIntegration(
 					"Save Our Ship 2",
 					"kentington.saveourship2",
@@ -245,6 +237,10 @@ namespace ZombieLand
 					activePackageSet,
 					new[]
 					{
+						ExternalMemberType("cameraDelegates", "CameraPlus.CameraDelegates"),
+						ExternalMemberTypeMethod("cameraDelegateCache", "CameraPlus.Caches", "GetCachedCameraDelegate", new[] { typeof(Pawn) }),
+						ExternalMemberTypeMethod("markerColors", "CameraPlus.DotTools", "GetMarkerColors", new[] { typeof(Pawn), typeof(Color).MakeByRefType(), typeof(Color).MakeByRefType() }),
+						ExternalMemberTypeMethod("markerTextures", "CameraPlus.DotTools", "GetMarkerTextures", new[] { typeof(Pawn), typeof(Texture2D).MakeByRefType(), typeof(Texture2D).MakeByRefType() }),
 						InternalMemberMethod("cameraSupportColors", typeof(CameraPlusSupport.Methods), "GetCameraPlusColors"),
 						InternalMemberMethod("cameraSupportMarkers", typeof(CameraPlusSupport.Methods), "GetCameraPlusMarkers")
 					},
@@ -282,6 +278,45 @@ namespace ZombieLand
 				packageActive,
 				dependencyPresent,
 				runtimeState = packageActive ? "active" : dependencyPresent ? "assembly_or_type_present_but_inactive" : "absent",
+				memberChecks = members,
+				missingMemberCount = missingMembers.Length,
+				missingMembers,
+				patchTargets,
+				patchTargetCount = patchTargets.Length
+			};
+		}
+
+		static object DescribeDubsIntegration(HashSet<string> activePackageSet)
+		{
+			var packageId = "Dubwise.DubsPerformanceAnalyzer.steam";
+			var packageActive = activePackageSet.Contains(packageId);
+			var currentOverlayEntry = ExternalMemberTypeMethod("currentThingOverlayEntry", "Analyzer.Profiling.H_ThingOverlaysOnGUI", "GetPatchMethods");
+			var legacyDrawNamesPrefix = ExternalMemberStringMethod("legacyDrawNamesPrefix", "Analyzer.Fixes.H_DrawNamesFix:Prefix");
+			var members = new[] { currentOverlayEntry, legacyDrawNamesPrefix };
+			var patchTargets = PatchedMethodsForPatchOwner("net.pardeike.zombieland.dubs");
+			var dependencyPresent = members.Any(member => member.typePresent || member.methodPresent || member.fieldPresent);
+			var knownTargetPresent = currentOverlayEntry.success || legacyDrawNamesPrefix.success;
+			var missingMembers = dependencyPresent && knownTargetPresent == false ? members : Array.Empty<OptionalMemberSnapshot>();
+
+			return new
+			{
+				success = packageActive
+					? dependencyPresent && knownTargetPresent
+					: dependencyPresent == false || knownTargetPresent,
+				name = "Dubs Performance Analyzer",
+				packageId,
+				packageActive,
+				dependencyPresent,
+				runtimeState = packageActive
+					? currentOverlayEntry.success
+						? "active_current_overlay_entry"
+						: legacyDrawNamesPrefix.success
+							? "active_legacy_draw_names_fix"
+							: "active_missing_known_targets"
+					: dependencyPresent
+						? "assembly_or_type_present_but_inactive"
+						: "absent",
+				targetFamily = currentOverlayEntry.success ? "current_overlay_entry" : legacyDrawNamesPrefix.success ? "legacy_draw_names_fix" : "none",
 				memberChecks = members,
 				missingMemberCount = missingMembers.Length,
 				missingMembers,
