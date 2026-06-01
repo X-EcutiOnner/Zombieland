@@ -17,7 +17,8 @@ namespace ZombieLand
 		public static object ConvertInfectedCorpseToZombie(
 			[ToolParameter(Description = "Pawn id, ThingID, label, or short name.", Required = true)] string target,
 			[ToolParameter(Description = "Bite state to apply before death: harmful, final, or harmless.", Required = false, DefaultValue = "final")] string stage = "final",
-			[ToolParameter(Description = "Conversion trigger to exercise: rotStage or tickRare.", Required = false, DefaultValue = "rotStage")] string conversionTrigger = "rotStage")
+			[ToolParameter(Description = "Conversion trigger to exercise: rotStage or tickRare.", Required = false, DefaultValue = "rotStage")] string conversionTrigger = "rotStage",
+			[ToolParameter(Description = "Stage a weapon and inventory stack on the pawn, then verify conversion preserves them as recoverable zombie inventory and drops them when the zombie dies.", Required = false, DefaultValue = false)] bool recoverableLootProbe = false)
 		{
 			var map = CurrentMap;
 			if (ZombieRuntimeActions.TryFindPawn(map, target, out var pawn, out var error) == false)
@@ -42,6 +43,7 @@ namespace ZombieLand
 			var targetId = ZombieRuntimeActions.StableThingId(pawn);
 			var targetThingId = pawn.ThingID;
 			var targetLabel = pawn.LabelCap;
+			RecoverableLootProbeState stagedRecoverableLoot = null;
 
 			if (ZombieRuntimeActions.AddZombieBite(pawn, stage, out var bite, out error) == false)
 			{
@@ -51,6 +53,7 @@ namespace ZombieLand
 					targetId,
 					targetThingId,
 					targetLabel,
+					recoverableLootProbe = DescribeRecoverableLootProbe(stagedRecoverableLoot, null, false),
 					error
 				};
 			}
@@ -64,6 +67,22 @@ namespace ZombieLand
 					targetThingId,
 					targetLabel,
 					biteLabel = bite.LabelCap,
+					recoverableLootProbe = DescribeRecoverableLootProbe(stagedRecoverableLoot, null, false),
+					error
+				};
+			}
+
+			if (recoverableLootProbe && TryStageRecoverableLootProbe(corpse.InnerPawn, out stagedRecoverableLoot, out error) == false)
+			{
+				return new
+				{
+					success = false,
+					targetId,
+					targetThingId,
+					targetLabel,
+					biteLabel = bite.LabelCap,
+					corpse = DescribeCorpse(corpse),
+					recoverableLootProbe = new { requested = true, error },
 					error
 				};
 			}
@@ -82,6 +101,7 @@ namespace ZombieLand
 					biteLabel = bite.LabelCap,
 					conversionTrigger = normalizedTrigger,
 					corpse = corpseBeforeTrigger,
+					recoverableLootProbe = DescribeRecoverableLootProbe(stagedRecoverableLoot, null, false),
 					error
 				};
 			}
@@ -89,14 +109,17 @@ namespace ZombieLand
 			var corpseAfterTrigger = DescribeCorpse(corpse);
 			var convertedQueuedCorpse = ZombieRuntimeActions.RunQueuedConversion(map, corpse, out var queueCountBeforeRun, out var queueCountAfterRun, out error);
 			var after = CurrentZombies(map);
-			var newZombies = after
+			var newZombiePawns = after
 				.Where(zombie => beforeIds.Contains(ZombieRuntimeActions.StableThingId(zombie)) == false)
+				.ToArray();
+			var recoverableLootEvidence = VerifyRecoverableLootProbe(map, newZombiePawns.OfType<Zombie>().FirstOrDefault(), stagedRecoverableLoot);
+			var newZombies = newZombiePawns
 				.Select(DescribeZombie)
 				.ToArray();
 
 			return new
 			{
-				success = convertedQueuedCorpse && newZombies.Length > 0,
+				success = convertedQueuedCorpse && newZombies.Length > 0 && RecoverableLootProbeSucceeded(recoverableLootEvidence),
 				targetId,
 				targetThingId,
 				targetLabel,
@@ -113,8 +136,171 @@ namespace ZombieLand
 				beforeCount = before.Length,
 				afterCount = after.Length,
 				newZombieCount = newZombies.Length,
+				recoverableLootProbe = recoverableLootEvidence,
 				newZombies
 			};
+		}
+
+		sealed class RecoverableLootProbeState
+		{
+			public ThingWithComps Weapon;
+			public Thing InventoryThing;
+			public string WeaponThingId;
+			public string InventoryThingId;
+			public string WeaponDefName;
+			public string InventoryDefName;
+			public int InventoryCount;
+			public bool WeaponStagedAsEquipment;
+		}
+
+		static bool TryStageRecoverableLootProbe(Pawn pawn, out RecoverableLootProbeState state, out string error)
+		{
+			state = null;
+			error = null;
+			if (pawn?.equipment == null)
+			{
+				error = "Target pawn has no equipment tracker for the recoverable loot probe.";
+				return false;
+			}
+			if (pawn.inventory?.innerContainer == null)
+			{
+				error = "Target pawn has no inventory container for the recoverable loot probe.";
+				return false;
+			}
+
+			var weaponDef = DefDatabase<ThingDef>.GetNamed("Gun_BoltActionRifle", false)
+				?? DefDatabase<ThingDef>.GetNamed("Gun_Pistol", false);
+			var weapon = weaponDef == null ? null : ThingMaker.MakeThing(weaponDef) as ThingWithComps;
+			if (weapon == null)
+			{
+				error = "No Core ranged weapon def was available for the recoverable loot probe.";
+				return false;
+			}
+
+			var inventoryThing = ThingMaker.MakeThing(ThingDefOf.Silver);
+			inventoryThing.stackCount = 7;
+			var weaponStagedAsEquipment = pawn.mindState != null;
+			if (weaponStagedAsEquipment)
+				pawn.equipment.AddEquipment(weapon);
+			else if (pawn.inventory.innerContainer.TryAdd(weapon, false) == false)
+			{
+				weapon.Destroy(DestroyMode.Vanish);
+				inventoryThing.Destroy(DestroyMode.Vanish);
+				error = "Target pawn inventory rejected the staged weapon.";
+				return false;
+			}
+			if (pawn.inventory.innerContainer.TryAdd(inventoryThing, false) == false)
+			{
+				weapon.Destroy(DestroyMode.Vanish);
+				inventoryThing.Destroy(DestroyMode.Vanish);
+				error = "Target pawn inventory rejected the staged silver stack.";
+				return false;
+			}
+
+			state = new RecoverableLootProbeState
+			{
+				Weapon = weapon,
+				InventoryThing = inventoryThing,
+				WeaponThingId = weapon.ThingID,
+				InventoryThingId = inventoryThing.ThingID,
+				WeaponDefName = weapon.def.defName,
+				InventoryDefName = inventoryThing.def.defName,
+				InventoryCount = inventoryThing.stackCount,
+				WeaponStagedAsEquipment = weaponStagedAsEquipment
+			};
+			return true;
+		}
+
+		static object VerifyRecoverableLootProbe(Map map, Zombie zombie, RecoverableLootProbeState staged)
+		{
+			if (staged == null)
+				return new { requested = false, skipped = true };
+			if (zombie == null)
+				return DescribeRecoverableLootProbe(staged, "No ordinary zombie was created for the recoverable loot probe.", false);
+
+			var inventoryThings = zombie.inventory?.innerContainer?.ToArray() ?? Array.Empty<Thing>();
+			var weaponInInventory = inventoryThings.Any(thing => thing.ThingID == staged.WeaponThingId);
+			var inventoryStackInZombie = inventoryThings
+				.Where(thing => thing.ThingID == staged.InventoryThingId)
+				.Sum(thing => thing.stackCount);
+			var inventoryStackInInventory = inventoryStackInZombie >= staged.InventoryCount;
+			var hasEquippedWeapon = zombie.equipment?.Primary != null;
+			var killMap = zombie.Map ?? map;
+			var killPosition = zombie.Position;
+
+			var previousProgramState = Current.ProgramState;
+			try
+			{
+				Current.ProgramState = ProgramState.Entry;
+				zombie.Kill(null);
+			}
+			finally
+			{
+				Current.ProgramState = previousProgramState;
+			}
+
+			var mapThings = killMap?.listerThings?.AllThings.AsEnumerable() ?? Array.Empty<Thing>();
+			var droppedWeapon = mapThings.FirstOrDefault(thing => thing.ThingID == staged.WeaponThingId);
+			var droppedInventoryStacks = mapThings
+				.Where(thing => thing.ThingID == staged.InventoryThingId)
+				.ToArray();
+			var droppedInventoryCount = droppedInventoryStacks.Sum(thing => thing.stackCount);
+
+			return new
+			{
+				requested = true,
+				staged = DescribeRecoverableLootProbe(staged, null, true),
+				zombie = DescribeZombie(zombie),
+				killPosition = ZombieRuntimeActions.DescribeCell(killPosition),
+				hasEquippedWeapon,
+				weaponInInventory,
+				inventoryStackInZombie,
+				inventoryStackInInventory,
+				droppedWeapon = droppedWeapon == null ? null : DescribeThingForRecoverableLootProbe(droppedWeapon),
+				droppedInventory = droppedInventoryStacks.Select(DescribeThingForRecoverableLootProbe).ToArray(),
+				droppedInventoryCount,
+				weaponDropped = droppedWeapon != null,
+				inventoryDropped = droppedInventoryCount >= staged.InventoryCount,
+				success = hasEquippedWeapon == false && weaponInInventory && inventoryStackInInventory && droppedWeapon != null && droppedInventoryCount >= staged.InventoryCount
+			};
+		}
+
+		static object DescribeRecoverableLootProbe(RecoverableLootProbeState staged, string error, bool success)
+		{
+			if (staged == null)
+				return new { requested = false, skipped = true };
+			return new
+			{
+				requested = true,
+				weaponThingId = staged.WeaponThingId,
+				weaponDefName = staged.WeaponDefName,
+				weaponStagedAsEquipment = staged.WeaponStagedAsEquipment,
+				inventoryThingId = staged.InventoryThingId,
+				inventoryDefName = staged.InventoryDefName,
+				inventoryCount = staged.InventoryCount,
+				success,
+				error
+			};
+		}
+
+		static object DescribeThingForRecoverableLootProbe(Thing thing)
+		{
+			return new
+			{
+				thingId = thing?.ThingID,
+				defName = thing?.def?.defName,
+				stackCount = thing?.stackCount ?? 0,
+				spawned = thing?.Spawned ?? false,
+				position = thing == null || thing.Spawned == false ? null : ZombieRuntimeActions.DescribeCell(thing.Position)
+			};
+		}
+
+		static bool RecoverableLootProbeSucceeded(object evidence)
+		{
+			if (evidence == null)
+				return true;
+			var successProperty = evidence.GetType().GetProperty("success");
+			return successProperty == null || successProperty.GetValue(evidence) is not bool success || success;
 		}
 
 		static bool TryTriggerCorpseConversion(Corpse corpse, Map map, string conversionTrigger, out object evidence, out string error)

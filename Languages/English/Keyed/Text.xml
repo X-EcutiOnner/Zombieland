@@ -173,6 +173,8 @@
 	<ZombieMiscTitle>Miscellaneous</ZombieMiscTitle>
 	<UseCustomTextures>Use custom textures</UseCustomTextures>
 	<ReplaceTwinkie>Change survival meals to Twinkies</ReplaceTwinkie>
+	<Zombieland_Twinkie_Label>Twinkie</Zombieland_Twinkie_Label>
+	<Zombieland_Twinkie_Description>A Twinkie is an American snack cake, marketed as a "Golden Sponge Cake with Creamy Filling".</Zombieland_Twinkie_Description>
 	<ZombiesTriggerDangerMusic>Zombies affect danger music</ZombiesTriggerDangerMusic>
 	<PlayCreepyAmbientSound>Play creepy ambient sound at night</PlayCreepyAmbientSound>
 	<BetterZombieAvoidance>Automatic avoidance of zombies</BetterZombieAvoidance>

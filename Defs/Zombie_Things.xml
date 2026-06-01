@@ -194,6 +194,7 @@
 			<li>ExoticMisc</li>
 		</tradeTags>
 		<thingCategories>
+			<li>ResourcesRaw</li>
 			<li>ZombieSerum</li>
 		</thingCategories>
 		<tickerType>Rare</tickerType>

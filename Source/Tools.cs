@@ -81,8 +81,10 @@ namespace ZombieLand
 
 			if (enable)
 			{
-				def.label = "Twinkie";
-				def.description = "A Twinkie is an American snack cake, marketed as a \"Golden Sponge Cake with Creamy Filling\".";
+				var labelKey = "Zombieland_Twinkie_Label";
+				var descriptionKey = "Zombieland_Twinkie_Description";
+				def.label = labelKey.CanTranslate() ? labelKey.Translate().ToString() : "Twinkie";
+				def.description = descriptionKey.CanTranslate() ? descriptionKey.Translate().ToString() : "A Twinkie is an American snack cake, marketed as a \"Golden Sponge Cake with Creamy Filling\".";
 				def.graphicData.cachedGraphic = GraphicsDatabase.twinkieGraphic;
 			}
 			else
@@ -754,6 +756,7 @@ namespace ZombieLand
 							}
 						}
 				}
+				TransferRecoverableLoot(pawn, zombie);
 
 				if (thing is Corpse)
 				{
@@ -789,6 +792,18 @@ namespace ZombieLand
 			});
 			while (it.MoveNext())
 				;
+		}
+
+		static void TransferRecoverableLoot(Pawn pawn, Zombie zombie)
+		{
+			var targetContainer = zombie?.inventory?.innerContainer;
+			if (pawn == null || targetContainer == null)
+				return;
+
+			foreach (var equipment in pawn.equipment?.AllEquipmentListForReading?.ToArray() ?? Array.Empty<ThingWithComps>())
+				_ = targetContainer.TryAddOrTransfer(equipment, equipment.stackCount, false);
+
+			pawn.inventory?.innerContainer?.TryTransferAllToContainer(targetContainer, false);
 		}
 
 		// implement
@@ -1810,6 +1825,9 @@ namespace ZombieLand
 
 		public static void DropLoot(Pawn pawn)
 		{
+			if (pawn.Spawned && pawn.inventory?.innerContainer?.Any == true)
+				_ = pawn.inventory.innerContainer.TryDropAll(pawn.Position, pawn.Map, ThingPlaceMode.Near);
+
 			var f = ZombieSettings.Values.lootExtractAmount;
 			var amount = Mathf.FloorToInt(f);
 			f -= amount;
