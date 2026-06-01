@@ -16,6 +16,7 @@ DEPENDENCY_GATE_SUMMARY=0
 ACTIONABLE_GATES=0
 SOURCE_PATHS=0
 ROW_STATE_SUMMARY=0
+CONSISTENCY_CHECKS=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -52,8 +53,11 @@ while [[ $# -gt 0 ]]; do
 		--row-state-summary)
 			ROW_STATE_SUMMARY=1
 			;;
+		--consistency-checks)
+			CONSISTENCY_CHECKS=1
+			;;
 		--help|-h)
-			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--bridge-tools] [--bridge-summary] [--dependency-gates] [--dependency-gate-summary] [--actionable-gates] [--source-paths] [--row-state-summary] [baseline-commit]\n' "$0"
+			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--bridge-tools] [--bridge-summary] [--dependency-gates] [--dependency-gate-summary] [--actionable-gates] [--source-paths] [--row-state-summary] [--consistency-checks] [baseline-commit]\n' "$0"
 			exit 0
 			;;
 		*)
@@ -475,6 +479,56 @@ for row_type in sorted({row["row_type"] for row in rows}):
 PY
 }
 
+consistency_checks() {
+	local failures=0
+
+	printf 'check\tstatus\tdetails\n'
+
+	if awk -F '\t' 'NR == 1 { expected = NF; next } NF != expected { bad = 1 } END { exit bad }' coverage/ZL_COVERAGE_INDEX.tsv; then
+		printf 'coverage_tsv_shape\tPASS\tall rows have header column count\n'
+	else
+		printf 'coverage_tsv_shape\tFAIL\tone or more rows have a different column count\n'
+		failures=$((failures + 1))
+	fi
+
+	local duplicate_ids
+	duplicate_ids="$(awk -F '\t' 'NR > 1 { count[$1]++ } END { for (id in count) if (count[id] > 1) print id ":" count[id] }' coverage/ZL_COVERAGE_INDEX.tsv | sort)"
+	if [[ -z "$duplicate_ids" ]]; then
+		printf 'coverage_duplicate_ids\tPASS\tno duplicate ids\n'
+	else
+		printf 'coverage_duplicate_ids\tFAIL\t%s\n' "$duplicate_ids"
+		failures=$((failures + 1))
+	fi
+
+	local unassigned_count
+	unassigned_count="$(source_paths | awk -F '\t' 'NR > 1 && $2 != "covered" { count++ } END { print count + 0 }')"
+	if [[ "$unassigned_count" == "0" ]]; then
+		printf 'source_paths_covered\tPASS\t0 unassigned source paths\n'
+	else
+		printf 'source_paths_covered\tFAIL\t%s unassigned source paths\n' "$unassigned_count"
+		failures=$((failures + 1))
+	fi
+
+	local actionable_count
+	actionable_count="$(dependency_gates actionable | awk 'END { print NR + 0 }')"
+	if [[ "$actionable_count" == "0" ]]; then
+		printf 'actionable_gates\tPASS\t0 actionable gates\n'
+	else
+		printf 'actionable_gates\tFAIL\t%s actionable gates\n' "$actionable_count"
+		failures=$((failures + 1))
+	fi
+
+	local patch_summary
+	patch_summary="$(patch_groups | awk -F '\t' 'BEGIN { static = 0; dynamic = 0; base = 0 } $3 == "static" { static++ } $3 == "dynamic" { dynamic++ } $3 == "base" { base++ } END { printf "static=%d dynamic=%d base=%d total=%d", static, dynamic, base, static + dynamic + base }')"
+	printf 'patch_inventory\tPASS\t%s\n' "$patch_summary"
+
+	local bridge_summary_line
+	bridge_summary_line="$(bridge_summary | awk -F '\t' '$1 == "candidate_retire" { print "candidate_retire=" $4 " " $5 }')"
+	printf 'bridge_retirement_candidates\tPASS\t%s\n' "$bridge_summary_line"
+
+	return "$failures"
+}
+
 if [[ "$PATCH_GROUPS" == "1" ]]; then
 	printf 'location\tclass\ttargeting\tpatch_attributes\n'
 	patch_groups
@@ -625,6 +679,11 @@ fi
 if [[ "$ROW_STATE_SUMMARY" == "1" ]]; then
 	row_state_summary
 	exit 0
+fi
+
+if [[ "$CONSISTENCY_CHECKS" == "1" ]]; then
+	consistency_checks
+	exit $?
 fi
 
 section() {
