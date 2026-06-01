@@ -9,6 +9,12 @@ Authoritative project state remains:
 3. `TEST_PATCH_AUDIT.md` and `scripts/coverage-inventory.sh` for local Harmony patch inventory.
 4. Current local source, local save files, RimWorld logs, decompiler member checks, and live RimBridge/GABS results.
 
+Useful inventory views:
+
+- `scripts/coverage-inventory.sh --dependency-gates` for the compact current queue of unresolved, dependency-gated, or intentionally documented partial rows.
+- `scripts/coverage-inventory.sh --row-state-summary` for row-type, evidence-state, and port-delta counts before editing summary reports.
+- `scripts/coverage-inventory.sh --bridge-summary` before bridge-tool edits, so new tools are weighed against existing generic primitives and scenario fixtures.
+
 Use `ZL_COVERAGE_INDEX.tsv` to choose and de-duplicate future work:
 
 - `row_type` separates feature, patch, scenario, def, integration, bridge, and negative-space rows.
@@ -18,4 +24,3 @@ Use `ZL_COVERAGE_INDEX.tsv` to choose and de-duplicate future work:
 - `duplicate_guard` explains what the row owns, which helps avoid retesting behavior already owned by another row.
 
 Operating rule: consult this index at the start of a new coverage slice or when the next target is unclear. Do not interrupt an active named scenario just because the index contains a different high-priority row. Finish or explicitly park the current scenario with a hard session boundary first.
-

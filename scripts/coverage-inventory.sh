@@ -13,6 +13,7 @@ BRIDGE_TOOLS=0
 BRIDGE_SUMMARY=0
 DEPENDENCY_GATES=0
 SOURCE_PATHS=0
+ROW_STATE_SUMMARY=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -40,8 +41,11 @@ while [[ $# -gt 0 ]]; do
 		--source-paths)
 			SOURCE_PATHS=1
 			;;
+		--row-state-summary)
+			ROW_STATE_SUMMARY=1
+			;;
 		--help|-h)
-			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--bridge-tools] [--bridge-summary] [--dependency-gates] [--source-paths] [baseline-commit]\n' "$0"
+			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--bridge-tools] [--bridge-summary] [--dependency-gates] [--source-paths] [--row-state-summary] [baseline-commit]\n' "$0"
 			exit 0
 			;;
 		*)
@@ -408,6 +412,31 @@ for path in source_paths:
 PY
 }
 
+row_state_summary() {
+	python3 - <<'PY'
+import collections
+import csv
+from pathlib import Path
+import signal
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+with Path("coverage/ZL_COVERAGE_INDEX.tsv").open(newline="") as handle:
+	rows = list(csv.DictReader(handle, delimiter="\t"))
+print("section\trow_type\tstate_kind\tstate\tcount")
+
+for row_type, count in sorted(collections.Counter(row["row_type"] for row in rows).items()):
+	print(f"row_type\t{row_type}\ttotal\tall\t{count}")
+
+for row_type in sorted({row["row_type"] for row in rows}):
+	subset = [row for row in rows if row["row_type"] == row_type]
+	for state, count in sorted(collections.Counter(row["evidence_state"] for row in subset).items()):
+		print(f"evidence_state\t{row_type}\tevidence_state\t{state}\t{count}")
+	for state, count in sorted(collections.Counter(row["port_delta_state"] for row in subset).items()):
+		print(f"port_delta_state\t{row_type}\tport_delta_state\t{state}\t{count}")
+PY
+}
+
 if [[ "$PATCH_GROUPS" == "1" ]]; then
 	printf 'location\tclass\ttargeting\tpatch_attributes\n'
 	patch_groups
@@ -540,6 +569,11 @@ fi
 
 if [[ "$SOURCE_PATHS" == "1" ]]; then
 	source_paths
+	exit 0
+fi
+
+if [[ "$ROW_STATE_SUMMARY" == "1" ]]; then
+	row_state_summary
 	exit 0
 fi
 
