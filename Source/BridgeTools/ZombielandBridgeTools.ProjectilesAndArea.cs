@@ -20,7 +20,7 @@ namespace ZombieLand
 		public static object AreaWorkflowState(
 			[ToolParameter(Description = "Create or refresh reusable allowed areas for every Zombieland risk mode.", Required = false, DefaultValue = false)] bool setupFixture = false,
 			[ToolParameter(Description = "Open RimWorld's real Manage Areas dialog after preparing the selected Zombieland area.", Required = false, DefaultValue = false)] bool openManageDialog = false,
-			[ToolParameter(Description = "Optional scenario action, such as read, behavior, ranged-projectiles, ce-compat, or warning-ui.", Required = false, DefaultValue = "read")] string actionMode = "read")
+			[ToolParameter(Description = "Optional scenario action, such as read, behavior, ranged-projectiles, ce-ranged-projectiles, ce-compat, or warning-ui.", Required = false, DefaultValue = "read")] string actionMode = "read")
 		{
 			var map = CurrentMap;
 			if (map == null)
@@ -58,6 +58,8 @@ namespace ZombieLand
 				action = RunAreaWorkflowTargeting(map);
 			else if (normalizedActionMode == "ranged-projectiles")
 				action = RunAreaWorkflowRangedProjectiles(map);
+			else if (normalizedActionMode == "ce-ranged-projectiles")
+				action = RunAreaWorkflowCeRangedProjectiles(map);
 			else if (normalizedActionMode == "danger-flee")
 				action = RunAreaWorkflowDangerFlee(map);
 			else if (normalizedActionMode == "smart-melee")
@@ -100,7 +102,7 @@ namespace ZombieLand
 				{
 					success = false,
 					actionMode,
-					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, ce-compat, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, visual-support, or warning-ui."
+					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, ce-ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, ce-compat, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, visual-support, or warning-ui."
 				};
 			}
 			var actionSucceeded = normalizedActionMode == "read"
@@ -1783,6 +1785,20 @@ namespace ZombieLand
 			try
 			{
 				return VerifyAreaWorkflowCeCompat(map, spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowCeRangedProjectiles(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowCeRangedProjectiles(map, new IntVec3(126, 0, 113), spawnedThings);
 			}
 			finally
 			{
@@ -4344,6 +4360,294 @@ namespace ZombieLand
 			{
 				return ex.GetBaseException().Message;
 			}
+		}
+
+		static object VerifyAreaWorkflowCeRangedProjectiles(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var projectileCeType = AccessTools.TypeByName("CombatExtended.ProjectileCE");
+			var verbShootCeType = AccessTools.TypeByName("CombatExtended.Verb_ShootCE");
+			var verbLaunchProjectileCeType = AccessTools.TypeByName("CombatExtended.Verb_LaunchProjectileCE");
+			var compAmmoUserType = AccessTools.TypeByName("CombatExtended.CompAmmoUser");
+			var skipMissing = FindNestedPatchMethod("Verb_LaunchProjectile_TryCastShot_Patch", "SkipMissingShotsAtZombies");
+			if (projectileCeType == null || verbShootCeType == null || verbLaunchProjectileCeType == null || compAmmoUserType == null || skipMissing == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Combat Extended verb/projection types or the Zombieland ranged helper were not loaded.",
+					reflection = new
+					{
+						projectileCe = projectileCeType?.FullName,
+						verbShootCe = verbShootCeType?.FullName,
+						verbLaunchProjectileCe = verbLaunchProjectileCeType?.FullName,
+						compAmmoUser = compAmmoUserType?.FullName,
+						skipMissingFound = skipMissing != null
+					}
+				};
+			}
+
+			var settingsSnapshot = SnapshotZombieSettings();
+			var oldColonistsHitChance = Constants.COLONISTS_HIT_ZOMBIES_CHANCE;
+			try
+			{
+				ApplyZombieSettingsOverride(settings =>
+				{
+					settings.threatScale = 1f;
+					settings.zombieInstinct = ZombieInstinct.Normal;
+				});
+				Constants.COLONISTS_HIT_ZOMBIES_CHANCE = 1f;
+
+				if (TryFindClearSpawnCell(map, root, 16f, out var shooterCell, out var shooterError) == false)
+					return shooterError;
+				var targetCell = GenRadial.RadialCellsAround(shooterCell, 10f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetFirstPawn(map) == null)
+					.Where(cell => cell.DistanceTo(shooterCell) >= 5f)
+					.Where(cell => GenSight.LineOfSight(shooterCell, cell, map, true))
+					.OrderBy(cell => cell.DistanceToSquared(shooterCell))
+					.FirstOrDefault();
+				if (targetCell.IsValid == false)
+				{
+					return new
+					{
+						success = false,
+						shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
+						error = "No clear line-of-sight CE target cell was found."
+					};
+				}
+
+				var shooter = SpawnArmedAreaWorkflowPawn(map, "ZL_Area_CERangedShooter", shooterCell, Faction.OfPlayer, spawnedThings);
+				var zombie = SpawnTargetZombie(map, targetCell, ZombieType.Normal, "ZL_Area_CERangedZombie", spawnedThings);
+				var verb = shooter?.equipment?.PrimaryEq?.PrimaryVerb;
+				var weapon = shooter?.equipment?.Primary as ThingWithComps;
+				var compAmmo = FindCompAssignableTo(weapon, compAmmoUserType);
+				var ammoSetup = SetupCeAmmoForShot(compAmmo, compAmmoUserType);
+				if (shooter == null || zombie == null || verb == null || weapon == null)
+				{
+					return new
+					{
+						success = false,
+						shooter = DescribePawn(shooter),
+						zombie = DescribeZombie(zombie),
+						verb = DescribeVerb(verb),
+						weaponDef = weapon?.def?.defName,
+						error = "Could not create CE ranged projectile fixtures."
+					};
+				}
+
+				var isCeShootVerb = verbShootCeType.IsInstanceOfType(verb);
+				var isCeLaunchVerb = verbLaunchProjectileCeType.IsInstanceOfType(verb);
+				var vanillaSkipMissingApplies = (bool)skipMissing.Invoke(null, new object[] { verb, new LocalTargetInfo(zombie) });
+
+				const float radius = 16f;
+				ClearPheromones(map, shooterCell, radius);
+				var pheromonesBefore = SnapshotPheromones(map, shooterCell, radius);
+				var projectilesBefore = map.listerThings.AllThings
+					.Where(thing => projectileCeType.IsInstanceOfType(thing))
+					.Select(thing => thing.ThingID)
+					.ToHashSet();
+				var ammoBefore = ReadCeAmmoCount(compAmmo, compAmmoUserType);
+				var injuryBefore = TotalInjurySeverity(zombie);
+
+				verb.currentTarget = new LocalTargetInfo(zombie);
+				verb.canHitNonTargetPawnsNow = true;
+				object castError = null;
+				var castResult = false;
+				try
+				{
+					Rand.PushState(197504);
+					castResult = verb.TryCastShot();
+				}
+				catch (Exception ex)
+				{
+					castError = ex.GetBaseException().Message;
+				}
+				finally
+				{
+					Rand.PopState();
+				}
+
+				var launchedProjectile = map.listerThings.AllThings
+					.Where(thing => projectileCeType.IsInstanceOfType(thing))
+					.FirstOrDefault(thing => projectilesBefore.Contains(thing.ThingID) == false);
+				if (launchedProjectile != null)
+					spawnedThings.Add(launchedProjectile);
+
+				var pheromoneChange = DescribePheromoneChange(map, pheromonesBefore, out var changedCount);
+				var ammoAfter = ReadCeAmmoCount(compAmmo, compAmmoUserType);
+				var intendedTarget = AccessTools.Field(projectileCeType, "intendedTarget")?.GetValue(launchedProjectile);
+				var destination = AccessTools.Field(projectileCeType, "Destination")?.GetValue(launchedProjectile);
+				var exactPosition = AccessTools.Property(projectileCeType, "ExactPosition")?.GetValue(launchedProjectile);
+				var intendedTargetIsZombie = IntendedTargetMatchesThing(intendedTarget, zombie);
+				var destinationCell = destination is Vector2 vector ? new IntVec3(Mathf.RoundToInt(vector.x), 0, Mathf.RoundToInt(vector.y)) : IntVec3.Invalid;
+
+				var ticksRun = 0;
+				var injuryChangedTick = -1;
+				for (; ticksRun < 90 && launchedProjectile != null && launchedProjectile.Destroyed == false; ticksRun++)
+				{
+					AdvanceGameTicks(1);
+					if (TotalInjurySeverity(zombie) > injuryBefore || zombie.Dead)
+					{
+						injuryChangedTick = ticksRun + 1;
+						break;
+					}
+				}
+				var injuryAfter = TotalInjurySeverity(zombie);
+
+				return new
+				{
+					success = isCeShootVerb
+						&& isCeLaunchVerb
+						&& vanillaSkipMissingApplies == false
+						&& ObjectSuccess(ammoSetup)
+						&& castError == null
+						&& castResult
+						&& launchedProjectile != null
+						&& intendedTargetIsZombie
+						&& changedCount > 0
+						&& ammoAfter < ammoBefore,
+					ceTypes = new
+					{
+						projectileCe = projectileCeType.FullName,
+						verbShootCe = verbShootCeType.FullName,
+						verbLaunchProjectileCe = verbLaunchProjectileCeType.FullName,
+						compAmmoUser = compAmmoUserType.FullName
+					},
+					patchTargets = new
+					{
+						vanillaLaunchProjectile = PatchedMethodsForPatchClass("Verb_LaunchProjectile_TryCastShot_Patch"),
+						ceProjectileLaunch = PatchedMethodsForPatchClass("CETools_Patch2")
+					},
+					shooter = DescribePawn(shooter),
+					zombie = DescribeZombie(zombie),
+					weapon = new
+					{
+						def = weapon.def?.defName,
+						compAmmoType = compAmmo?.GetType().FullName,
+						ammoSetup,
+						ammoBefore,
+						ammoAfter,
+						ammoDelta = ammoAfter - ammoBefore
+					},
+					verb = DescribeVerb(verb),
+					ceVerb = new
+					{
+						isCeShootVerb,
+						isCeLaunchVerb,
+						vanillaSkipMissingApplies,
+						note = "CE Verb_ShootCE does not inherit Verse.Verb_LaunchProjectile, so the vanilla forced-miss helper is intentionally a boundary rather than CE proof."
+					},
+					cast = new
+					{
+						castResult,
+						castError,
+						projectileDef = launchedProjectile?.def?.defName,
+						projectileType = launchedProjectile?.GetType().FullName,
+						intendedTargetIsZombie,
+						destination = destination == null ? null : destination.ToString(),
+						destinationCell = destinationCell.IsValid ? ZombieRuntimeActions.DescribeCell(destinationCell) : null,
+						exactPosition = exactPosition == null ? null : exactPosition.ToString()
+					},
+					pheromones = new
+					{
+						changedCount,
+						change = pheromoneChange
+					},
+					impactWindow = new
+					{
+						ticksRun,
+						injuryChangedTick,
+						injuryBefore,
+						injuryAfter,
+						injuryDelta = injuryAfter - injuryBefore,
+						zombieDead = zombie.Dead,
+						projectileStillSpawned = launchedProjectile?.Spawned == true && launchedProjectile.Destroyed == false
+					}
+				};
+			}
+			finally
+			{
+				Constants.COLONISTS_HIT_ZOMBIES_CHANCE = oldColonistsHitChance;
+				RestoreZombieSettings(settingsSnapshot);
+			}
+		}
+
+		static ThingComp FindCompAssignableTo(ThingWithComps thing, Type compType)
+		{
+			if (thing == null || compType == null)
+				return null;
+			return thing.AllComps?.FirstOrDefault(comp => compType.IsInstanceOfType(comp));
+		}
+
+		static object SetupCeAmmoForShot(object compAmmo, Type compAmmoUserType)
+		{
+			var magSize = AccessTools.Property(compAmmoUserType, "MagSize");
+			var curMagCount = AccessTools.Property(compAmmoUserType, "CurMagCount");
+			var hasMagazine = AccessTools.Property(compAmmoUserType, "HasMagazine");
+			var resetAmmoCount = AccessTools.Method(compAmmoUserType, "ResetAmmoCount");
+			if (compAmmo == null || magSize == null || curMagCount == null || hasMagazine == null)
+			{
+				return new
+				{
+					success = false,
+					compAmmoType = compAmmo?.GetType().FullName,
+					reflection = new
+					{
+						magSize = magSize != null,
+						curMagCount = curMagCount != null,
+						hasMagazine = hasMagazine != null,
+						resetAmmoCount = resetAmmoCount != null
+					}
+				};
+			}
+
+			object resetError = null;
+			try
+			{
+				resetAmmoCount?.Invoke(compAmmo, new object[] { null });
+			}
+			catch (Exception ex)
+			{
+				resetError = ex.GetBaseException().Message;
+			}
+
+			var hasMagazineValue = (bool)hasMagazine.GetValue(compAmmo);
+			var magSizeValue = Convert.ToInt32(magSize.GetValue(compAmmo));
+			var targetCount = Math.Max(3, Math.Min(8, magSizeValue > 0 ? magSizeValue : 8));
+			if (hasMagazineValue)
+				curMagCount.SetValue(compAmmo, targetCount);
+			var currentCount = Convert.ToInt32(curMagCount.GetValue(compAmmo));
+
+			return new
+			{
+				success = resetError == null && hasMagazineValue && currentCount >= 3,
+				compAmmoType = compAmmo.GetType().FullName,
+				hasMagazine = hasMagazineValue,
+				magSize = magSizeValue,
+				targetCount,
+				currentCount,
+				resetError
+			};
+		}
+
+		static int ReadCeAmmoCount(object compAmmo, Type compAmmoUserType)
+		{
+			var curMagCount = AccessTools.Property(compAmmoUserType, "CurMagCount");
+			if (compAmmo == null || curMagCount == null)
+				return -1;
+			return Convert.ToInt32(curMagCount.GetValue(compAmmo));
+		}
+
+		static bool IntendedTargetMatchesThing(object intendedTarget, Thing thing)
+		{
+			if (intendedTarget == null || thing == null)
+				return false;
+			var type = intendedTarget.GetType();
+			var hasThing = AccessTools.Property(type, "HasThing")?.GetValue(intendedTarget) as bool?;
+			var targetThing = AccessTools.Property(type, "Thing")?.GetValue(intendedTarget) as Thing;
+			return hasThing == true && targetThing == thing;
 		}
 
 		static object VerifyCeSpitterAfterArmorDamage(Map map, IntVec3 root, Type armorUtilityCeType, List<Thing> spawnedThings)
