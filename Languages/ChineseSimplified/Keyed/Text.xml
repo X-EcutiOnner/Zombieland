@@ -229,6 +229,7 @@
 	<ShowHealthBar>僵尸健康酒吧</ShowHealthBar>
 	<ShowZombieStats>显示僵尸统计信息</ShowZombieStats>
 
+	<SnowAndSandClear>清除雪和沙</SnowAndSandClear>
 	<ShowZombieRisk>显示僵尸风险</ShowZombieRisk>
 	<ColonistInside>里面的殖民者</ColonistInside>
 	<ColonistOutside>外面的殖民者</ColonistOutside>

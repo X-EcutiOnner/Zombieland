@@ -229,6 +229,7 @@
 	<ShowHealthBar>Barre de santé de zombies</ShowHealthBar>
 	<ShowZombieStats>Afficher les statistiques des zombies</ShowZombieStats>
 
+	<SnowAndSandClear>Déneigement et désensablement</SnowAndSandClear>
 	<ShowZombieRisk>Afficher le risque zombie</ShowZombieRisk>
 	<ColonistInside>Colon à l'intérieur</ColonistInside>
 	<ColonistOutside>Colon dehors</ColonistOutside>

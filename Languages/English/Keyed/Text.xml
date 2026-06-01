@@ -243,6 +243,7 @@
 	<ShowHealthBar>Zombie health bars</ShowHealthBar>
 	<ShowZombieStats>Show zombie statistics</ShowZombieStats>
 
+	<SnowAndSandClear>Snow and sand clear</SnowAndSandClear>
 	<ShowZombieRisk>Show zombie risk</ShowZombieRisk>
 	<ColonistInside>Colonist inside</ColonistInside>
 	<ColonistOutside>Colonist outside</ColonistOutside>
