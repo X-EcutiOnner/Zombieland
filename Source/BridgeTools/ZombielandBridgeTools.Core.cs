@@ -210,8 +210,10 @@ namespace ZombieLand
 					new[]
 					{
 						ExternalMemberTypeMethod("shipInteriorIsHologram", "SaveOurShip2.ShipInteriorMod2", "IsHologram"),
-						ExternalMemberStringMethod("shipCombatGenerateShip", "RimWorld.ShipCombatManager:GenerateShip"),
-						ExternalMemberStringMethod("spaceSubMeshGenerateMesh", "SaveOurShip2.GenerateSpaceSubMesh:GenerateMesh")
+						ExternalMemberStringMethod("shipInteriorGenerateShip", "SaveOurShip2.ShipInteriorMod2:GenerateShip"),
+						ExternalMemberStringMethod("legacyShipCombatGenerateShip", "RimWorld.ShipCombatManager:GenerateShip"),
+						ExternalMemberStringMethod("spaceSubMeshPrefix", "SaveOurShip2.GenerateSpaceSubMesh:Prefix"),
+						ExternalMemberStringMethod("legacySpaceSubMeshGenerateMesh", "SaveOurShip2.GenerateSpaceSubMesh:GenerateMesh")
 					},
 					PatchedMethodsForPatchClass("RimWorld_ShipCombatManager_GenerateShip_Patch")
 						.Concat(PatchedMethodsForPatchClass("SaveOurShip2_GenerateSpaceSubMesh_GenerateMesh_Patch"))

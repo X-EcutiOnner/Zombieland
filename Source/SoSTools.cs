@@ -138,11 +138,27 @@ namespace ZombieLand
 	static class RimWorld_ShipCombatManager_GenerateShip_Patch
 	{
 		static bool Prepare() => TargetMethod() != null;
-		static MethodBase TargetMethod() => AccessTools.Method("RimWorld.ShipCombatManager:GenerateShip");
+		static MethodBase TargetMethod()
+			=> AccessTools.Method("SaveOurShip2.ShipInteriorMod2:GenerateShip")
+				?? AccessTools.Method("RimWorld.ShipCombatManager:GenerateShip");
 
-		static void Postfix(Map map, TradeShip tradeShip, Faction fac, Lord lord)
+		static void Postfix(MethodBase __originalMethod, object[] __args)
 		{
-			if (tradeShip != null)
+			if (__originalMethod == null || __args == null)
+				return;
+
+			var currentSosTarget = __originalMethod.DeclaringType?.FullName == "SaveOurShip2.ShipInteriorMod2";
+			if (__args.Length <= (currentSosTarget ? 4 : 3))
+				return;
+
+			var map = __args[currentSosTarget ? 1 : 0] as Map;
+			var passingShip = __args[currentSosTarget ? 2 : 1];
+			var fac = __args[currentSosTarget ? 3 : 2] as Faction;
+			var lord = __args[currentSosTarget ? 4 : 3] as Lord;
+
+			if (map == null || lord == null)
+				return;
+			if (passingShip != null)
 				return;
 			if (fac == Faction.OfPlayer)
 				return;
@@ -151,7 +167,10 @@ namespace ZombieLand
 			if (ZombieWeather.GetThreatLevel(map) == 0f)
 				return;
 
-			var pawns = lord.ownedPawns.Where(p => p.RaceProps.Humanlike && p?.Faction.IsPlayerSafe() == false).ToList();
+			var pawns = lord.ownedPawns.Where(p => p?.RaceProps?.Humanlike == true && (p.Faction?.IsPlayerSafe() ?? false) == false).ToList();
+			if (pawns.Count == 0)
+				return;
+
 			var turned = pawns.Take(Rand.Range(0, pawns.Count)).ToList();
 			foreach (var pawn in turned)
 			{
@@ -176,7 +195,7 @@ namespace ZombieLand
 					zombie.state = ZombieState.Wandering;
 					zombie.Rotation = Rot4.Random;
 
-					var tickManager = Find.CurrentMap.GetComponent<TickManager>();
+					var tickManager = map.GetComponent<TickManager>();
 					_ = tickManager.allZombiesCached.Add(zombie);
 				}
 			}
@@ -189,7 +208,9 @@ namespace ZombieLand
 	static class SaveOurShip2_GenerateSpaceSubMesh_GenerateMesh_Patch
 	{
 		static bool Prepare() => TargetMethod() != null;
-		static MethodBase TargetMethod() => AccessTools.Method("SaveOurShip2.GenerateSpaceSubMesh:GenerateMesh");
+		static MethodBase TargetMethod()
+			=> AccessTools.Method("SaveOurShip2.GenerateSpaceSubMesh:Prefix")
+				?? AccessTools.Method("SaveOurShip2.GenerateSpaceSubMesh:GenerateMesh");
 
 		public static void PrintMeshWithChangedAltitute(SectionLayer layer, Matrix4x4 tsr, Mesh mesh, Material mat)
 		{
