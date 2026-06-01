@@ -54,7 +54,7 @@ namespace ZombieLand
 		public bool OnWall()
 		{
 			var edifice = Map?.edificeGrid[Position];
-			return edifice is not null and Building;
+			return edifice is not null;
 		}
 
 		public bool HasValidRoom()
