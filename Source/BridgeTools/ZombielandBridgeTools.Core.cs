@@ -400,15 +400,20 @@ namespace ZombieLand
 		static object DescribeOptionalIntegration(string name, string packageId, HashSet<string> activePackageSet, OptionalMemberSnapshot[] members, object[] patchTargets)
 		{
 			var packageActive = activePackageSet.Contains(packageId);
-			var dependencyPresent = members.Any(member => member.typePresent || member.methodPresent || member.fieldPresent);
-			var missingMembers = dependencyPresent
+			var dependencyMembers = members
+				.Where(member => member.internalSupport == false)
+				.ToArray();
+			var dependencyPresent = dependencyMembers.Any(member => member.typePresent || member.methodPresent || member.fieldPresent);
+			var missingMembers = packageActive
 				? members.Where(member => member.success == false).ToArray()
-				: Array.Empty<OptionalMemberSnapshot>();
+				: dependencyPresent
+					? dependencyMembers.Where(member => member.success == false).ToArray()
+					: Array.Empty<OptionalMemberSnapshot>();
 			return new
 			{
 				success = packageActive
 					? dependencyPresent && missingMembers.Length == 0
-					: dependencyPresent == false || missingMembers.Length == 0,
+					: missingMembers.Length == 0,
 				name,
 				packageId,
 				packageActive,
@@ -616,6 +621,7 @@ namespace ZombieLand
 				memberName = methodName,
 				typePresent = type != null,
 				methodPresent = method != null,
+				internalSupport = true,
 				resolvedMember = method?.FullDescription()
 			};
 		}
@@ -629,6 +635,7 @@ namespace ZombieLand
 			public bool typePresent;
 			public bool methodPresent;
 			public bool fieldPresent;
+			public bool internalSupport;
 			public string resolvedMember;
 		}
 
