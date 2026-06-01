@@ -19,7 +19,7 @@ Use `scripts/coverage-inventory.sh --dependency-gates` as the compact current-st
 - negative_space: 1
 - patch: 290
 - scenario: 18
-- supporting_infra: 25
+- supporting_infra: 24
 
 ### By owner_cluster
 
@@ -40,18 +40,18 @@ Use `scripts/coverage-inventory.sh --dependency-gates` as the compact current-st
 - settings: 15
 - social: 11
 - startup: 17
-- supporting_infra: 5
+- supporting_infra: 4
 - ui: 20
 
 ## 3. Source files covered vs unassigned
 
-Original generated source inventory size: 136 files. Local reconciliation on 2026-05-31 with `find Source -type f -name '*.cs' -not -path '*/obj/*'` found 154 non-obj source files in the current checkout.
+Original generated source inventory size: 136 files. Local reconciliation on 2026-05-31 with `find Source -type f -name '*.cs' -not -path '*/obj/*'` found 153 non-obj source files in the current checkout.
 
 Original backstop source rows created: 14. The broad `Constants` and `Tools` rows were split into named source sub-surface rows on 2026-05-31, and the debug-action source received an explicit source/decompiler disposition on 2026-06-01, so the current index has 24 `SRC.*` rows. These are not meant to inflate behavior coverage; they are guardrails for files or helper sub-surfaces that were discovered but not otherwise named by a feature, patch, integration, or bridge row.
 
-The 2026-05-31 source-backstop cleanup resolved all 23 then-current `SRC.*` rows, and the 2026-06-01 debug-action pass resolved `SRC.DebugActions`. `BrainzThought`, `ColonyEvaluation`, `ColorData`, `CountingCache`, `Debouncer`, `DebugActions`, `Dialog_ErrorMessage`, `DisposableMaterial`, `DistanceComparer`, `Gas`, `Rubble`, `VictimHead`, `ZombieRemover`, all `Constants.*` rows, and all `Tools.*` rows now point at existing feature/scenario owners or, for `SRC.Tools.HarmonyIL`, the patch-inventory owner. The remaining uncertainty is patch-row granularity, not unassigned source ownership.
+The 2026-05-31 source-backstop cleanup resolved all 23 then-current `SRC.*` rows, and the 2026-06-01 debug-action pass resolved `SRC.DebugActions`. `BrainzThought`, `ColonyEvaluation`, `ColorData`, `CountingCache`, `Debouncer`, `DebugActions`, `Dialog_ErrorMessage`, `DisposableMaterial`, `DistanceComparer`, `Rubble`, `VictimHead`, `ZombieRemover`, all `Constants.*` rows, and all `Tools.*` rows now point at existing feature/scenario owners or, for `SRC.Tools.HarmonyIL`, the patch-inventory owner. The remaining uncertainty is patch-row granularity, not unassigned source ownership.
 
-The local reconciliation removed the original "possible undiscovered source" uncertainty. A follow-up exact-path reconciliation assigned every non-obj `Source/*.cs` file to `ZL_COVERAGE_INDEX.tsv` either through a feature row, bridge row, integration row, or supporting-infra/source-backstop row. `scripts/coverage-inventory.sh --source-paths` now verifies this directly; the 2026-06-01 refresh reports 154 covered source paths and 0 unassigned paths.
+The local reconciliation removed the original "possible undiscovered source" uncertainty. A follow-up exact-path reconciliation assigned every non-obj `Source/*.cs` file to `ZL_COVERAGE_INDEX.tsv` either through a feature row, bridge row, integration row, or supporting-infra/source-backstop row. `scripts/coverage-inventory.sh --source-paths` now verifies this directly; the 2026-06-01 refresh reports 153 covered source paths and 0 unassigned paths.
 
 ## 4. Harmony patch count and coverage state
 
