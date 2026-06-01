@@ -77,7 +77,7 @@ namespace ZombieLand
 
 		static void Postfix(Thing launcher, Vector2 origin, float shotAngle, float shotHeight, float shotSpeed)
 		{
-			if (launcher is not Pawn pawn)
+			if (launcher is not Pawn pawn || launcher is ZombieSpitter)
 				return;
 			if (launcher.Map == null)
 				return;
@@ -141,8 +141,12 @@ namespace ZombieLand
 					var diff = ZombieSettings.Values.spitterThreat;
 					armorDeflected = Rand.Range(0, 5.1f) < diff;
 					dinfo.SetAmount(dmgAmount / (1 + 10 * diff));
+					armorReduced = dinfo.Amount < dmgAmount;
+					originalDinfo = dinfo;
+					__result = dinfo;
+					return false;
 				}
-				return armorDeflected;
+				return true;
 			}
 			var prefixResult = 0f;
 			var result = ArmorUtility_GetPostArmorDamage_Patch.Prefix(pawn, ref dmgAmount, hitPart, dinfo.ArmorPenetrationInt, out var deflect, out var diminish, ref prefixResult);

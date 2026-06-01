@@ -20,7 +20,7 @@ namespace ZombieLand
 		public static object AreaWorkflowState(
 			[ToolParameter(Description = "Create or refresh reusable allowed areas for every Zombieland risk mode.", Required = false, DefaultValue = false)] bool setupFixture = false,
 			[ToolParameter(Description = "Open RimWorld's real Manage Areas dialog after preparing the selected Zombieland area.", Required = false, DefaultValue = false)] bool openManageDialog = false,
-			[ToolParameter(Description = "Optional scenario action: read or behavior.", Required = false, DefaultValue = "read")] string actionMode = "read")
+			[ToolParameter(Description = "Optional scenario action, such as read, behavior, ranged-projectiles, ce-compat, or warning-ui.", Required = false, DefaultValue = "read")] string actionMode = "read")
 		{
 			var map = CurrentMap;
 			if (map == null)
@@ -68,6 +68,8 @@ namespace ZombieLand
 				action = RunAreaWorkflowSpecialMeleeVerbs(map);
 			else if (normalizedActionMode == "special-damage")
 				action = RunAreaWorkflowSpecialDamage(map);
+			else if (normalizedActionMode == "ce-compat")
+				action = RunAreaWorkflowCeCompat(map);
 			else if (normalizedActionMode == "electrifier-melee-damage")
 				action = RunAreaWorkflowElectrifierMeleeDamage(map);
 			else if (normalizedActionMode == "animal-response")
@@ -98,7 +100,7 @@ namespace ZombieLand
 				{
 					success = false,
 					actionMode,
-					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, visual-support, or warning-ui."
+					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, ce-compat, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, visual-support, or warning-ui."
 				};
 			}
 			var actionSucceeded = normalizedActionMode == "read"
@@ -1767,6 +1769,20 @@ namespace ZombieLand
 			try
 			{
 				return VerifyAreaWorkflowSpecialDamage(map, new IntVec3(104, 0, 136), spawnedThings);
+			}
+			finally
+			{
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowCeCompat(Map map)
+		{
+			var spawnedThings = new List<Thing>();
+			try
+			{
+				return VerifyAreaWorkflowCeCompat(map, spawnedThings);
 			}
 			finally
 			{
@@ -4068,6 +4084,414 @@ namespace ZombieLand
 			finally
 			{
 				ZombieSettings.Values.spitterThreat = oldSpitterThreat;
+			}
+		}
+
+		static object VerifyAreaWorkflowCeCompat(Map map, List<Thing> spawnedThings)
+		{
+			var settingsSnapshot = SnapshotZombieSettings();
+			try
+			{
+				ApplyZombieSettingsOverride(settings =>
+				{
+					settings.spitterThreat = 1f;
+					settings.zombieInstinct = ZombieInstinct.Normal;
+					settings.reducedTurretConsumption = 1f;
+				});
+
+				var projectileCeType = AccessTools.TypeByName("CombatExtended.ProjectileCE");
+				var armorRerouteType = AccessTools.TypeByName("CombatExtended.HarmonyCE.Harmony_DamageWorker_AddInjury_ApplyDamageToPart")
+					?? AccessTools.TypeByName("CombatExtended.Harmony.Harmony_DamageWorker_AddInjury_ApplyDamageToPart");
+				var armorUtilityCeType = AccessTools.TypeByName("CombatExtended.ArmorUtilityCE");
+				var compAmmoUserType = AccessTools.TypeByName("CombatExtended.CompAmmoUser");
+				var ceTypesPresent = projectileCeType != null && armorRerouteType != null && armorUtilityCeType != null && compAmmoUserType != null;
+
+				if (FindAreaWorkflowCells(map, new IntVec3(118, 0, 118), 5, 24f, out var cells, out var cellError) == false)
+					return cellError;
+
+				var surgicalCut = VerifyCeSurgicalCutArmorReroute(armorRerouteType);
+				var projectileNoise = VerifyCeProjectileNoise(map, cells[0], projectileCeType, spawnedThings);
+				var spitterArmor = VerifyCeSpitterAfterArmorDamage(map, cells[2], armorUtilityCeType, spawnedThings);
+				var turretAmmo = VerifyCeTurretAmmoReduction(map, cells[4], compAmmoUserType, spawnedThings);
+
+				return new
+				{
+					success = ceTypesPresent
+						&& ObjectSuccess(surgicalCut)
+						&& ObjectSuccess(projectileNoise)
+						&& ObjectSuccess(spitterArmor)
+						&& ObjectSuccess(turretAmmo),
+					ceTypes = new
+					{
+						projectileCe = projectileCeType?.FullName,
+						armorReroute = armorRerouteType?.FullName,
+						armorUtilityCe = armorUtilityCeType?.FullName,
+						compAmmoUser = compAmmoUserType?.FullName
+					},
+					patchTargets = new
+					{
+						armorReroute = PatchedMethodsForPatchClass("CETools_Patch1"),
+						projectileLaunch = PatchedMethodsForPatchClass("CETools_Patch2"),
+						afterArmorDamage = PatchedMethodsForPatchClass("CETools_Patch3"),
+						ammoUser = PatchedMethodsForPatchClass("CETools_Patch4")
+					},
+					settings = new
+					{
+						ZombieSettings.Values.spitterThreat,
+						ZombieSettings.Values.zombieInstinct,
+						ZombieSettings.Values.reducedTurretConsumption
+					},
+					surgicalCut,
+					projectileNoise,
+					spitterArmor,
+					turretAmmo
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+			}
+		}
+
+		static object VerifyCeSurgicalCutArmorReroute(Type armorRerouteType)
+		{
+			var method = armorRerouteType == null ? null : AccessTools.Method(armorRerouteType, "ArmorReroute");
+			if (method == null)
+			{
+				return new
+				{
+					success = false,
+					armorRerouteType = armorRerouteType?.FullName,
+					error = "Could not resolve CE ArmorReroute."
+				};
+			}
+
+			var dinfo = new DamageInfo(DamageDefOf.SurgicalCut, 7f);
+			var args = new object[] { null, dinfo, false, false };
+			object error = null;
+			try
+			{
+				method.Invoke(null, args);
+			}
+			catch (Exception ex)
+			{
+				error = ex.GetBaseException().Message;
+			}
+			var output = args[1] is DamageInfo outputInfo ? outputInfo : dinfo;
+
+			return new
+			{
+				success = error == null
+					&& output.Def == DamageDefOf.SurgicalCut
+					&& Approximately(output.Amount, dinfo.Amount, 0.0001f)
+					&& (bool)args[2] == false
+					&& (bool)args[3] == false,
+				method = method.FullDescription(),
+				nullPawnWouldReachCeOriginal = "would throw without the Zombieland SurgicalCut prefix skip",
+				error,
+				input = new { def = dinfo.Def.defName, dinfo.Amount },
+				output = new { def = output.Def.defName, output.Amount },
+				deflectedByArmor = args[2],
+				diminishedByArmor = args[3]
+			};
+		}
+
+		static object VerifyCeProjectileNoise(Map map, IntVec3 root, Type projectileCeType, List<Thing> spawnedThings)
+		{
+			if (projectileCeType == null)
+				return new { success = false, error = "CombatExtended.ProjectileCE is not loaded." };
+			if (TryFindClearSpawnCell(map, root, 16f, out var shooterCell, out var shooterError) == false)
+				return shooterError;
+			if (TryFindClearSpawnCell(map, shooterCell + new IntVec3(0, 0, 5), 12f, out var spitterCell, out var spitterError) == false)
+				return spitterError;
+
+			var shooter = SpawnArmedAreaWorkflowPawn(map, "ZL_Area_CEProjectileShooter", shooterCell, Faction.OfPlayer, spawnedThings);
+			var spitter = SpawnTargetSpitter(map, spitterCell, "ZL_Area_CEProjectileSpitter", spawnedThings);
+			var projectileDef = FindCeProjectileDef(projectileCeType, shooter);
+			var launch = AccessTools.Method(projectileCeType, "Launch", new[] { typeof(Thing), typeof(Vector2), typeof(float), typeof(float), typeof(float), typeof(float), typeof(Thing), typeof(float) });
+			if (shooter == null || spitter == null || projectileDef == null || launch == null)
+			{
+				return new
+				{
+					success = false,
+					shooter = DescribePawn(shooter),
+					spitter = DescribeZombie(spitter),
+					projectileDef = projectileDef?.defName,
+					launchFound = launch != null,
+					error = "Could not create CE projectile noise fixtures."
+				};
+			}
+
+			const float radius = 16f;
+			var shotAngle = 0.25f;
+			var shotRotation = 0f;
+			var shotHeight = 1f;
+			var shotSpeed = 50f;
+			var distance = 12f;
+
+			ClearPheromones(map, shooterCell, radius);
+			var beforeHuman = SnapshotPheromones(map, shooterCell, radius);
+			var humanProjectile = ThingMaker.MakeThing(projectileDef) as ThingWithComps;
+			if (humanProjectile != null)
+			{
+				GenSpawn.Spawn(humanProjectile, shooterCell, map, WipeMode.Vanish);
+				spawnedThings.Add(humanProjectile);
+			}
+			var humanError = InvokeCeProjectileLaunch(launch, humanProjectile, shooter, shooterCell, shotAngle, shotRotation, shotHeight, shotSpeed, shooter.equipment?.Primary, distance);
+			var humanChange = DescribePheromoneChange(map, beforeHuman, out var humanChangedCount);
+
+			ClearPheromones(map, spitterCell, radius);
+			var beforeSpitter = SnapshotPheromones(map, spitterCell, radius);
+			var spitterProjectile = ThingMaker.MakeThing(projectileDef) as ThingWithComps;
+			if (spitterProjectile != null)
+			{
+				GenSpawn.Spawn(spitterProjectile, spitterCell, map, WipeMode.Vanish);
+				spawnedThings.Add(spitterProjectile);
+			}
+			var spitterErrorText = InvokeCeProjectileLaunch(launch, spitterProjectile, spitter, spitterCell, shotAngle, shotRotation, shotHeight, shotSpeed, null, distance);
+			var spitterChange = DescribePheromoneChange(map, beforeSpitter, out var spitterChangedCount);
+
+			return new
+			{
+				success = humanProjectile != null
+					&& spitterProjectile != null
+					&& humanError == null
+					&& spitterErrorText == null
+					&& humanChangedCount > 0
+					&& spitterChangedCount == 0,
+				projectileDef = projectileDef.defName,
+				projectileType = projectileDef.thingClass?.FullName,
+				launch = launch.FullDescription(),
+				shot = new { shotAngle, shotRotation, shotHeight, shotSpeed, distance },
+				human = new
+				{
+					shooter = DescribePawn(shooter),
+					cell = ZombieRuntimeActions.DescribeCell(shooterCell),
+					error = humanError,
+					changedCount = humanChangedCount,
+					change = humanChange
+				},
+				spitter = new
+				{
+					zombie = DescribeZombie(spitter),
+					cell = ZombieRuntimeActions.DescribeCell(spitterCell),
+					error = spitterErrorText,
+					changedCount = spitterChangedCount,
+					change = spitterChange
+				}
+			};
+		}
+
+		static ThingDef FindCeProjectileDef(Type projectileCeType, Pawn shooter)
+		{
+			var equippedProjectile = shooter?.equipment?.PrimaryEq?.PrimaryVerb?.verbProps?.defaultProjectile;
+			if (equippedProjectile != null && projectileCeType.IsAssignableFrom(equippedProjectile.thingClass))
+				return equippedProjectile;
+			return DefDatabase<ThingDef>.AllDefsListForReading
+				.Where(def => def.thingClass != null && projectileCeType.IsAssignableFrom(def.thingClass))
+				.OrderBy(def => def.defName)
+				.FirstOrDefault();
+		}
+
+		static string InvokeCeProjectileLaunch(MethodInfo launch, ThingWithComps projectile, Thing launcher, IntVec3 originCell, float shotAngle, float shotRotation, float shotHeight, float shotSpeed, Thing equipment, float distance)
+		{
+			if (projectile == null)
+				return "Projectile instance was null.";
+			try
+			{
+				var origin = new Vector2(originCell.x, originCell.z);
+				launch.Invoke(projectile, new object[] { launcher, origin, shotAngle, shotRotation, shotHeight, shotSpeed, equipment, distance });
+				return null;
+			}
+			catch (Exception ex)
+			{
+				return ex.GetBaseException().Message;
+			}
+		}
+
+		static object VerifyCeSpitterAfterArmorDamage(Map map, IntVec3 root, Type armorUtilityCeType, List<Thing> spawnedThings)
+		{
+			var boolRef = typeof(bool).MakeByRefType();
+			var method = armorUtilityCeType == null ? null : AccessTools.Method(armorUtilityCeType, "GetAfterArmorDamage", new[] { typeof(DamageInfo), typeof(Pawn), typeof(BodyPartRecord), boolRef, boolRef, boolRef });
+			if (method == null)
+			{
+				return new
+				{
+					success = false,
+					armorUtilityCeType = armorUtilityCeType?.FullName,
+					error = "Could not resolve CE ArmorUtilityCE.GetAfterArmorDamage."
+				};
+			}
+			if (TryFindClearSpawnCell(map, root, 12f, out var spitterCell, out var spitterError) == false)
+				return spitterError;
+
+			var spitter = SpawnTargetSpitter(map, spitterCell, "ZL_Area_CEAfterArmorSpitter", spawnedThings);
+			var part = FindNonHeadPart(spitter);
+			if (spitter == null || part == null)
+			{
+				return new
+				{
+					success = false,
+					spitter = DescribeZombie(spitter),
+					part = DescribeBodyPartDetail(part),
+					error = "Could not create a CE after-armor spitter fixture."
+				};
+			}
+
+			const float inputAmount = 22f;
+			var original = new DamageInfo(DamageDefOf.Bullet, inputAmount, 0f, -1f, null, part, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+			var args = new object[] { original, spitter, part, false, false, false };
+			DamageInfo result = original;
+			object error = null;
+			Rand.PushState(6610);
+			try
+			{
+				result = (DamageInfo)method.Invoke(null, args);
+			}
+			catch (Exception ex)
+			{
+				error = ex.GetBaseException().Message;
+			}
+			finally
+			{
+				Rand.PopState();
+			}
+
+			return new
+			{
+				success = error == null
+					&& result.Def == DamageDefOf.Bullet
+					&& result.Amount > 0f
+					&& result.Amount < inputAmount
+					&& (bool)args[4],
+				method = method.FullDescription(),
+				error,
+				spitter = DescribeZombie(spitter),
+				part = DescribeBodyPartDetail(part),
+				input = new { def = original.Def.defName, amount = inputAmount },
+				result = new { def = result.Def.defName, result.Amount },
+				armorDeflected = args[3],
+				armorReduced = args[4],
+				shieldAbsorbed = args[5]
+			};
+		}
+
+		static object VerifyCeTurretAmmoReduction(Map map, IntVec3 root, Type compAmmoUserType, List<Thing> spawnedThings)
+		{
+			if (compAmmoUserType == null)
+				return new { success = false, error = "CombatExtended.CompAmmoUser is not loaded." };
+			var turretDef = DefDatabase<ThingDef>.GetNamed("Turret_MiniTurret", false)
+				?? DefDatabase<ThingDef>.AllDefsListForReading
+					.Where(def => typeof(Building_Turret).IsAssignableFrom(def.thingClass))
+					.Where(def => def.comps?.Any(comp => comp.compClass != null && compAmmoUserType.IsAssignableFrom(comp.compClass)) == true)
+					.OrderBy(def => def.defName)
+					.FirstOrDefault();
+			if (turretDef == null)
+				return new { success = false, error = "No CE-compatible turret def was found." };
+			if (TryFindClearBuildingFootprint(map, turretDef, root, 18f, out var turretCell, out var turretError) == false)
+				return turretError;
+			var stuff = turretDef.MadeFromStuff ? GenStuff.DefaultStuffFor(turretDef) ?? ThingDefOf.Steel : null;
+			var turret = ThingMaker.MakeThing(turretDef, stuff) as ThingWithComps;
+			if (turret == null)
+			{
+				return new
+				{
+					success = false,
+					turretDef = turretDef.defName,
+					error = "The selected CE turret def did not create a ThingWithComps."
+				};
+			}
+			turret.SetFactionDirect(Faction.OfPlayer);
+			GenSpawn.Spawn(turret, turretCell, map, Rot4.North, WipeMode.Vanish, false);
+			spawnedThings.Add(turret);
+
+			object compAmmo = turret.AllComps?.FirstOrDefault(comp => compAmmoUserType.IsInstanceOfType(comp));
+			if (compAmmo == null)
+			{
+				var compAmmoProperty = AccessTools.Property(turret.GetType(), "CompAmmo");
+				compAmmo = compAmmoProperty?.GetValue(turret);
+			}
+			var curMagCount = AccessTools.Property(compAmmoUserType, "CurMagCount");
+			var magSize = AccessTools.Property(compAmmoUserType, "MagSize");
+			var hasMagazine = AccessTools.Property(compAmmoUserType, "HasMagazine");
+			var notifyShotFired = AccessTools.Method(compAmmoUserType, "Notify_ShotFired", new[] { typeof(int) });
+			if (compAmmo == null || curMagCount == null || magSize == null || hasMagazine == null || notifyShotFired == null)
+			{
+				return new
+				{
+					success = false,
+					turret = DescribeTarget(turret as IAttackTarget),
+					turretDef = turretDef.defName,
+					compAmmoPresent = compAmmo != null,
+					reflection = new
+					{
+						curMagCount = curMagCount != null,
+						magSize = magSize != null,
+						hasMagazine = hasMagazine != null,
+						notifyShotFired = notifyShotFired != null
+					},
+					error = "Could not resolve CE turret ammo reflection members."
+				};
+			}
+
+			var hasMagazineValue = (bool)hasMagazine.GetValue(compAmmo);
+			var magSizeValue = Convert.ToInt32(magSize.GetValue(compAmmo));
+			var startCount = Math.Max(3, Math.Min(8, magSizeValue > 0 ? magSizeValue : 8));
+			curMagCount.SetValue(compAmmo, startCount);
+
+			ZombieSettings.Values.reducedTurretConsumption = 1f;
+			var skipBefore = Convert.ToInt32(curMagCount.GetValue(compAmmo));
+			var skipError = InvokeNotifyShotFired(notifyShotFired, compAmmo, 1);
+			var skipAfter = Convert.ToInt32(curMagCount.GetValue(compAmmo));
+
+			ZombieSettings.Values.reducedTurretConsumption = 0f;
+			curMagCount.SetValue(compAmmo, startCount);
+			var consumeBefore = Convert.ToInt32(curMagCount.GetValue(compAmmo));
+			var consumeError = InvokeNotifyShotFired(notifyShotFired, compAmmo, 1);
+			var consumeAfter = Convert.ToInt32(curMagCount.GetValue(compAmmo));
+
+			return new
+			{
+				success = hasMagazineValue
+					&& skipError == null
+					&& consumeError == null
+					&& skipAfter == skipBefore
+					&& consumeAfter == consumeBefore - 1,
+				turret = DescribeTarget(turret as IAttackTarget),
+				turretDef = turretDef.defName,
+				turretCell = ZombieRuntimeActions.DescribeCell(turretCell),
+				compAmmoType = compAmmo.GetType().FullName,
+				hasMagazine = hasMagazineValue,
+				magSize = magSizeValue,
+				startCount,
+				notifyShotFired = notifyShotFired.FullDescription(),
+				reducedConsumptionSkip = new
+				{
+					setting = 1f,
+					before = skipBefore,
+					after = skipAfter,
+					error = skipError
+				},
+				normalConsumption = new
+				{
+					setting = 0f,
+					before = consumeBefore,
+					after = consumeAfter,
+					error = consumeError
+				}
+			};
+		}
+
+		static string InvokeNotifyShotFired(MethodInfo notifyShotFired, object compAmmo, int ammoConsumedPerShot)
+		{
+			try
+			{
+				notifyShotFired.Invoke(compAmmo, new object[] { ammoConsumedPerShot });
+				return null;
+			}
+			catch (Exception ex)
+			{
+				return ex.GetBaseException().Message;
 			}
 		}
 
