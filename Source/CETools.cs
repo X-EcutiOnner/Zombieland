@@ -1,6 +1,7 @@
 ﻿using HarmonyLib;
 using RimWorld;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using UnityEngine;
@@ -60,19 +61,26 @@ namespace ZombieLand
 	[HarmonyPatch]
 	static class CETools_Patch2
 	{
-		static bool Prepare() => CETools.latePatching && TargetMethod() != null;
-		static MethodBase TargetMethod()
+		static bool Prepare() => CETools.latePatching && TargetMethods().Any();
+		static IEnumerable<MethodBase> TargetMethods()
 		{
 			var type = AccessTools.TypeByName("CombatExtended.ProjectileCE");
 			if (type == null)
-				return null;
-			var method = AccessTools.Method(type, "Launch", new Type[] { typeof(Thing), typeof(Vector2), typeof(float), typeof(float), typeof(float), typeof(float), typeof(Thing), typeof(float) });
-			if (method == null)
+				yield break;
+			var parameters = new[] { typeof(Thing), typeof(Vector2), typeof(float), typeof(float), typeof(float), typeof(float), typeof(Thing), typeof(float) };
+			var baseMethod = AccessTools.Method(type, "Launch", parameters);
+			if (baseMethod == null)
 			{
 				Error("Combat Extended installed, but method ProjectileCE.Launch(Thing,Vector2,float,float,float,float,Thing,float) not found");
-				return null;
+				yield break;
 			}
-			return method;
+			yield return baseMethod;
+			foreach (var subclass in type.Assembly.GetTypes().Where(candidate => candidate != type && type.IsAssignableFrom(candidate)))
+			{
+				var overrideMethod = AccessTools.DeclaredMethod(subclass, "Launch", parameters);
+				if (overrideMethod != null)
+					yield return overrideMethod;
+			}
 		}
 
 		static void Postfix(Thing launcher, Vector2 origin, float shotAngle, float shotHeight, float shotSpeed)

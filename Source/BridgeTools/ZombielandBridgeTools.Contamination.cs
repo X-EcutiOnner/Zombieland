@@ -4764,8 +4764,9 @@ namespace ZombieLand
 			}
 		}
 
-		[Tool("zombieland/contamination_clear_snow_contract", Description = "Verify real cleaning jobs transfer contaminated snow-cell ground and filth into the worker when cleared.")]
+		[Tool("zombieland/contamination_clear_snow_contract", Description = "Verify real cleaning jobs transfer contaminated snow or sand cell ground and filth into the worker when cleared.")]
 		public static object ContaminationClearSnowContract(
+			[ToolParameter(Description = "Clear mode: snow or sand.", Required = false, DefaultValue = "snow")] string mode = "snow",
 			[ToolParameter(Description = "Destroy the worker and restore snow/cell contamination before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
 		{
 			var map = CurrentMap;
@@ -4785,6 +4786,33 @@ namespace ZombieLand
 					error = "Contamination is disabled in Zombieland advanced settings."
 				};
 			}
+			mode = string.IsNullOrWhiteSpace(mode) ? "snow" : mode.Trim().ToLowerInvariant();
+			if (mode != "snow" && mode != "sand")
+			{
+				return new
+				{
+					success = false,
+					error = "Unsupported clear mode. Use snow or sand."
+				};
+			}
+			var odysseyInstalled = ModLister.OdysseyInstalled;
+			var odysseyActive = ModsConfig.OdysseyActive;
+			var sandGridPresent = map.sandGrid != null;
+			var sandGridAvailable = sandGridPresent && odysseyActive;
+			if (mode == "sand" && sandGridAvailable == false)
+			{
+				return new
+				{
+					success = true,
+					skipped = true,
+					mode,
+					odysseyInstalled,
+					odysseyActive,
+					sandGridPresent,
+					sandGridAvailable,
+					reason = "Sand clearing requires active Odyssey SandGrid support; this load order/save cannot honestly exercise it."
+				};
+			}
 
 			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
 			if (TryFindClearSpawnCell(map, root, 16f, out var snowCell, out var snowCellError) == false)
@@ -4795,6 +4823,8 @@ namespace ZombieLand
 			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			var oldGroundContamination = map.GetContamination(snowCell);
 			var oldSnowDepth = map.snowGrid.GetDepth(snowCell);
+			var oldSandDepth = sandGridPresent ? map.sandGrid.GetDepth(snowCell) : 0f;
+			var oldTerrain = snowCell.GetTerrain(map);
 			try
 			{
 				GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
@@ -4805,16 +4835,38 @@ namespace ZombieLand
 
 				const float snowDepthBefore = 1f;
 				const float groundContaminationBefore = 0.72f;
-				map.snowGrid.SetDepth(snowCell, snowDepthBefore);
+				if (mode == "sand")
+				{
+					var sandTerrain = DefDatabase<TerrainDef>.GetNamedSilentFail("Sand");
+					if (sandTerrain == null)
+					{
+						return new
+						{
+							success = false,
+							error = "TerrainDef Sand is unavailable."
+						};
+					}
+					map.terrainGrid.SetTerrain(snowCell, sandTerrain);
+					map.snowGrid.SetDepth(snowCell, 0f);
+					map.sandGrid.SetDepth(snowCell, snowDepthBefore);
+				}
+				else
+				{
+					map.snowGrid.SetDepth(snowCell, snowDepthBefore);
+					if (sandGridPresent)
+						map.sandGrid.SetDepth(snowCell, 0f);
+				}
 				map.SetContamination(snowCell, groundContaminationBefore);
 
 				var workerBefore = worker.GetContamination(false);
 				var snowBefore = map.snowGrid.GetDepth(snowCell);
+				var sandBefore = sandGridPresent ? map.sandGrid.GetDepth(snowCell) : 0f;
+				var targetDepthBefore = mode == "sand" ? sandBefore : snowBefore;
 				var groundBefore = map.GetContamination(snowCell);
 				var snowAdd = ZombieSettings.Values.contamination.snowAdd;
 				var expectedWorkerAfter = groundBefore * snowAdd;
 				var laborSpeed = worker.GetStatValue(StatDefOf.GeneralLaborSpeed);
-				var sourceDerivedWorkTicks = Mathf.CeilToInt(50f * snowBefore / laborSpeed);
+				var sourceDerivedWorkTicks = Mathf.CeilToInt(50f * targetDepthBefore / laborSpeed);
 				var maxTicks = sourceDerivedWorkTicks + 10;
 
 				var job = JobMaker.MakeJob(JobDefOf.ClearSnow, snowCell);
@@ -4823,32 +4875,40 @@ namespace ZombieLand
 				worker.jobs.StartJob(job, JobCondition.InterruptForced, null, false, true);
 
 				var ticksRun = 0;
-				while (ticksRun < maxTicks && map.snowGrid.GetDepth(snowCell) > 0f)
+				while (ticksRun < maxTicks && (mode == "sand" ? map.sandGrid.GetDepth(snowCell) : map.snowGrid.GetDepth(snowCell)) > 0f)
 				{
 					AdvanceGameTicks(1);
 					ticksRun++;
 				}
 
-					var workerAfter = worker.GetContamination(false);
-					var snowAfter = map.snowGrid.GetDepth(snowCell);
-					var groundAfter = map.GetContamination(snowCell);
-					var cleanFilth = VerifyCleanFilthJobTransfer(map, snowCell + new IntVec3(3, 0, 0));
-					static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
-					var snowCleared = snowBefore > 0f && CloseFloat(snowAfter, 0f);
-					var contaminationTransferred = snowCleared
-						&& CloseFloat(workerBefore, 0f)
-						&& CloseFloat(groundBefore, groundContaminationBefore)
-						&& CloseFloat(workerAfter, expectedWorkerAfter);
+				var workerAfter = worker.GetContamination(false);
+				var snowAfter = map.snowGrid.GetDepth(snowCell);
+				var sandAfter = sandGridPresent ? map.sandGrid.GetDepth(snowCell) : 0f;
+				var targetDepthAfter = mode == "sand" ? sandAfter : snowAfter;
+				var groundAfter = map.GetContamination(snowCell);
+				var cleanFilth = VerifyCleanFilthJobTransfer(map, snowCell + new IntVec3(3, 0, 0));
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var snowCleared = targetDepthBefore > 0f && CloseFloat(targetDepthAfter, 0f);
+				var contaminationTransferred = snowCleared
+					&& CloseFloat(workerBefore, 0f)
+					&& CloseFloat(groundBefore, groundContaminationBefore)
+					&& CloseFloat(workerAfter, expectedWorkerAfter);
 
-					return new
-					{
-						success = snowCleared
-							&& contaminationTransferred
-							&& ObjectSuccess(cleanFilth),
-						cleanup,
-						worker = DescribePawn(worker),
-						workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+				return new
+				{
+					success = snowCleared
+						&& contaminationTransferred
+						&& ObjectSuccess(cleanFilth),
+					cleanup,
+					mode,
+					odysseyInstalled,
+					odysseyActive,
+					sandGridPresent,
+					sandGridAvailable,
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
 					snowCell = ZombieRuntimeActions.DescribeCell(snowCell),
+					terrain = snowCell.GetTerrain(map)?.defName,
 					jobDefAtCreation,
 					finalJob = worker.CurJobDef?.defName,
 					laborSpeed,
@@ -4860,15 +4920,19 @@ namespace ZombieLand
 					workerAfter,
 					expectedWorkerAfter,
 					snowBefore,
-						snowAfter,
-						groundBefore,
-						groundAfter,
-						snowCleared,
-						contaminationTransferred,
-						cleanFilth
-					};
-				}
-				finally
+					snowAfter,
+					sandBefore,
+					sandAfter,
+					targetDepthBefore,
+					targetDepthAfter,
+					groundBefore,
+					groundAfter,
+					snowCleared,
+					contaminationTransferred,
+					cleanFilth
+				};
+			}
+			finally
 			{
 				if (cleanup)
 				{
@@ -4877,7 +4941,11 @@ namespace ZombieLand
 						worker.Destroy();
 					if (snowCell.IsValid && snowCell.InBounds(map))
 					{
+						if (oldTerrain != null)
+							map.terrainGrid.SetTerrain(snowCell, oldTerrain);
 						map.snowGrid.SetDepth(snowCell, oldSnowDepth);
+						if (sandGridPresent)
+							map.sandGrid.SetDepth(snowCell, oldSandDepth);
 						map.SetContamination(snowCell, oldGroundContamination);
 					}
 				}
@@ -8198,6 +8266,7 @@ namespace ZombieLand
 
 		[Tool("zombieland/contamination_plant_harvest_contract", Description = "Harvest a contaminated plant through the real PlantHarvest job and verify harvested products receive plant-transfer contamination.")]
 		public static object ContaminationPlantHarvestContract(
+			[ToolParameter(Description = "Plant def to harvest.", Required = false, DefaultValue = "Plant_Rice")] string plantDefName = "Plant_Rice",
 			[ToolParameter(Description = "Destroy harvested products before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
 		{
 			var map = CurrentMap;
@@ -8218,7 +8287,8 @@ namespace ZombieLand
 				};
 			}
 
-			var plantDef = DefDatabase<ThingDef>.GetNamedSilentFail("Plant_Rice");
+			plantDefName = string.IsNullOrWhiteSpace(plantDefName) ? "Plant_Rice" : plantDefName.Trim();
+			var plantDef = DefDatabase<ThingDef>.GetNamedSilentFail(plantDefName);
 			var productDef = plantDef?.plant?.harvestedThingDef;
 			var harvestJobDef = DefDatabase<JobDef>.GetNamedSilentFail("Harvest");
 			if (plantDef == null || productDef == null || harvestJobDef == null)
@@ -8226,7 +8296,7 @@ namespace ZombieLand
 				return new
 				{
 					success = false,
-					error = "Plant_Rice, its harvested product, or JobDef Harvest is unavailable."
+					error = $"{plantDefName}, its harvested product, or JobDef Harvest is unavailable."
 				};
 			}
 
@@ -8282,7 +8352,7 @@ namespace ZombieLand
 					return new
 					{
 						success = false,
-						error = "Could not create Plant_Rice fixture."
+						error = $"Could not create {plantDefName} fixture."
 					};
 				}
 
@@ -8292,7 +8362,15 @@ namespace ZombieLand
 				const float plantContamination = 0.64f;
 				plant.SetContamination(plantContamination);
 				var plantBefore = plant.GetContamination();
-				var productIdsBefore = map.listerThings.ThingsOfDef(productDef)
+				var expectedProductDefs = plant.AllComps
+					.SelectMany(comp => comp.GetAdditionalHarvestYield() ?? Enumerable.Empty<ThingDefCountClass>())
+					.Where(extra => extra?.thingDef != null && extra.count > 0)
+					.Select(extra => extra.thingDef)
+					.Prepend(productDef)
+					.Distinct()
+					.ToArray();
+				var productIdsBefore = expectedProductDefs
+					.SelectMany(def => map.listerThings.ThingsOfDef(def))
 					.Select(ZombieRuntimeActions.StableThingId)
 					.ToHashSet(StringComparer.OrdinalIgnoreCase);
 				var harvestable = plant.HarvestableNow;
@@ -8308,7 +8386,8 @@ namespace ZombieLand
 				for (var tick = 1; tick <= maxTicks; tick++)
 				{
 					AdvanceGameTicks(1);
-					products = map.listerThings.ThingsOfDef(productDef)
+					products = expectedProductDefs
+						.SelectMany(def => map.listerThings.ThingsOfDef(def))
 						.Where(thing => productIdsBefore.Contains(ZombieRuntimeActions.StableThingId(thing)) == false)
 						.ToList();
 					var produced = products.Count > 0;
@@ -8331,23 +8410,52 @@ namespace ZombieLand
 					}
 				}
 
-				var product = products.FirstOrDefault();
-				var productContamination = product?.GetContamination() ?? -1f;
+				var productStates = products
+					.Select(thing => new
+					{
+						id = ZombieRuntimeActions.StableThingId(thing),
+						def = thing.def?.defName,
+						stackCount = thing.stackCount,
+						contamination = thing.GetContamination()
+					})
+					.ToList();
 				var plantAfter = plant.GetContamination();
-				var expectedProductContamination = plantContamination * ZombieSettings.Values.contamination.plantTransfer;
-				var expectedSourceAfterTransferBeforeCollection = plantContamination - expectedProductContamination;
+				var expectedProductContaminationValues = new List<float>();
+				var remainingSourceContamination = plantContamination;
+				foreach (var thing in products)
+				{
+					var expected = remainingSourceContamination * ZombieSettings.Values.contamination.plantTransfer;
+					expectedProductContaminationValues.Add(expected);
+					remainingSourceContamination -= expected;
+				}
+				var expectedProductContaminations = products
+					.Zip(expectedProductContaminationValues, (thing, expected) => new
+					{
+						def = thing.def?.defName,
+						expected
+					})
+					.ToList();
+				var expectedSourceAfterTransferBeforeCollection = remainingSourceContamination;
 				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
 
-				var productContaminated = product != null
-					&& CloseFloat(productContamination, expectedProductContamination);
+				var producedDefs = products
+					.Select(thing => thing.def)
+					.Where(def => def != null)
+					.ToHashSet();
+				var expectedDefsProduced = expectedProductDefs.All(producedDefs.Contains);
+				var productsContaminated = products.Count > 0
+					&& products
+						.Zip(expectedProductContaminationValues, (product, expected) => new { product, expected })
+						.All(pair => CloseFloat(pair.product.GetContamination(), pair.expected));
 
 				return new
 				{
 					success = harvestable
 						&& started
 						&& tickHit > 0
-						&& product != null
-						&& productContaminated
+						&& products.Count > 0
+						&& expectedDefsProduced
+						&& productsContaminated
 						&& plant.Destroyed,
 					cleanup,
 					worker = DescribePawn(worker),
@@ -8370,13 +8478,12 @@ namespace ZombieLand
 					plantAfter,
 					expectedSourceAfterTransferBeforeCollection,
 					plantDestroyed = plant.Destroyed,
-					product = ZombieRuntimeActions.StableThingId(product),
-					productDef = product?.def?.defName,
-					productStackCount = product?.stackCount ?? 0,
-					productContamination,
-					expectedProductContamination,
+					expectedProductDefs = expectedProductDefs.Select(def => def.defName).ToArray(),
+					expectedDefsProduced,
+					products = productStates,
+					expectedProductContaminations,
 					plantTransfer = ZombieSettings.Values.contamination.plantTransfer,
-					productContaminated,
+					productsContaminated,
 					samples
 				};
 			}

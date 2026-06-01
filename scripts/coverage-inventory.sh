@@ -9,8 +9,11 @@ DETAILS=0
 PATCH_GROUPS=0
 DYNAMIC_PATCHES=0
 STATIC_SUMMARY=0
+PATCH_ROW_GAPS=0
 BRIDGE_TOOLS=0
 BRIDGE_SUMMARY=0
+BRIDGE_PRESSURE=0
+BRIDGE_NEXT=0
 DEPENDENCY_GATES=0
 DEPENDENCY_GATE_SUMMARY=0
 ACTIONABLE_GATES=0
@@ -32,11 +35,20 @@ while [[ $# -gt 0 ]]; do
 		--static-summary)
 			STATIC_SUMMARY=1
 			;;
+		--patch-row-gaps)
+			PATCH_ROW_GAPS=1
+			;;
 		--bridge-tools)
 			BRIDGE_TOOLS=1
 			;;
 		--bridge-summary)
 			BRIDGE_SUMMARY=1
+			;;
+		--bridge-pressure)
+			BRIDGE_PRESSURE=1
+			;;
+		--bridge-next)
+			BRIDGE_NEXT=1
 			;;
 		--dependency-gates)
 			DEPENDENCY_GATES=1
@@ -57,7 +69,7 @@ while [[ $# -gt 0 ]]; do
 			CONSISTENCY_CHECKS=1
 			;;
 		--help|-h)
-			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--bridge-tools] [--bridge-summary] [--dependency-gates] [--dependency-gate-summary] [--actionable-gates] [--source-paths] [--row-state-summary] [--consistency-checks] [baseline-commit]\n' "$0"
+			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--patch-row-gaps] [--bridge-tools] [--bridge-summary] [--bridge-pressure] [--bridge-next] [--dependency-gates] [--dependency-gate-summary] [--actionable-gates] [--source-paths] [--row-state-summary] [--consistency-checks] [baseline-commit]\n' "$0"
 			exit 0
 			;;
 		*)
@@ -170,6 +182,68 @@ patch_groups() {
 		'
 }
 
+patch_row_gaps() {
+	local patch_inventory
+	patch_inventory="$(mktemp "${TMPDIR:-/tmp}/zl-patch-inventory.XXXXXX")"
+	patch_groups > "$patch_inventory"
+	python3 - "$patch_inventory" <<'PY'
+import csv
+from pathlib import Path
+import signal
+import sys
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+patch_inventory = Path(sys.argv[1])
+coverage_path = Path("coverage/ZL_COVERAGE_INDEX.tsv")
+audit_text = Path("TEST_PATCH_AUDIT.md").read_text(errors="ignore") if Path("TEST_PATCH_AUDIT.md").exists() else ""
+
+with coverage_path.open(newline="") as handle:
+	rows = list(csv.DictReader(handle, delimiter="\t"))
+
+row_ids = {row["id"] for row in rows}
+reference_columns = [
+	"id",
+	"source_owners",
+	"bridge_contracts",
+	"harmony_patches",
+	"tool_or_target",
+	"evidence_refs",
+	"notes",
+]
+
+print("location\tclass\ttargeting\texact_patch_id\tdisposition_hint\trepresented_by\taudit_mentions")
+for line in patch_inventory.read_text().splitlines():
+	if not line.strip():
+		continue
+	location, class_name, targeting, attrs = line.split("\t", 3)
+	exact_id = f"PATCH.{class_name}"
+	if exact_id in row_ids:
+		continue
+	represented_by = []
+	for row in rows:
+		text = "\n".join(row.get(column, "") for column in reference_columns)
+		if class_name in text:
+			represented_by.append(row["id"])
+
+	audit_mentions = audit_text.count(class_name)
+	if targeting == "base":
+		disposition = "base/context"
+	elif represented_by:
+		disposition = "represented-by-row"
+	elif audit_mentions:
+		disposition = "audit-only"
+	else:
+		disposition = "unrepresented"
+
+	print(
+		f"{location}\t{class_name}\t{targeting}\t{exact_id}\t{disposition}"
+		f"\t{';'.join(sorted(set(represented_by)))}\t{audit_mentions}"
+	)
+PY
+	rm -f "$patch_inventory"
+}
+
 bridge_tools() {
 	python3 - <<'PY'
 from pathlib import Path
@@ -215,9 +289,37 @@ scenario_fixture_names = {
 	"zombieland/special_gauntlet_state",
 	"zombieland/uninstall_hygiene_state",
 	"zombieland/create_sos_space_map_fixture",
+	"zombieland/sos2_ship_hologram_state",
 }
 
 tool_pattern = re.compile(r'\[Tool\("([^"]+)"(?:,\s*Description\s*=\s*"([^"]*)")?')
+
+semantic_family_overrides = {
+	"zombieland/fogged_door_spawns_room_zombies": "Fog",
+	"zombieland/fog_blocker_removal_spawns_room_zombies": "Fog",
+	"zombieland/fog_blocker_replacement_does_not_spawn_room_zombies": "Fog",
+	"zombieland/detonate_suicide_bomber": "SpecialZombies",
+	"zombieland/suicide_bomber_countdown_contract": "SpecialZombies",
+	"zombieland/kill_toxic_splasher": "SpecialZombies",
+	"zombieland/move_dark_slimer": "SpecialZombies",
+	"zombieland/heal_wounded_zombie": "SpecialZombies",
+	"zombieland/heal_wounded_zombie_tick": "SpecialZombies",
+	"zombieland/emp_electrifier": "SpecialZombies",
+	"zombieland/electrify_powered_building": "SpecialZombies",
+	"zombieland/active_electrifier_attack_verb_contract": "SpecialZombies",
+	"zombieland/active_electrifier_bullet_absorption_contract": "SpecialZombies",
+	"zombieland/active_electrifier_melee_shock_contract": "SpecialZombies",
+	"zombieland/albino_melee_bite_hidden_contract": "SpecialZombies",
+	"zombieland/hostility_to_zombies_contract": "Hostility",
+	"zombieland/zombie_active_threat_count_contract": "Hostility",
+	"zombieland/zombie_target_cache_excludes_specials": "Hostility",
+	"zombieland/zombie_faction_world_contract": "Incidents",
+	"zombieland/infected_incident_hooks_contract": "Incidents",
+	"zombieland/zombie_faction_pawn_generation_contract": "Incidents",
+	"zombieland/zombie_ticking_budget_contract": "Core",
+	"zombieland/zombie_ticking_feedback_contract": "Core",
+}
+
 for path in sorted(Path("Source/BridgeTools").glob("ZombielandBridgeTools*.cs")):
 	lines = path.read_text(errors="ignore").splitlines()
 	family = path.stem.replace("ZombielandBridgeTools.", "").replace("ZombielandBridgeTools", "Common")
@@ -226,18 +328,19 @@ for path in sorted(Path("Source/BridgeTools").glob("ZombielandBridgeTools*.cs"))
 		if not match:
 			continue
 		name, description = match.groups()
+		semantic_family = semantic_family_overrides.get(name, family)
 		if name in generic_names:
 			kind = "generic-primitive"
 		elif name in scenario_fixture_names:
 			kind = "scenario-fixture"
-		elif family == "RimConnect":
+		elif semantic_family == "RimConnect":
 			kind = "optional-integration"
 		elif name.endswith("_contract") or "contract" in name or "verify" in (description or "").lower():
 			kind = "narrow-contract"
 		else:
 			kind = "evidence-helper"
 		description = (description or "").replace("\t", " ").strip()
-		print(f"{path}:{line_number}\t{family}\t{name}\t{kind}\t{description}")
+		print(f"{path}:{line_number}\t{semantic_family}\t{name}\t{kind}\t{description}")
 PY
 }
 
@@ -315,6 +418,231 @@ PY
 	rm -f "$bridge_inventory"
 }
 
+bridge_pressure() {
+	local bridge_inventory
+	bridge_inventory="$(mktemp "${TMPDIR:-/tmp}/zl-bridge-inventory.XXXXXX")"
+	bridge_tools > "$bridge_inventory"
+	python3 - "$bridge_inventory" <<'PY'
+import collections
+from pathlib import Path
+import signal
+import sys
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+rows = []
+for line in Path(sys.argv[1]).read_text().splitlines():
+	if not line.strip():
+		continue
+	parts = line.split("\t")
+	if len(parts) != 5:
+		continue
+	location, family, tool_name, kind, description = parts
+	rows.append((family, kind, tool_name, location))
+
+print("family\ttotal\tgeneric_primitives\tscenario_fixtures\tnarrow_contracts\toptional_integrations\tpressure\trecommendation")
+family_rows = []
+for family in sorted({family for family, kind, tool_name, location in rows}):
+	subset = [(kind, tool_name, location) for fam, kind, tool_name, location in rows if fam == family]
+	counts = collections.Counter(kind for kind, tool_name, location in subset)
+	narrow = counts["narrow-contract"]
+	scenario = counts["scenario-fixture"]
+	generic = counts["generic-primitive"]
+	optional = counts["optional-integration"]
+	total = len(subset)
+	if narrow == 0:
+		pressure = "none"
+		recommendation = "no narrow-contract consolidation pressure"
+	elif scenario == 0 and narrow >= 8:
+		pressure = "high"
+		recommendation = "consider a named scenario fixture or generic primitive before adding more contracts"
+	elif scenario > 0 and narrow >= 8:
+		pressure = "medium"
+		recommendation = "prefer extending existing scenario fixture or generic primitive before adding contracts"
+	elif narrow >= 4:
+		pressure = "medium"
+		recommendation = "review whether next evidence belongs in a scenario fixture"
+	else:
+		pressure = "low"
+		recommendation = "retain unless a future scenario preserves the evidence"
+	family_rows.append((family, total, generic, scenario, narrow, optional, pressure, recommendation))
+
+pressure_order = {"high": 0, "medium": 1, "low": 2, "none": 3}
+for family, total, generic, scenario, narrow, optional, pressure, recommendation in sorted(
+	family_rows,
+	key=lambda row: (pressure_order[row[6]], -row[4], row[0]),
+):
+	print(f"{family}\t{total}\t{generic}\t{scenario}\t{narrow}\t{optional}\t{pressure}\t{recommendation}")
+PY
+	rm -f "$bridge_inventory"
+}
+
+bridge_next() {
+	local bridge_inventory
+	bridge_inventory="$(mktemp "${TMPDIR:-/tmp}/zl-bridge-inventory.XXXXXX")"
+	bridge_tools > "$bridge_inventory"
+	python3 - "$bridge_inventory" <<'PY'
+import collections
+import csv
+from pathlib import Path
+import signal
+import sys
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+family_owner_rows = {
+	"Chainsaw": ["J.BUILDINGS.ITEMS"],
+	"Contamination": ["G.CONTAMINATION.C4_ENVIRONMENT"],
+	"Core": ["C.CORE.ZOMBIE_LOOP"],
+	"CorpsesAndAvoidance": ["D.PATHING.DOOR_AVOIDANCE", "I.INFECTION.MEDICAL"],
+	"DefenseRoom": ["J.BUILDINGS.ITEMS", "D.PATHING.DOOR_AVOIDANCE"],
+	"Eating": ["C.CORE.ZOMBIE_LOOP", "I.INFECTION.MEDICAL"],
+	"Environment": ["C.CORE.ZOMBIE_LOOP", "G.CONTAMINATION.C4_ENVIRONMENT"],
+	"Fog": ["H.QUESTS.INCIDENTS"],
+	"Hostility": ["E.HOSTILITY.TARGETING"],
+	"Incidents": ["H.QUESTS.INCIDENTS"],
+	"Infection": ["I.INFECTION.MEDICAL"],
+	"ProjectilesAndArea": ["E.HOSTILITY.TARGETING", "F.RENDERING.VISUALS"],
+	"RimConnect": ["INT.RimConnect"],
+	"SemanticWait": ["J.BRIDGE.TOOLS"],
+	"Settings": ["B.SETTINGS.WORLD_DEFAULTS"],
+	"SoS2": ["BRIDGE.SoS2", "K.OPTIONAL.INTEGRATIONS"],
+	"Social": ["K.SOCIAL.SELECTION"],
+	"SpecialGauntlet": ["SCENARIO.S.SPECIAL.GAUNTLET", "C.SPECIAL.ZOMBIES"],
+	"SpecialZombies": ["C.SPECIAL.ZOMBIES", "SCENARIO.S.SPECIAL.GAUNTLET"],
+	"UninstallHygiene": ["M.UNINSTALL.HYGIENE"],
+	"WallPush": ["J.BUILDINGS.ITEMS", "D.PATHING.DOOR_AVOIDANCE"],
+}
+
+standing_governance = {
+	"A.HARMONY.INVENTORY",
+	"J.BRIDGE.TOOLS",
+	"NEG.1_6.DISCOVERY",
+}
+
+def gate_kind(row):
+	row_id = row["id"]
+	state = row["port_delta_state"]
+	owner = row["owner_cluster"]
+	row_type = row["row_type"]
+	question = row["open_questions"].lower()
+	unresolved_state = state in {"partial", "partial_runtime", "dependency/unavailable", "removed_vanilla_target"}
+
+	if row_id in standing_governance:
+		return "standing-governance"
+	if state == "removed_vanilla_target":
+		return "removed-target-doc"
+	if row_type == "scenario" and state in {"partial", "partial_runtime", "dependency/unavailable"}:
+		return "scenario-rollup"
+	if owner == "optional_integrations" and state in {"partial", "partial_runtime", "dependency/unavailable"}:
+		return "external-mod-unavailable"
+	if state == "partial_runtime" and (
+		"branch" in question
+		or "delegated" in question
+		or "geneassembler" in question
+	):
+		return "parent-branch-marker"
+	if unresolved_state and (
+		"biotech" in question
+		or "odyssey" in question
+		or "official dlc" in question
+		or "child" in question
+		or "killed-child" in question
+		or "pollution-capable" in question
+		or "wastepack" in question
+		or "clearpollution" in question
+		or "temporary terrain" in question
+		or "tunnel jelly" in question
+		or "sandgrid" in question
+	):
+		return "dlc-content-unavailable"
+	if unresolved_state:
+		return "actionable-gate"
+	return "resolved"
+
+def backlog_kind(owner_rows):
+	kinds = {gate_kind(row) for row in owner_rows}
+	states = {row["port_delta_state"] for row in owner_rows}
+	if "actionable-gate" in kinds:
+		return "local-action"
+	if kinds & {"dlc-content-unavailable", "external-mod-unavailable"}:
+		return "dependency-only"
+	if kinds and kinds <= {"standing-governance", "scenario-rollup", "parent-branch-marker", "removed-target-doc"}:
+		return "governance-only"
+	if states and states <= {"resolved", "resolved_runtime", "obsolete/disposed"}:
+		return "resolved-additive"
+	if not owner_rows:
+		return "unmapped"
+	return "review"
+
+def recommendation(backlog, narrow, scenario):
+	if backlog == "local-action":
+		return "do source/decompiler pass, then runtime only if needed"
+	if backlog == "dependency-only":
+		return "do not retest locally until dependency/setup exists"
+	if backlog == "governance-only":
+		return "keep as standing audit; no gameplay retest implied"
+	if backlog == "resolved-additive":
+		if narrow >= 8 and scenario == 0:
+			return "behavior covered; add scenario fixture only for a named new variant"
+		return "behavior covered; future work must be a named regression or variant"
+	if backlog == "unmapped":
+		return "map this bridge family to coverage rows before adding tests"
+	return "inspect owner rows before adding tests"
+
+tool_rows = []
+for line in Path(sys.argv[1]).read_text().splitlines():
+	if not line.strip():
+		continue
+	parts = line.split("\t")
+	if len(parts) != 5:
+		continue
+	location, family, tool_name, kind, description = parts
+	tool_rows.append((family, kind, tool_name, location))
+
+coverage_rows = {}
+with Path("coverage/ZL_COVERAGE_INDEX.tsv").open(newline="") as handle:
+	for row in csv.DictReader(handle, delimiter="\t"):
+		coverage_rows[row["id"]] = row
+
+print("family\ttotal\tnarrow_contracts\tscenario_fixtures\towner_rows\towner_states\tbacklog_kind\tnext_step")
+output = []
+for family in sorted({family for family, kind, tool_name, location in tool_rows}):
+	subset = [(kind, tool_name, location) for fam, kind, tool_name, location in tool_rows if fam == family]
+	counts = collections.Counter(kind for kind, tool_name, location in subset)
+	owners = [coverage_rows[row_id] for row_id in family_owner_rows.get(family, []) if row_id in coverage_rows]
+	backlog = backlog_kind(owners)
+	owner_ids = ";".join(row["id"] for row in owners) or "unmapped"
+	owner_states = ";".join(f"{row['id']}={row['port_delta_state']}" for row in owners) or "unmapped"
+	output.append((
+		backlog,
+		-counts["narrow-contract"],
+		family,
+		len(subset),
+		counts["narrow-contract"],
+		counts["scenario-fixture"],
+		owner_ids,
+		owner_states,
+		recommendation(backlog, counts["narrow-contract"], counts["scenario-fixture"]),
+	))
+
+backlog_order = {
+	"local-action": 0,
+	"unmapped": 1,
+	"review": 2,
+	"dependency-only": 3,
+	"governance-only": 4,
+	"resolved-additive": 5,
+}
+for backlog, negative_narrow, family, total, narrow, scenario, owner_ids, owner_states, next_step in sorted(
+	output,
+	key=lambda row: (backlog_order.get(row[0], 9), row[1], row[2]),
+):
+	print(f"{family}\t{total}\t{narrow}\t{scenario}\t{owner_ids}\t{owner_states}\t{backlog}\t{next_step}")
+PY
+	rm -f "$bridge_inventory"
+}
+
 dependency_gates() {
 	local mode="${1:-all}"
 	python3 - "$mode" <<'PY'
@@ -360,6 +688,7 @@ def gate_kind(row):
 		return "parent-branch-marker"
 	if (
 		"biotech" in question
+		or "odyssey" in question
 		or "official dlc" in question
 		or "child" in question
 		or "killed-child" in question
@@ -368,6 +697,7 @@ def gate_kind(row):
 		or "clearpollution" in question
 		or "temporary terrain" in question
 		or "tunnel jelly" in question
+		or "sandgrid" in question
 		):
 		return "dlc-content-unavailable"
 	return "actionable-gate"
@@ -519,13 +849,31 @@ consistency_checks() {
 		failures=$((failures + 1))
 	fi
 
-	local patch_summary
-	patch_summary="$(patch_groups | awk -F '\t' 'BEGIN { static = 0; dynamic = 0; base = 0 } $3 == "static" { static++ } $3 == "dynamic" { dynamic++ } $3 == "base" { base++ } END { printf "static=%d dynamic=%d base=%d total=%d", static, dynamic, base, static + dynamic + base }')"
-	printf 'patch_inventory\tPASS\t%s\n' "$patch_summary"
+		local patch_summary
+		patch_summary="$(patch_groups | awk -F '\t' 'BEGIN { static = 0; dynamic = 0; base = 0 } $3 == "static" { static++ } $3 == "dynamic" { dynamic++ } $3 == "base" { base++ } END { printf "static=%d dynamic=%d base=%d total=%d", static, dynamic, base, static + dynamic + base }')"
+		printf 'patch_inventory\tPASS\t%s\n' "$patch_summary"
+
+		local unrepresented_patch_gaps
+		unrepresented_patch_gaps="$(patch_row_gaps | awk -F '\t' 'NR > 1 && $5 == "unrepresented" { count++ } END { print count + 0 }')"
+		if [[ "$unrepresented_patch_gaps" == "0" ]]; then
+			printf 'patch_row_gaps\tPASS\t0 unrepresented exact-name gaps\n'
+		else
+			printf 'patch_row_gaps\tFAIL\t%s unrepresented exact-name gaps\n' "$unrepresented_patch_gaps"
+			failures=$((failures + 1))
+		fi
 
 	local bridge_summary_line
 	bridge_summary_line="$(bridge_summary | awk -F '\t' '$1 == "candidate_retire" { print "candidate_retire=" $4 " " $5 }')"
 	printf 'bridge_retirement_candidates\tPASS\t%s\n' "$bridge_summary_line"
+
+	local bridge_next_local_action
+	bridge_next_local_action="$(bridge_next | awk -F '\t' 'NR > 1 && $7 == "local-action" { count++ } END { print count + 0 }')"
+	if [[ "$bridge_next_local_action" == "0" ]]; then
+		printf 'bridge_next_local_action\tPASS\t0 bridge families with local-action backlog\n'
+	else
+		printf 'bridge_next_local_action\tFAIL\t%s bridge families with local-action backlog\n' "$bridge_next_local_action"
+		failures=$((failures + 1))
+	fi
 
 	return "$failures"
 }
@@ -643,6 +991,11 @@ if [[ "$STATIC_SUMMARY" == "1" ]]; then
 	exit 0
 fi
 
+if [[ "$PATCH_ROW_GAPS" == "1" ]]; then
+	patch_row_gaps
+	exit 0
+fi
+
 if [[ "$BRIDGE_TOOLS" == "1" ]]; then
 	printf 'location\tfamily\ttool_name\tkind_hint\tdescription\n'
 	bridge_tools
@@ -651,6 +1004,16 @@ fi
 
 if [[ "$BRIDGE_SUMMARY" == "1" ]]; then
 	bridge_summary
+	exit 0
+fi
+
+if [[ "$BRIDGE_PRESSURE" == "1" ]]; then
+	bridge_pressure
+	exit 0
+fi
+
+if [[ "$BRIDGE_NEXT" == "1" ]]; then
+	bridge_next
 	exit 0
 fi
 

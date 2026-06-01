@@ -4208,7 +4208,8 @@ namespace ZombieLand
 			var shooter = SpawnArmedAreaWorkflowPawn(map, "ZL_Area_CEProjectileShooter", shooterCell, Faction.OfPlayer, spawnedThings);
 			var spitter = SpawnTargetSpitter(map, spitterCell, "ZL_Area_CEProjectileSpitter", spawnedThings);
 			var projectileDef = FindCeProjectileDef(projectileCeType, shooter);
-			var launch = AccessTools.Method(projectileCeType, "Launch", new[] { typeof(Thing), typeof(Vector2), typeof(float), typeof(float), typeof(float), typeof(float), typeof(Thing), typeof(float) });
+			var launchParameters = CeProjectilePhysicsLaunchParameters();
+			var launch = AccessTools.Method(projectileCeType, "Launch", launchParameters);
 			if (shooter == null || spitter == null || projectileDef == null || launch == null)
 			{
 				return new
@@ -4251,6 +4252,23 @@ namespace ZombieLand
 			var spitterErrorText = InvokeCeProjectileLaunch(launch, spitterProjectile, spitter, spitterCell, shotAngle, shotRotation, shotHeight, shotSpeed, null, distance);
 			var spitterChange = DescribePheromoneChange(map, beforeSpitter, out var spitterChangedCount);
 
+			var overrideProjectileDef = FindCeProjectileDef(projectileCeType, shooter, true);
+			var overrideLaunch = overrideProjectileDef?.thingClass == null
+				? null
+				: AccessTools.DeclaredMethod(overrideProjectileDef.thingClass, "Launch", launchParameters);
+			ClearPheromones(map, shooterCell, radius);
+			var beforeOverride = SnapshotPheromones(map, shooterCell, radius);
+			var overrideProjectile = overrideProjectileDef == null ? null : ThingMaker.MakeThing(overrideProjectileDef) as ThingWithComps;
+			if (overrideProjectile != null)
+			{
+				GenSpawn.Spawn(overrideProjectile, shooterCell, map, WipeMode.Vanish);
+				spawnedThings.Add(overrideProjectile);
+			}
+			var overrideError = InvokeCeProjectileLaunch(overrideLaunch, overrideProjectile, shooter, shooterCell, shotAngle, shotRotation, shotHeight, shotSpeed, shooter.equipment?.Primary, distance);
+			var overrideChange = DescribePheromoneChange(map, beforeOverride, out var overrideChangedCount);
+			var overrideCovered = overrideProjectileDef == null
+				|| (overrideProjectile != null && overrideLaunch != null && overrideError == null && overrideChangedCount > 0);
+
 			return new
 			{
 				success = humanProjectile != null
@@ -4258,10 +4276,12 @@ namespace ZombieLand
 					&& humanError == null
 					&& spitterErrorText == null
 					&& humanChangedCount > 0
-					&& spitterChangedCount == 0,
+					&& spitterChangedCount == 0
+					&& overrideCovered,
 				projectileDef = projectileDef.defName,
 				projectileType = projectileDef.thingClass?.FullName,
 				launch = launch.FullDescription(),
+				patchTargets = PatchedMethodsForPatchClass("CETools_Patch2"),
 				shot = new { shotAngle, shotRotation, shotHeight, shotSpeed, distance },
 				human = new
 				{
@@ -4278,23 +4298,40 @@ namespace ZombieLand
 					error = spitterErrorText,
 					changedCount = spitterChangedCount,
 					change = spitterChange
+				},
+				declaredOverride = new
+				{
+					covered = overrideCovered,
+					projectileDef = overrideProjectileDef?.defName,
+					projectileType = overrideProjectileDef?.thingClass?.FullName,
+					launch = overrideLaunch?.FullDescription(),
+					error = overrideError,
+					changedCount = overrideChangedCount,
+					change = overrideChange
 				}
 			};
 		}
 
-		static ThingDef FindCeProjectileDef(Type projectileCeType, Pawn shooter)
+		static Type[] CeProjectilePhysicsLaunchParameters() =>
+			new[] { typeof(Thing), typeof(Vector2), typeof(float), typeof(float), typeof(float), typeof(float), typeof(Thing), typeof(float) };
+
+		static ThingDef FindCeProjectileDef(Type projectileCeType, Pawn shooter, bool requireDeclaredPhysicsLaunch = false)
 		{
 			var equippedProjectile = shooter?.equipment?.PrimaryEq?.PrimaryVerb?.verbProps?.defaultProjectile;
-			if (equippedProjectile != null && projectileCeType.IsAssignableFrom(equippedProjectile.thingClass))
+			if (requireDeclaredPhysicsLaunch == false && equippedProjectile != null && projectileCeType.IsAssignableFrom(equippedProjectile.thingClass))
 				return equippedProjectile;
+			var parameters = CeProjectilePhysicsLaunchParameters();
 			return DefDatabase<ThingDef>.AllDefsListForReading
 				.Where(def => def.thingClass != null && projectileCeType.IsAssignableFrom(def.thingClass))
+				.Where(def => requireDeclaredPhysicsLaunch == false || AccessTools.DeclaredMethod(def.thingClass, "Launch", parameters) != null)
 				.OrderBy(def => def.defName)
 				.FirstOrDefault();
 		}
 
 		static string InvokeCeProjectileLaunch(MethodInfo launch, ThingWithComps projectile, Thing launcher, IntVec3 originCell, float shotAngle, float shotRotation, float shotHeight, float shotSpeed, Thing equipment, float distance)
 		{
+			if (launch == null)
+				return "Launch method was null.";
 			if (projectile == null)
 				return "Projectile instance was null.";
 			try
