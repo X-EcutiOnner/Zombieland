@@ -8,6 +8,19 @@
 	<Difficulty_ZombielandThreatScale_Info>Steuert den Schwierigkeitsgrad fast aller Dinge in Zombieland wie z.B. Zombiefähigkeiten, Bedrohungsprognosen und vieles mehr.</Difficulty_ZombielandThreatScale_Info>
 	<Difficulty_ZombielandThreatScale_Label>Zombieland Bedrohungsskala</Difficulty_ZombielandThreatScale_Label>
 
+	<ZombieSuicideBomber>Selbstmordbomber-Zombie</ZombieSuicideBomber>
+	<ZombieToxicSplasher>Giftspucker-Zombie</ZombieToxicSplasher>
+	<ZombieTanky>Gepanzerter Operator-Zombie</ZombieTanky>
+	<ZombieMiner>Bergarbeiter-Zombie</ZombieMiner>
+	<ZombieElectrifier>Elektrifizierer-Zombie</ZombieElectrifier>
+	<ZombieAlbino>Albino-Zombie</ZombieAlbino>
+	<ZombieDarkSlimer>Dunkler Schleimer-Zombie</ZombieDarkSlimer>
+	<ZombieHealer>Heiler-Zombie</ZombieHealer>
+	<ZombieChild>Zombiekind</ZombieChild>
+	<ZombieWeak>Schwacher Zombie</ZombieWeak>
+	<ZombieStrong>Starker Zombie</ZombieStrong>
+	<ZombieSimple>Einfacher Zombie</ZombieSimple>
+
 	<LetterLabelZombiesRising>Zombie Attack</LetterLabelZombiesRising>
 	<ZombiesRising>Eine Gruppe von Zombies greift an</ZombiesRising>
 
@@ -34,6 +47,7 @@
 
 	<ZombielandContaminationTitle>Kontamination</ZombielandContaminationTitle>
 	<ZombielandContamination>Intensität</ZombielandContamination>
+	<ContaminationEffectiveness>Gesamteffektivität {0}%</ContaminationEffectiveness>
 
 	<WhenDoZombiesSpawn>Wann erscheinen Zombies?</WhenDoZombiesSpawn>
 	<SpawnWhenType_AllTheTime>Jederzeit</SpawnWhenType_AllTheTime>
@@ -159,6 +173,8 @@
 	<ZombieMiscTitle>Verschiedenes</ZombieMiscTitle>
 	<UseCustomTextures>Benutze Spezialtexturen</UseCustomTextures>
 	<ReplaceTwinkie>Überlebensrationen mit Twinkies ersetzen</ReplaceTwinkie>
+	<Zombieland_Twinkie_Label>Twinkie</Zombieland_Twinkie_Label>
+	<Zombieland_Twinkie_Description>Ein Twinkie ist ein amerikanischer Snackkuchen, vermarktet als „goldener Biskuitkuchen mit cremiger Füllung“.</Zombieland_Twinkie_Description>
 	<ZombiesTriggerDangerMusic>Zombies beeinflussen die Kampfmusik</ZombiesTriggerDangerMusic>
 	<PlayCreepyAmbientSound>Gruseliger Hintergrundton während der Nacht</PlayCreepyAmbientSound>
 	<BetterZombieAvoidance>Automatische Vermeidung von Zombies</BetterZombieAvoidance>
@@ -170,7 +186,7 @@
 	<FactoryResetButton>Werkseinstellung</FactoryResetButton>
 	<ResetButton>Reset</ResetButton>
 	<UninstallZombieland>Zombieland aus aktuellem Spiel entfernen</UninstallZombieland>
-	<ConfirmUninstallZombieland>In den folgenden Schritten können Sie einen neuen Dateinamen auswählen. Nach dem Speichern gelangen Sie wider in das Hauptmenü. Die neue Datei kann ohne Zombieland geladen werden.\n\Wollen Sie wirklich alle Zombieland-Inhalte aus dem aktuellen Spiel entfernen?</ConfirmUninstallZombieland>
+	<ConfirmUninstallZombieland>In den folgenden Schritten können Sie einen neuen Dateinamen auswählen. Nach dem Speichern gelangen Sie wieder in das Hauptmenü. Die neue Datei kann ohne Zombieland geladen werden.\n\nWollen Sie wirklich alle Zombieland-Inhalte aus dem aktuellen Spiel entfernen?</ConfirmUninstallZombieland>
 	<UninstallButton>Entfernen</UninstallButton>
 
 	<ClipboardActionTitle>Zwischenablage</ClipboardActionTitle>

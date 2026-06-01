@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<Zombies.label>зомби</Zombies.label>
+	<Zombies.description>Неживые существа.</Zombies.description>
+	<Zombies.fixedName>Зомби</Zombies.fixedName>
+	<Zombies.pawnsPlural>зомби</Zombies.pawnsPlural>
+
+</LanguageData>

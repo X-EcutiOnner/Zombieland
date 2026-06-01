@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<Stumble.reportString>спотыкается.</Stumble.reportString>
+	<Sabotage.reportString>саботирует.</Sabotage.reportString>
+	<ExtractZombieSerum.reportString>собирает экстракт зомби из TargetA.</ExtractZombieSerum.reportString>
+	<DoubleTap.reportString>добивает TargetA.</DoubleTap.reportString>
+	<RopeZombie.reportString>связывает TargetA.</RopeZombie.reportString>
+	<ZapZombies.reportString>запускает зомби-шокер.</ZapZombies.reportString>
+
+</LanguageData>

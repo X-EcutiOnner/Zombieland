@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<Zombies.label>zombiler</Zombies.label>
+	<Zombies.description>Ölümsüz yaratıklar.</Zombies.description>
+	<Zombies.fixedName>Zombiler</Zombies.fixedName>
+	<Zombies.pawnsPlural>zombiler</Zombies.pawnsPlural>
+
+</LanguageData>

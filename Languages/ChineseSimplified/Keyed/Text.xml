@@ -8,6 +8,19 @@
 	<Difficulty_ZombielandThreatScale_Info>控制僵尸乐园中几乎所有事物的难度，如僵尸能力、威胁预测等等。</Difficulty_ZombielandThreatScale_Info>
 	<Difficulty_ZombielandThreatScale_Label>僵尸之地的威胁等级</Difficulty_ZombielandThreatScale_Label>
 
+	<ZombieSuicideBomber>自爆僵尸</ZombieSuicideBomber>
+	<ZombieToxicSplasher>毒液喷溅僵尸</ZombieToxicSplasher>
+	<ZombieTanky>重装操作员僵尸</ZombieTanky>
+	<ZombieMiner>矿工僵尸</ZombieMiner>
+	<ZombieElectrifier>电击僵尸</ZombieElectrifier>
+	<ZombieAlbino>白化僵尸</ZombieAlbino>
+	<ZombieDarkSlimer>黑色黏液僵尸</ZombieDarkSlimer>
+	<ZombieHealer>治疗僵尸</ZombieHealer>
+	<ZombieChild>儿童僵尸</ZombieChild>
+	<ZombieWeak>弱小僵尸</ZombieWeak>
+	<ZombieStrong>强壮僵尸</ZombieStrong>
+	<ZombieSimple>普通僵尸</ZombieSimple>
+
 	<LetterLabelZombiesRising>丧尸袭击</LetterLabelZombiesRising>
 	<ZombiesRising>一群丧尸出现。</ZombiesRising>
 
@@ -34,6 +47,7 @@
 	<ContaminationEnabled>全球启用</ContaminationEnabled>
 	<ZombielandRestartRequired>更改此设置需要重新启动</ZombielandRestartRequired>
 	<ZombielandContamination>强度</ZombielandContamination>
+	<ContaminationEffectiveness>总效果 {0}%</ContaminationEffectiveness>
 
 	<WhenDoZombiesSpawn>丧尸出现的时间段？</WhenDoZombiesSpawn>
 	<SpawnWhenType_AllTheTime>所有时间</SpawnWhenType_AllTheTime>
@@ -159,6 +173,8 @@
 	<ZombieMiscTitle>其他</ZombieMiscTitle>
 	<UseCustomTextures>使用自定义纹理</UseCustomTextures>
 	<ReplaceTwinkie>将包装生存食品改为Twinkies</ReplaceTwinkie>
+	<Zombieland_Twinkie_Label>Twinkie</Zombieland_Twinkie_Label>
+	<Zombieland_Twinkie_Description>Twinkie 是一种美式点心蛋糕，宣传语为“带奶油夹心的金色海绵蛋糕”。</Zombieland_Twinkie_Description>
 	<ZombiesTriggerDangerMusic>丧尸会触发危险音乐效果</ZombiesTriggerDangerMusic>
 	<PlayCreepyAmbientSound>在夜晚播放令人毛骨悚然的环境声效</PlayCreepyAmbientSound>
 	<BetterZombieAvoidance>自动回避丧尸</BetterZombieAvoidance>

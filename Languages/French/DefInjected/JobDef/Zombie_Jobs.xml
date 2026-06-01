@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<LanguageData>
+
+	<Stumble.reportString>titube.</Stumble.reportString>
+	<Sabotage.reportString>sabote.</Sabotage.reportString>
+	<ExtractZombieSerum.reportString>récolte de l'extrait de zombie sur TargetA.</ExtractZombieSerum.reportString>
+	<DoubleTap.reportString>achève TargetA.</DoubleTap.reportString>
+	<RopeZombie.reportString>attache TargetA.</RopeZombie.reportString>
+	<ZapZombies.reportString>active le neutraliseur de zombies.</ZapZombies.reportString>
+
+</LanguageData>

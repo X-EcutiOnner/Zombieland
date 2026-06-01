@@ -7,8 +7,7 @@
 	<SuicideBomb.label>Selbstmordbombe</SuicideBomb.label>
 	<SuicideBomb.deathMessage>{0} ist bei einem Zombie-Selbstmordanschlag ums Leben gekommen.</SuicideBomb.deathMessage>
 
-	<ToxicSplatter.label>Fleck</ToxicSplatter.label>
-	<ToxicSplatter.deathMessage>{0} 被杀死了。</ToxicSplatter.deathMessage>
+	<ToxicSplatter.label>Spritzer</ToxicSplatter.label>
 
 	<ElectricalShock.label>Stromschlag</ElectricalShock.label>
 	<ElectricalShock.deathMessage>{0} wurde durch einen Stromschlag getötet.</ElectricalShock.deathMessage>

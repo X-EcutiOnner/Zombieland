@@ -8,6 +8,19 @@
 	<Difficulty_ZombielandThreatScale_Info>Регулирует сложность почти всех вещей в Zombieland, таких как способности зомби, прогноз угрозы и многое другое.</Difficulty_ZombielandThreatScale_Info>
 	<Difficulty_ZombielandThreatScale_Label>Шкала угроз Зомбиленда</Difficulty_ZombielandThreatScale_Label>
 
+	<ZombieSuicideBomber>Зомби-смертник</ZombieSuicideBomber>
+	<ZombieToxicSplasher>Токсичный зомби-брызгун</ZombieToxicSplasher>
+	<ZombieTanky>Бронированный зомби-оператор</ZombieTanky>
+	<ZombieMiner>Зомби-шахтёр</ZombieMiner>
+	<ZombieElectrifier>Электрический зомби</ZombieElectrifier>
+	<ZombieAlbino>Зомби-альбинос</ZombieAlbino>
+	<ZombieDarkSlimer>Тёмный слизневый зомби</ZombieDarkSlimer>
+	<ZombieHealer>Зомби-лекарь</ZombieHealer>
+	<ZombieChild>Зомби-ребёнок</ZombieChild>
+	<ZombieWeak>Слабый зомби</ZombieWeak>
+	<ZombieStrong>Сильный зомби</ZombieStrong>
+	<ZombieSimple>Обычный зомби</ZombieSimple>
+
 	<LetterLabelZombiesRising>Аттака Зомби</LetterLabelZombiesRising>
 	<ZombiesRising>Группа зомби появилась</ZombiesRising>
 
@@ -34,6 +47,7 @@
 
 	<ZombielandContaminationTitle>Загрязнение</ZombielandContaminationTitle>
 	<ZombielandContamination>Интенсивность</ZombielandContamination>
+	<ContaminationEffectiveness>Общая эффективность: {0}%</ContaminationEffectiveness>
 
 	<WhenDoZombiesSpawn>Когда зомби будут появляться?</WhenDoZombiesSpawn>
 	<SpawnWhenType_AllTheTime>Всё время</SpawnWhenType_AllTheTime>
@@ -47,7 +61,7 @@
 	<SmartWandering_Random>Случайный</SmartWandering_Random>
 	<SmartWandering_Simple>Простой</SmartWandering_Simple>
 	<SmartWandering_Smart>Умная</SmartWandering_Smart>
-	<BlacklistedBiomes>Biomes without zombies</BlacklistedBiomes>
+	<BlacklistedBiomes>Биомы без зомби</BlacklistedBiomes>
 	<Biomes>Biomes</Biomes>
 
 	<WhatDoZombiesAttack>Кого зомби будут атаковать?</WhatDoZombiesAttack>
@@ -159,6 +173,8 @@
 	<ZombieMiscTitle>Разное</ZombieMiscTitle>
 	<UseCustomTextures>Использовать текстуры дополнения для зомби</UseCustomTextures>
 	<ReplaceTwinkie>Изменить сухой паёк на Twinkies</ReplaceTwinkie>
+	<Zombieland_Twinkie_Label>Твинки</Zombieland_Twinkie_Label>
+	<Zombieland_Twinkie_Description>Твинки — американское бисквитное пирожное с кремовой начинкой.</Zombieland_Twinkie_Description>
 	<ZombiesTriggerDangerMusic>Проигрывать музыку боя при Зомби-происшествие</ZombiesTriggerDangerMusic>
 	<PlayCreepyAmbientSound>Воспроизвести жуткий окружающий звук ночью</PlayCreepyAmbientSound>
 	<BetterZombieAvoidance>Улучшенный способ избежать зомби</BetterZombieAvoidance>
@@ -176,7 +192,7 @@
 	<ClipboardActionTitle>Буфер обмена</ClipboardActionTitle>
 	<CopySettings>Настройки копирования</CopySettings>
 	<CopyButton>Копировать</CopyButton>
-	<DuplicateButton>Kopyalamak</DuplicateButton>
+	<DuplicateButton>Дублировать</DuplicateButton>
 	<PasteSettings>Настройки вставки</PasteSettings>
 	<PasteButton>Вставить</PasteButton>
 	<RopeZombie>Захват зомби</RopeZombie>

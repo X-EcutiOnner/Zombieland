@@ -8,6 +8,19 @@
 	<Difficulty_ZombielandThreatScale_Info>Zombieland'deki zombi yetenekleri, tehdit tahmini ve çok daha fazlası gibi neredeyse her şeyin zorluğunu kontrol eder.</Difficulty_ZombielandThreatScale_Info>
 	<Difficulty_ZombielandThreatScale_Label>Zombieland tehdit ölçeği</Difficulty_ZombielandThreatScale_Label>
 
+	<ZombieSuicideBomber>İntihar bombacısı zombi</ZombieSuicideBomber>
+	<ZombieToxicSplasher>Zehir saçan zombi</ZombieToxicSplasher>
+	<ZombieTanky>Zırhlı operatör zombi</ZombieTanky>
+	<ZombieMiner>Madenci zombi</ZombieMiner>
+	<ZombieElectrifier>Elektrik yayan zombi</ZombieElectrifier>
+	<ZombieAlbino>Albino zombi</ZombieAlbino>
+	<ZombieDarkSlimer>Kara balçık zombi</ZombieDarkSlimer>
+	<ZombieHealer>Şifacı zombi</ZombieHealer>
+	<ZombieChild>Çocuk zombi</ZombieChild>
+	<ZombieWeak>Zayıf zombi</ZombieWeak>
+	<ZombieStrong>Güçlü zombi</ZombieStrong>
+	<ZombieSimple>Basit zombi</ZombieSimple>
+
 	<LetterLabelZombiesRising>Zombi Saldırısı</LetterLabelZombiesRising>
 	<ZombiesRising>Bir grup zombi ortaya çıkar.</ZombiesRising>
 
@@ -34,6 +47,7 @@
 
 	<ZombielandContaminationTitle>Kirlilik</ZombielandContaminationTitle>
 	<ZombielandContamination>Yoğunluk</ZombielandContamination>
+	<ContaminationEffectiveness>Toplam etkinlik {0}%</ContaminationEffectiveness>
 
 	<WhenDoZombiesSpawn>Zombiler ne zaman ortaya çıksın?</WhenDoZombiesSpawn>
 	<SpawnWhenType_AllTheTime>Her zaman</SpawnWhenType_AllTheTime>
@@ -159,6 +173,8 @@
 	<ZombieMiscTitle>Çeşitli</ZombieMiscTitle>
 	<UseCustomTextures>Özel dokular kullanın</UseCustomTextures>
 	<ReplaceTwinkie>Hayatta kalma öğünlerini Twinkies olarak değiştir</ReplaceTwinkie>
+	<Zombieland_Twinkie_Label>Twinkie</Zombieland_Twinkie_Label>
+	<Zombieland_Twinkie_Description>Twinkie, "kremalı dolgulu altın sünger kek" olarak pazarlanan Amerikan atıştırmalık kekidir.</Zombieland_Twinkie_Description>
 	<ZombiesTriggerDangerMusic>Zombiler tehlike müziğini etkiliyor</ZombiesTriggerDangerMusic>
 	<PlayCreepyAmbientSound>Geceleri ürpertici ortam sesi çal</PlayCreepyAmbientSound>
 	<BetterZombieAvoidance>Zombilerden otomatik olarak kaçınma</BetterZombieAvoidance>
@@ -176,6 +192,7 @@
 	<ClipboardActionTitle>Panoya</ClipboardActionTitle>
 	<CopySettings>Ayarları panoya kopyala</CopySettings>
 	<CopyButton>Kopyala</CopyButton>
+	<DuplicateButton>Çoğalt</DuplicateButton>
 	<PasteSettings>Panodan ayarları ayarla</PasteSettings>
 	<PasteButton>Yapıştırmak</PasteButton>
 	<RopeZombie>Bu zombiyi yakala</RopeZombie>
