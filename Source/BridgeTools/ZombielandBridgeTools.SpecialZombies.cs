@@ -821,6 +821,7 @@ namespace ZombieLand
 					var ordinaryZombieClogging = VerifyPositionZombieClogging(map, root + new IntVec3(-6, 0, -18), spawnedThings, touchedCenters);
 					var colonistContact = VerifyPositionColonistContact(map, root + new IntVec3(6, 0, -18), spawnedThings, touchedCenters);
 					var attractionGates = VerifyPositionAttractionGates(map, root + new IntVec3(18, 0, -18), spawnedThings, touchedCenters);
+					var customSupportOverrides = VerifyCustomSupportOverrideGates(map, root + new IntVec3(18, 0, 0), spawnedThings, touchedCenters);
 					var vehicleHook = VerifyPositionVehicleHook();
 
 					return new
@@ -831,14 +832,16 @@ namespace ZombieLand
 							&& ObjectSuccess(ordinaryZombieClogging)
 							&& ObjectSuccess(colonistContact)
 							&& ObjectSuccess(attractionGates)
+							&& ObjectSuccess(customSupportOverrides)
 							&& ObjectSuccess(vehicleHook),
-						sourcePath = "Thing.Position setter prefix -> spitter pheromone trail, ordinary zombie clogging, colonist contact timestamp, attraction gates, and optional Vehicle Framework timestamp hook",
+						sourcePath = "Thing.Position setter prefix -> spitter pheromone trail, ordinary zombie clogging, colonist contact timestamp, attraction gates, optional ZombielandSupport gates, and optional Vehicle Framework timestamp hook",
 						patchOwners,
 						patchTargets,
 						spitterTrail,
 						ordinaryZombieClogging,
 						colonistContact,
 						attractionGates,
+						customSupportOverrides,
 						vehicleHook
 					};
 				}
@@ -1066,6 +1069,113 @@ namespace ZombieLand
 				{
 					ApplyZombieSettingsOverride(values => values.attackMode = previousAttackMode);
 				}
+			}
+
+			static object VerifyCustomSupportOverrideGates(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+			{
+				var testSupportAssemblyLoaded = AppDomain.CurrentDomain.GetAssemblies()
+					.Any(assembly => assembly.GetName().Name == "ZLTestSupport");
+				if (testSupportAssemblyLoaded == false)
+				{
+					return new
+					{
+						success = true,
+						status = "skipped: ZLTestSupport is not installed in the active mod set"
+					};
+				}
+
+				var previousAttackMode = ZombieSettings.Values.attackMode;
+				try
+				{
+					ApplyZombieSettingsOverride(values => values.attackMode = AttackMode.OnlyColonists);
+
+					if (TryFindClearSpawnCell(map, root, 18f, out var ignoredCell, out var ignoredSpawnError) == false)
+						return ignoredSpawnError;
+					if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(5, 0, 0), 12f, out var forcedCell, out var forcedSpawnError) == false)
+						return forcedSpawnError;
+					if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(0, 0, 5), 12f, out var controlCell, out var controlSpawnError) == false)
+						return controlSpawnError;
+					if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(5, 0, 5), 12f, out var blockedCell, out var blockedSpawnError) == false)
+						return blockedSpawnError;
+					if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(10, 0, 5), 12f, out var infectedControlCell, out var infectedControlSpawnError) == false)
+						return infectedControlSpawnError;
+
+					var ignoredColonist = GenerateNamedSupportPawn("ZL_IgnoreZombies", Faction.OfPlayer);
+					GenSpawn.Spawn(ignoredColonist, ignoredCell, map, Rot4.South);
+					DisablePawnWork(ignoredColonist);
+					spawnedThings.Add(ignoredColonist);
+
+					var forcedInfectedColonist = GenerateNamedSupportPawn("ZL_AttractsZombies", Faction.OfPlayer);
+					forcedInfectedColonist.SetInfectionState(InfectionState.Infecting);
+					GenSpawn.Spawn(forcedInfectedColonist, forcedCell, map, Rot4.South);
+					DisablePawnWork(forcedInfectedColonist);
+					spawnedThings.Add(forcedInfectedColonist);
+
+					var controlColonist = GenerateNamedSupportPawn("ZL_Neutral", Faction.OfPlayer);
+					GenSpawn.Spawn(controlColonist, controlCell, map, Rot4.South);
+					DisablePawnWork(controlColonist);
+					spawnedThings.Add(controlColonist);
+
+					var blockedColonist = GenerateNamedSupportPawn("ZL_BlockZombie", Faction.OfPlayer);
+					GenSpawn.Spawn(blockedColonist, blockedCell, map, Rot4.South);
+					DisablePawnWork(blockedColonist);
+					spawnedThings.Add(blockedColonist);
+
+					var infectedControlColonist = GenerateNamedSupportPawn("ZL_InfectedNeutral", Faction.OfPlayer);
+					infectedControlColonist.SetInfectionState(InfectionState.Infecting);
+					GenSpawn.Spawn(infectedControlColonist, infectedControlCell, map, Rot4.South);
+					DisablePawnWork(infectedControlColonist);
+					spawnedThings.Add(infectedControlColonist);
+					touchedCenters.Add(ignoredCell);
+					touchedCenters.Add(forcedCell);
+					touchedCenters.Add(controlCell);
+					touchedCenters.Add(blockedCell);
+					touchedCenters.Add(infectedControlCell);
+
+					var ignoredTrail = VerifyPawnTrailCase(map, ignoredColonist, false);
+					var forcedDoesAttractsZombies = Customization.DoesAttractsZombies(forcedInfectedColonist);
+					var forcedTrail = VerifyPawnTrailCase(map, forcedInfectedColonist, false);
+					var controlTrail = VerifyPawnTrailCase(map, controlColonist, true);
+					var infectedControlDoesAttractsZombies = Customization.DoesAttractsZombies(infectedControlColonist);
+					var infectedControlTrail = VerifyPawnTrailCase(map, infectedControlColonist, false);
+					var blockedCannotBecomeZombie = Customization.CannotBecomeZombie(blockedColonist);
+					var controlCannotBecomeZombie = Customization.CannotBecomeZombie(controlColonist);
+
+					return new
+					{
+						success = ObjectSuccess(ignoredTrail)
+							&& ObjectSuccess(forcedTrail)
+							&& forcedDoesAttractsZombies
+							&& ObjectSuccess(controlTrail)
+							&& ObjectSuccess(infectedControlTrail)
+							&& infectedControlDoesAttractsZombies == false
+							&& blockedCannotBecomeZombie
+							&& controlCannotBecomeZombie == false,
+						status = "active: ZLTestSupport fixture return values affected attraction and infection gates",
+						attackMode = ZombieSettings.Values.attackMode.ToString(),
+						ignoredTrail,
+						forcedTrail,
+						forcedDoesAttractsZombies,
+						controlTrail,
+						infectedControlTrail,
+						infectedControlDoesAttractsZombies,
+						blockedCannotBecomeZombie,
+						controlCannotBecomeZombie,
+						blockedPawn = DescribePawn(blockedColonist),
+						controlPawn = DescribePawn(controlColonist)
+					};
+				}
+				finally
+				{
+					ApplyZombieSettingsOverride(values => values.attackMode = previousAttackMode);
+				}
+			}
+
+			static Pawn GenerateNamedSupportPawn(string name, Faction faction)
+			{
+				var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, faction);
+				pawn.Name = new NameSingle(name);
+				return pawn;
 			}
 
 			static object VerifyPawnTrailCase(Map map, Pawn pawn, bool expectTrail)

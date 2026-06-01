@@ -75,6 +75,13 @@ namespace ZombieLand
 			Log.Error(error);
 		}
 
+		static bool IsConcretePatchTarget(MethodInfo method)
+		{
+			return method != null
+				&& method.ContainsGenericParameters == false
+				&& (method.DeclaringType?.ContainsGenericParameters ?? false) == false;
+		}
+
 		static void SpawnTarSmoke(IntVec3 center, Map map, float radius, float difficulty, bool playSound = true)
 		{
 			if (map == null)
@@ -1877,7 +1884,7 @@ namespace ZombieLand
 			{
 				return GenTypes.AllSubclasses(typeof(WorkGiver_Scanner))
 				.Select(type => type.GetMethod("HasJobOnCell", AccessTools.all | BindingFlags.DeclaredOnly))
-				.Where(method => method != null)
+				.Where(IsConcretePatchTarget)
 				.Cast<MethodBase>();
 			}
 		}
@@ -1921,7 +1928,7 @@ namespace ZombieLand
 			{
 				return GenTypes.AllSubclasses(typeof(WorkGiver_Scanner))
 				.Select(type => type.GetMethod(nameof(WorkGiver_Scanner.JobOnCell), AccessTools.all | BindingFlags.DeclaredOnly))
-				.Where(method => method != null)
+				.Where(IsConcretePatchTarget)
 				.Cast<MethodBase>();
 			}
 		}
@@ -1965,7 +1972,7 @@ namespace ZombieLand
 			{
 				return GenTypes.AllSubclasses(typeof(WorkGiver_Scanner))
 				.Select(type => type.GetMethod(nameof(WorkGiver_Scanner.HasJobOnThing), AccessTools.all | BindingFlags.DeclaredOnly))
-				.Where(method => method != null)
+				.Where(IsConcretePatchTarget)
 				.Cast<MethodBase>();
 			}
 		}
@@ -2013,7 +2020,7 @@ namespace ZombieLand
 			{
 				return GenTypes.AllSubclasses(typeof(WorkGiver_Scanner))
 				.Select(type => type.GetMethod(nameof(WorkGiver_Scanner.JobOnThing), AccessTools.all | BindingFlags.DeclaredOnly))
-				.Where(method => method != null)
+				.Where(IsConcretePatchTarget)
 				.Cast<MethodBase>();
 			}
 		}

@@ -52,6 +52,23 @@ namespace ZombieLand
 				.FirstOrDefault();
 		}
 
+		static PawnKindDef FindPawnKind(string defName)
+		{
+			return DefDatabase<PawnKindDef>.GetNamed(defName, false);
+		}
+
+		static object SkippedOptionalPawnKindCase(string name, string targetKind, string reason)
+		{
+			return new
+			{
+				name,
+				success = true,
+				skipped = true,
+				targetKind,
+				reason
+			};
+		}
+
 		static bool TryFindEatingFixtureCells(Map map, IntVec3 rootCell, string targetLabel, out IntVec3 zombieCell, out IntVec3 targetCell, out object error)
 		{
 			const float searchRadius = 70f;
@@ -288,15 +305,19 @@ namespace ZombieLand
 			{
 				var animalKind = DefDatabase<PawnKindDef>.GetNamed("Muffalo", false);
 				var nonFleshKind = FindNonFleshPawnKind();
+				var harNonFleshKind = FindPawnKind("ZLTestNonFleshAlienKind");
 				var disabledCase = RunCase("corpseEatingDisabled", false, false, PawnKindDefOf.Colonist, Faction.OfPlayer, root + new IntVec3(-8, 0, 8));
 				var enabledHumanCase = RunCase("corpseEatingEnabledHuman", true, true, PawnKindDefOf.Colonist, Faction.OfPlayer, root + new IntVec3(8, 0, 8));
 				var enabledAnimalCase = RunCase("corpseEatingEnabledAnimal", true, true, animalKind, null, root + new IntVec3(8, 0, -8));
 				var nonFleshCase = RunCase("corpseEatingRejectsNonFlesh", true, false, nonFleshKind, null, root + new IntVec3(-16, 0, 8), true);
+				var harNonFleshCase = harNonFleshKind == null
+					? SkippedOptionalPawnKindCase("corpseEatingRejectsHarNonFleshAlien", "ZLTestNonFleshAlienKind", "Optional local ZLTestAlienRace fixture is not loaded.")
+					: RunCase("corpseEatingRejectsHarNonFleshAlien", true, false, harNonFleshKind, null, root + new IntVec3(-16, 0, -16), true);
 				return new
 				{
 					success = allCasesSucceeded,
 					destroyedZombies,
-					cases = new[] { disabledCase, enabledHumanCase, enabledAnimalCase, nonFleshCase }
+					cases = new[] { disabledCase, enabledHumanCase, enabledAnimalCase, nonFleshCase, harNonFleshCase }
 				};
 			}
 			finally
@@ -516,15 +537,19 @@ namespace ZombieLand
 			{
 				var animalKind = DefDatabase<PawnKindDef>.GetNamed("Muffalo", false);
 				var nonFleshKind = FindNonFleshPawnKind();
+				var harNonFleshKind = FindPawnKind("ZLTestNonFleshAlienKind");
 				var disabledCase = RunCase("downedEatingDisabled", false, false, PawnKindDefOf.Colonist, root + new IntVec3(-8, 0, -8));
 				var enabledHumanCase = RunCase("downedEatingEnabledHuman", true, true, PawnKindDefOf.Colonist, root + new IntVec3(8, 0, -8));
 				var enabledAnimalCase = RunCase("downedEatingEnabledAnimal", true, true, animalKind, root + new IntVec3(8, 0, -16));
 				var nonFleshCase = RunCase("downedEatingRejectsNonFlesh", true, false, nonFleshKind, root + new IntVec3(-16, 0, -8));
+				var harNonFleshCase = harNonFleshKind == null
+					? SkippedOptionalPawnKindCase("downedEatingRejectsHarNonFleshAlien", "ZLTestNonFleshAlienKind", "Optional local ZLTestAlienRace fixture is not loaded.")
+					: RunCase("downedEatingRejectsHarNonFleshAlien", true, false, harNonFleshKind, root + new IntVec3(16, 0, 16));
 				return new
 				{
 					success = allCasesSucceeded,
 					destroyedZombies,
-					cases = new[] { disabledCase, enabledHumanCase, enabledAnimalCase, nonFleshCase }
+					cases = new[] { disabledCase, enabledHumanCase, enabledAnimalCase, nonFleshCase, harNonFleshCase }
 				};
 			}
 			finally
