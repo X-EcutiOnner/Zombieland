@@ -244,6 +244,85 @@ PY
 	rm -f "$patch_inventory"
 }
 
+patch_audit_reconciliation() {
+	local patch_inventory
+	patch_inventory="$(mktemp "${TMPDIR:-/tmp}/zl-patch-inventory.XXXXXX")"
+	patch_groups > "$patch_inventory"
+	python3 - "$patch_inventory" <<'PY'
+import collections
+import csv
+from pathlib import Path
+import signal
+import sys
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+patch_inventory = Path(sys.argv[1])
+coverage_path = Path("coverage/ZL_COVERAGE_INDEX.tsv")
+audit_path = Path("TEST_PATCH_AUDIT.md")
+audit_text = audit_path.read_text(errors="ignore") if audit_path.exists() else ""
+
+with coverage_path.open(newline="") as handle:
+	rows = list(csv.DictReader(handle, delimiter="\t"))
+
+row_ids = {row["id"] for row in rows}
+reference_columns = [
+	"id",
+	"source_owners",
+	"bridge_contracts",
+	"harmony_patches",
+	"tool_or_target",
+	"evidence_refs",
+	"notes",
+]
+
+counts = collections.Counter()
+unrepresented = []
+
+for line in patch_inventory.read_text().splitlines():
+	if not line.strip():
+		continue
+	location, class_name, targeting, attrs = line.split("\t", 3)
+	exact_id = f"PATCH.{class_name}"
+	if exact_id in row_ids:
+		counts["exact-row"] += 1
+		continue
+
+	represented = False
+	for row in rows:
+		text = "\n".join(row.get(column, "") for column in reference_columns)
+		if class_name in text:
+			represented = True
+			break
+
+	if targeting == "base":
+		counts["base/context"] += 1
+	elif represented:
+		counts["represented-by-row"] += 1
+	elif class_name in audit_text:
+		counts["audit-only"] += 1
+	else:
+		counts["unrepresented"] += 1
+		unrepresented.append(f"{location}:{class_name}")
+
+total = sum(counts.values())
+parts = [
+	f"total={total}",
+	f"exact-row={counts['exact-row']}",
+	f"represented-by-row={counts['represented-by-row']}",
+	f"audit-only={counts['audit-only']}",
+	f"base/context={counts['base/context']}",
+	f"unrepresented={counts['unrepresented']}",
+]
+if unrepresented:
+	print(" ".join(parts) + " missing=" + ",".join(unrepresented))
+	sys.exit(1)
+
+print(" ".join(parts))
+PY
+	rm -f "$patch_inventory"
+}
+
 bridge_tools() {
 	python3 - <<'PY'
 from pathlib import Path
@@ -1210,18 +1289,26 @@ consistency_checks() {
 		failures=$((failures + 1))
 	fi
 
-		local patch_summary
-		patch_summary="$(patch_groups | awk -F '\t' 'BEGIN { static = 0; dynamic = 0; base = 0 } $3 == "static" { static++ } $3 == "dynamic" { dynamic++ } $3 == "base" { base++ } END { printf "static=%d dynamic=%d base=%d total=%d", static, dynamic, base, static + dynamic + base }')"
-		printf 'patch_inventory\tPASS\t%s\n' "$patch_summary"
+	local patch_summary
+	patch_summary="$(patch_groups | awk -F '\t' 'BEGIN { static = 0; dynamic = 0; base = 0 } $3 == "static" { static++ } $3 == "dynamic" { dynamic++ } $3 == "base" { base++ } END { printf "static=%d dynamic=%d base=%d total=%d", static, dynamic, base, static + dynamic + base }')"
+	printf 'patch_inventory\tPASS\t%s\n' "$patch_summary"
 
-		local unrepresented_patch_gaps
-		unrepresented_patch_gaps="$(patch_row_gaps | awk -F '\t' 'NR > 1 && $5 == "unrepresented" { count++ } END { print count + 0 }')"
-		if [[ "$unrepresented_patch_gaps" == "0" ]]; then
-			printf 'patch_row_gaps\tPASS\t0 unrepresented exact-name gaps\n'
-		else
-			printf 'patch_row_gaps\tFAIL\t%s unrepresented exact-name gaps\n' "$unrepresented_patch_gaps"
-			failures=$((failures + 1))
-		fi
+	local patch_reconciliation
+	if patch_reconciliation="$(patch_audit_reconciliation)"; then
+		printf 'patch_audit_reconciliation\tPASS\t%s\n' "$patch_reconciliation"
+	else
+		printf 'patch_audit_reconciliation\tFAIL\t%s\n' "$patch_reconciliation"
+		failures=$((failures + 1))
+	fi
+
+	local unrepresented_patch_gaps
+	unrepresented_patch_gaps="$(patch_row_gaps | awk -F '\t' 'NR > 1 && $5 == "unrepresented" { count++ } END { print count + 0 }')"
+	if [[ "$unrepresented_patch_gaps" == "0" ]]; then
+		printf 'patch_row_gaps\tPASS\t0 unrepresented exact-name gaps\n'
+	else
+		printf 'patch_row_gaps\tFAIL\t%s unrepresented exact-name gaps\n' "$unrepresented_patch_gaps"
+		failures=$((failures + 1))
+	fi
 
 	local bridge_summary_line
 	bridge_summary_line="$(bridge_summary | awk -F '\t' '$1 == "candidate_retire" { print "candidate_retire=" $4 " " $5 }')"
