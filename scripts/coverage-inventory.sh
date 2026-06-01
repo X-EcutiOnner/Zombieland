@@ -17,6 +17,8 @@ BRIDGE_NEXT=0
 DEPENDENCY_GATES=0
 DEPENDENCY_GATE_SUMMARY=0
 ACTIONABLE_GATES=0
+WEAK_EVIDENCE=0
+WEAK_EVIDENCE_SUMMARY=0
 SOURCE_PATHS=0
 ROW_STATE_SUMMARY=0
 CONSISTENCY_CHECKS=0
@@ -59,6 +61,12 @@ while [[ $# -gt 0 ]]; do
 		--actionable-gates)
 			ACTIONABLE_GATES=1
 			;;
+		--weak-evidence)
+			WEAK_EVIDENCE=1
+			;;
+		--weak-evidence-summary)
+			WEAK_EVIDENCE_SUMMARY=1
+			;;
 		--source-paths)
 			SOURCE_PATHS=1
 			;;
@@ -69,7 +77,7 @@ while [[ $# -gt 0 ]]; do
 			CONSISTENCY_CHECKS=1
 			;;
 		--help|-h)
-			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--patch-row-gaps] [--bridge-tools] [--bridge-summary] [--bridge-pressure] [--bridge-next] [--dependency-gates] [--dependency-gate-summary] [--actionable-gates] [--source-paths] [--row-state-summary] [--consistency-checks] [baseline-commit]\n' "$0"
+			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--patch-row-gaps] [--bridge-tools] [--bridge-summary] [--bridge-pressure] [--bridge-next] [--dependency-gates] [--dependency-gate-summary] [--actionable-gates] [--weak-evidence] [--weak-evidence-summary] [--source-paths] [--row-state-summary] [--consistency-checks] [baseline-commit]\n' "$0"
 			exit 0
 			;;
 		*)
@@ -825,6 +833,163 @@ else:
 PY
 }
 
+weak_evidence() {
+	local mode="${1:-all}"
+	python3 - "$mode" <<'PY'
+import collections
+import csv
+import sys
+from pathlib import Path
+
+mode = sys.argv[1]
+
+unresolved_states = {
+	"partial",
+	"partial_runtime",
+	"dependency/unavailable",
+	"removed_vanilla_target",
+}
+
+weak_evidence_states = {
+	"source_only",
+	"partial",
+	"contract_runtime_absent",
+}
+
+standing_governance = {
+	"A.HARMONY.INVENTORY",
+	"J.BRIDGE.TOOLS",
+	"NEG.1_6.DISCOVERY",
+}
+
+def gate_kind(row):
+	row_id = row["id"]
+	state = row["port_delta_state"]
+	owner = row["owner_cluster"]
+	row_type = row["row_type"]
+	question = row["open_questions"].lower()
+
+	if state not in unresolved_states:
+		return "resolved"
+	if row_id in standing_governance:
+		return "standing-governance"
+	if state == "removed_vanilla_target":
+		return "removed-target-doc"
+	if row_type == "scenario":
+		return "scenario-rollup"
+	if owner == "optional_integrations":
+		return "external-mod-unavailable"
+	if state == "partial_runtime" and (
+		"branch" in question
+		or "delegated" in question
+		or "geneassembler" in question
+	):
+		return "parent-branch-marker"
+	if (
+		"biotech" in question
+		or "odyssey" in question
+		or "official dlc" in question
+		or "child" in question
+		or "killed-child" in question
+		or "pollution-capable" in question
+		or "wastepack" in question
+		or "clearpollution" in question
+		or "temporary terrain" in question
+		or "tunnel jelly" in question
+		or "sandgrid" in question
+	):
+		return "dlc-content-unavailable"
+	return "actionable-gate"
+
+def queue_kind(row, kind):
+	if kind == "actionable-gate":
+		return "local-action"
+	if kind in {"dlc-content-unavailable", "external-mod-unavailable"}:
+		return "dependency-runtime"
+	if kind == "parent-branch-marker":
+		return "parent-marker"
+	if kind == "scenario-rollup":
+		return "scenario-rollup"
+	if kind in {"standing-governance", "removed-target-doc"}:
+		return "governance"
+	if (
+		row["evidence_state"] == "source_only"
+		and row["port_delta_state"] in {"resolved", "resolved_runtime"}
+		and row["row_type"] in {"supporting_infra", "bridge_contract", "integration"}
+	):
+		return "source-backstop"
+	if row["evidence_state"] in weak_evidence_states:
+		return "resolved-weak-evidence"
+	return "review"
+
+def next_step(row, queue):
+	if queue == "local-action":
+		return "do source/decompiler pass, then runtime only if target semantics require it"
+	if queue == "dependency-runtime":
+		return "do not retest in current install; rerun with legitimate dependency/DLC active"
+	if queue == "parent-marker":
+		return "keep parent partial; child/delegated rows own the unavailable branch"
+	if queue == "scenario-rollup":
+		return "inspect owning feature row before adding runtime"
+	if queue == "governance":
+		return "periodic audit only; no gameplay retest implied"
+	if queue == "source-backstop":
+		return "no helper-only runtime; keep behavior on owning feature/scenario rows"
+	if queue == "resolved-weak-evidence":
+		return "review only if source changed or a named regression appears"
+	return "inspect row disposition before adding tests"
+
+rows = []
+with Path("coverage/ZL_COVERAGE_INDEX.tsv").open(newline="") as handle:
+	for row in csv.DictReader(handle, delimiter="\t"):
+		if (
+			row["evidence_state"] not in weak_evidence_states
+			and row["port_delta_state"] not in unresolved_states
+		):
+			continue
+		kind = gate_kind(row)
+		queue = queue_kind(row, kind)
+		rows.append((queue, kind, row))
+
+if mode == "summary":
+	counts = collections.Counter(queue for queue, kind, row in rows)
+	for queue in sorted(counts):
+		print(f"{queue}\t{counts[queue]}")
+else:
+	order = {
+		"local-action": 0,
+		"dependency-runtime": 1,
+		"parent-marker": 2,
+		"scenario-rollup": 3,
+		"governance": 4,
+		"resolved-weak-evidence": 5,
+		"source-backstop": 6,
+		"review": 7,
+	}
+	for queue, kind, row in sorted(
+		rows,
+		key=lambda item: (
+			order.get(item[0], 99),
+			item[2]["row_type"],
+			item[2]["owner_cluster"],
+			item[2]["id"],
+		),
+	):
+		print("\t".join([
+			queue,
+			row["id"],
+			row["row_type"],
+			row["owner_cluster"],
+			row["evidence_state"],
+			row["port_delta_state"],
+			kind,
+			next_step(row, queue),
+			row["last_evidence"].replace("\t", " ").strip(),
+			row["open_questions"].replace("\t", " ").strip(),
+		]))
+PY
+}
+
 source_paths() {
 	python3 - <<'PY'
 from pathlib import Path
@@ -1323,6 +1488,10 @@ consistency_checks() {
 		failures=$((failures + 1))
 	fi
 
+	local weak_evidence_summary
+	weak_evidence_summary="$(weak_evidence summary | awk -F '\t' '{ print $1 "=" $2 }' | paste -sd ';' -)"
+	printf 'weak_evidence_queue\tPASS\t%s\n' "$weak_evidence_summary"
+
 	local report_patch_counts
 	if report_patch_counts="$(coverage_report_patch_counts)"; then
 		printf 'coverage_report_patch_counts\tPASS\t%s\n' "$report_patch_counts"
@@ -1514,6 +1683,18 @@ fi
 if [[ "$ACTIONABLE_GATES" == "1" ]]; then
 	printf 'id\trow_type\towner_cluster\tevidence_state\tport_delta_state\tgate_kind\tprimary_scenario\topen_questions\n'
 	dependency_gates actionable
+	exit 0
+fi
+
+if [[ "$WEAK_EVIDENCE_SUMMARY" == "1" ]]; then
+	printf 'queue_kind\tcount\n'
+	weak_evidence summary
+	exit 0
+fi
+
+if [[ "$WEAK_EVIDENCE" == "1" ]]; then
+	printf 'queue_kind\tid\trow_type\towner_cluster\tevidence_state\tport_delta_state\tgate_kind\tnext_step\tlast_evidence\topen_questions\n'
+	weak_evidence all
 	exit 0
 fi
 
