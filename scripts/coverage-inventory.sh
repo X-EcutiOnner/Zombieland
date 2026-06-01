@@ -926,7 +926,7 @@ def next_step(row, queue):
 	if queue == "local-action":
 		return "do source/decompiler pass, then runtime only if target semantics require it"
 	if queue == "dependency-runtime":
-		return "do not retest in current install; rerun with legitimate dependency/DLC active"
+		return "test only with legitimate dependency/DLC content setup; do not rerun broad baselines"
 	if queue == "parent-marker":
 		return "keep parent partial; child/delegated rows own the unavailable branch"
 	if queue == "scenario-rollup":

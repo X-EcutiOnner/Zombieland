@@ -24,3 +24,5 @@ Use `ZL_COVERAGE_INDEX.tsv` to choose and de-duplicate future work:
 - `duplicate_guard` explains what the row owns, which helps avoid retesting behavior already owned by another row.
 
 Operating rule: consult this index at the start of a new coverage slice or when the next target is unclear. Do not interrupt an active named scenario just because the index contains a different high-priority row. Finish or explicitly park the current scenario with a hard session boundary first.
+
+Current phase, started 2026-06-01: use the index for a narrowed DLC-final stretch. The active live scope is Harmony, Core, all official DLCs, Zombieland, and RimBridgeServer. Official DLCs are content/def packages over the same RimWorld 1.6 game assembly, so focus runtime work only on rows whose unresolved evidence depends on official DLC content reaching an existing code branch. Treat optional-mod rows, previously covered Core baseline rows, and generic full-suite retesting as out of scope unless a concrete regression appears.

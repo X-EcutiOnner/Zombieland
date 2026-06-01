@@ -6082,7 +6082,7 @@ namespace ZombieLand
 				var expectedWorkerAfter = groundBefore * pollutionAdd;
 				var laborSpeed = worker.GetStatValue(StatDefOf.GeneralLaborSpeed);
 				var sourceDerivedLaborTicks = Mathf.CeilToInt(5600f / laborSpeed);
-				var maxGameTicks = Mathf.CeilToInt(sourceDerivedLaborTicks / 60f) + 20;
+				var maxGameTicks = sourceDerivedLaborTicks + 120;
 
 				var job = JobMaker.MakeJob(JobDefOf.ClearPollution, pollutionCell);
 				var jobDefAtCreation = job.def.defName;
