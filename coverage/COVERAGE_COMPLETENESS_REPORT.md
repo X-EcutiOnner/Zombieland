@@ -6,7 +6,7 @@ The original research pass inspected the current GitHub repository through the r
 
 The ledger deliberately separates behavior ownership from evidence production. High-level feature rows own player-facing behavior. Patch rows own hook intent and target disposition. Scenario rows own end-to-end retest passes. Bridge rows own test infrastructure. Def rows own XML family resolution. Source backstop rows prevent discovered files from falling through the cracks.
 
-Use `scripts/coverage-inventory.sh --dependency-gates` as the compact current-state queue for rows that are still `partial`, `partial_runtime`, `dependency/unavailable`, or `removed_vanilla_target`. This is deliberately a triage view, not a claim that every listed row needs immediate live testing; its `gate_kind` column separates standing governance, parent branch markers, scenario rollups, unavailable DLC/content, unavailable optional mods, and removed-target documentation.
+Use `scripts/coverage-inventory.sh --dependency-gates` as the compact current-state queue for rows that are still `partial`, `partial_runtime`, `dependency/unavailable`, or `removed_vanilla_target`. This is deliberately a triage view, not a claim that every listed row needs immediate live testing; its `gate_kind` column separates standing governance, parent branch markers, scenario rollups, unavailable DLC/content, unavailable optional mods, and removed-target documentation. Use `--dependency-gate-summary` to refresh the gate-kind distribution and `--actionable-gates` to print only rows still classified as local actionable work.
 
 ## 2. Row counts
 
@@ -19,7 +19,7 @@ Use `scripts/coverage-inventory.sh --dependency-gates` as the compact current-st
 - negative_space: 1
 - patch: 293
 - scenario: 18
-- supporting_infra: 24
+- supporting_infra: 25
 
 ### By owner_cluster
 
@@ -40,7 +40,7 @@ Use `scripts/coverage-inventory.sh --dependency-gates` as the compact current-st
 - settings: 15
 - social: 11
 - startup: 17
-- supporting_infra: 4
+- supporting_infra: 5
 - ui: 20
 
 ## 3. Source files covered vs unassigned
@@ -92,7 +92,7 @@ All 17 individual `BRIDGE.*` family rows are now classified. `BRIDGE.Common` is 
 
 ## 7. Highest-risk remaining gaps
 
-1. Patch row granularity: `TEST_PATCH_AUDIT.md` mentions all 301 patch classes, but not every class is represented as its own `PATCH.*` row in `ZL_COVERAGE_INDEX.tsv`; the highest-value hooks are now explicit rows, and the remaining 19 exact generated-name misses are classified as aliases, base/context, or debug/source-only surfaces rather than missing behavior. The current negative-space audit has also rechecked debug/overlay and selected multi-target core/hostility surfaces against RimWorld 1.4/1.6 decompiler evidence without finding a new active-local scenario obligation.
+1. Patch row granularity: `TEST_PATCH_AUDIT.md` mentions all 302 patch classes, but not every class is represented as its own `PATCH.*` row in `ZL_COVERAGE_INDEX.tsv`; the highest-value hooks are now explicit rows, and the remaining 19 exact generated-name misses are classified as aliases, base/context, or debug/source-only surfaces rather than missing behavior. The current negative-space audit has also rechecked debug/overlay and selected multi-target core/hostility surfaces against RimWorld 1.4/1.6 decompiler evidence without finding a new active-local scenario obligation.
 2. Explicit patch tail: no explicit `PATCH.*` rows remain in `needs_audit`; remaining non-runtime patch rows are dependency-gated, obsolete/disposed, inactive optional-mod rows, or documented partial branches.
 3. Settings UI end-to-end polish: the baseline is covered. Default restart persistence, in-game save-load, menu entry, modal backing state, save-then-uninstall entry, mouse-driven new-colony wizard entry, focused mouse-driven edits including apparel modal Select All/Deselect All plus the main Threat scale slider, source/decompiler-backed text/numeric field disposition, and two downstream visible UI-edited checks have evidence: `Show zombie statistics` driving the live alert surface and `Zombies health bar` driving the hovered zombie overlay. A 2026-06-01 source/decompiler reread confirmed remaining visible controls share the same radio/checkbox/slider/numeric/button helper paths. Future settings work should be named downstream UI-edit/effect pairs where the player-facing risk justifies another live pass.
 4. Special zombie broader integration polish: controlled action/death behavior and the visual save-load baseline are covered; remaining work is only broader mixed-map combat or optional/DLC variants when they become named rows.
@@ -101,7 +101,7 @@ All 17 individual `BRIDGE.*` family rows are now classified. `BRIDGE.Common` is 
 7. DLC-gated surfaces: pollution clearing, Biotech mech repair/GeneAssembler, and child/killed-child thought paths remain dependency-gated; these are now recorded as `dependency/unavailable` instead of generic blockers. A 2026-05-31 local inspection confirmed the official RimWorld `Data` folder contains only `Core` and `rimworld/list_mods includeInactive=true` exposes no official DLC packages, so these rows require a different install/configuration for runtime evidence. The 2026-06-01 child-thought decompiler refresh tightened this gate: vanilla only adds `ThoughtDefOf.KilledChild` when `ModsConfig.BiotechActive` is true, so XML-only fixture defs cannot close that branch. The explicit adult death-thought patch row is `partial_runtime` because the child exception is not active in the current Core-only surface.
 8. Core branch tails: mixed horde save-load, dense 80-zombie normal-speed smoke, focused corpse/downed-pawn eating, direct tanky wall destruction, and the direct zombie-hearer clamor branch are covered. No known C baseline branch tail remains in the core active-mod configuration; future work should be named co-location, endurance, optional-mod, DLC, or regression variants.
 
-Current `scripts/coverage-inventory.sh --dependency-gates` distribution after the 2026-06-01 RimConnect pass should be treated as a dependency triage list, not as Core behavior backlog. CE rows are no longer absent-runtime gates, CE is resolved for the current installed local build, AlienRace has moved from absent dependency to active framework plus HAR-patched Human semantics evidence, the generic ZombielandSupport contract is resolved for the local fixture, Vehicle Framework concrete movement is resolved by the local `ZLTestVehicle` fixture, SoS2 stale-target risk is source/decompiler-aligned against the local Bqr1s checkout, and RimConnect action/runtime/settings coverage is resolved against the local Better-Scenes checkout through the connected local backend harness. The remaining external-mod queue reflects active-runtime blockers for SoS2 and standing governance/DLC-gated items rather than CE/HAR/custom-support/Vehicles/RimConnect startup failures. No row is currently classified as an untyped actionable gate in the active local setup.
+Current `scripts/coverage-inventory.sh --dependency-gate-summary` distribution after the 2026-06-01 debug-action/source pass is: 10 DLC/content gates, 6 external-mod gates, 2 parent branch markers, 2 scenario rollups, 3 standing-governance rows, and 1 removed-target documentation row. `scripts/coverage-inventory.sh --actionable-gates` currently prints no rows beyond the header. Treat the full dependency-gate list as dependency triage, not as Core behavior backlog. CE rows are no longer absent-runtime gates, CE is resolved for the current installed local build, AlienRace has moved from absent dependency to active framework plus HAR-patched Human semantics evidence, the generic ZombielandSupport contract is resolved for the local fixture, Vehicle Framework concrete movement is resolved by the local `ZLTestVehicle` fixture, SoS2 stale-target risk is source/decompiler-aligned against the local Bqr1s checkout, and RimConnect action/runtime/settings coverage is resolved against the local Better-Scenes checkout through the connected local backend harness. The remaining external-mod queue reflects active-runtime blockers for SoS2 and standing governance/DLC-gated items rather than CE/HAR/custom-support/Vehicles/RimConnect startup failures.
 
 ## 8. Recommended next passes in order
 
@@ -123,7 +123,7 @@ RimWorld 1.6 decompiler evidence in this report is a mix of current repo docs, t
 ## 10. Consistency checks
 
 1. Every discovered `Source/*.cs` file is referenced by at least one coverage row or represented by a source-backstop row: PASS.
-2. Every known `[HarmonyPatch]` class from current local inventory is represented by an explicit patch row or feature-row patch listing: PARTIAL PASS; `TEST_PATCH_AUDIT.md` mentions all 301 patch classes, while this coverage index deliberately expands only the rows where row-level target disposition helps planning.
+2. Every known `[HarmonyPatch]` class from current local inventory is represented by an explicit patch row or feature-row patch listing: PARTIAL PASS; `TEST_PATCH_AUDIT.md` mentions all 302 patch classes, while this coverage index deliberately expands only the rows where row-level target disposition helps planning.
 3. Every discovered BridgeTools file is represented by a `bridge_contract` row: PASS for discovered bridge files; all individual `BRIDGE.*` family rows are classified, while the umbrella bridge-governance row remains partial for future consolidation.
 4. Every major XML def file/family from the current Defs tree is represented by a `def` row: PASS.
 5. No duplicate `id` values: PASS.

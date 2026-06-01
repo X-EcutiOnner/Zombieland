@@ -12,6 +12,8 @@ STATIC_SUMMARY=0
 BRIDGE_TOOLS=0
 BRIDGE_SUMMARY=0
 DEPENDENCY_GATES=0
+DEPENDENCY_GATE_SUMMARY=0
+ACTIONABLE_GATES=0
 SOURCE_PATHS=0
 ROW_STATE_SUMMARY=0
 
@@ -38,6 +40,12 @@ while [[ $# -gt 0 ]]; do
 		--dependency-gates)
 			DEPENDENCY_GATES=1
 			;;
+		--dependency-gate-summary)
+			DEPENDENCY_GATE_SUMMARY=1
+			;;
+		--actionable-gates)
+			ACTIONABLE_GATES=1
+			;;
 		--source-paths)
 			SOURCE_PATHS=1
 			;;
@@ -45,7 +53,7 @@ while [[ $# -gt 0 ]]; do
 			ROW_STATE_SUMMARY=1
 			;;
 		--help|-h)
-			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--bridge-tools] [--bridge-summary] [--dependency-gates] [--source-paths] [--row-state-summary] [baseline-commit]\n' "$0"
+			printf 'usage: %s [--details] [--patch-groups] [--dynamic-patches] [--static-summary] [--bridge-tools] [--bridge-summary] [--dependency-gates] [--dependency-gate-summary] [--actionable-gates] [--source-paths] [--row-state-summary] [baseline-commit]\n' "$0"
 			exit 0
 			;;
 		*)
@@ -303,9 +311,13 @@ PY
 }
 
 dependency_gates() {
-	python3 - <<'PY'
+	local mode="${1:-all}"
+	python3 - "$mode" <<'PY'
 import csv
+import sys
 from pathlib import Path
+
+mode = sys.argv[1]
 
 states = {
 	"partial",
@@ -356,9 +368,23 @@ def gate_kind(row):
 	return "actionable-gate"
 
 path = Path("coverage/ZL_COVERAGE_INDEX.tsv")
+rows = []
 with path.open(newline="") as handle:
 	for row in csv.DictReader(handle, delimiter="\t"):
 		if row["port_delta_state"] not in states:
+			continue
+		kind = gate_kind(row)
+		rows.append((kind, row))
+
+if mode == "summary":
+	counts = {}
+	for kind, row in rows:
+		counts[kind] = counts.get(kind, 0) + 1
+	for kind in sorted(counts):
+		print(f"{kind}\t{counts[kind]}")
+elif mode == "actionable":
+	for kind, row in rows:
+		if kind != "actionable-gate":
 			continue
 		print("\t".join([
 			row["id"],
@@ -366,7 +392,19 @@ with path.open(newline="") as handle:
 			row["owner_cluster"],
 			row["evidence_state"],
 			row["port_delta_state"],
-			gate_kind(row),
+			kind,
+			row["primary_scenario"],
+			row["open_questions"].replace("\t", " ").strip(),
+		]))
+else:
+	for kind, row in rows:
+		print("\t".join([
+			row["id"],
+			row["row_type"],
+			row["owner_cluster"],
+			row["evidence_state"],
+			row["port_delta_state"],
+			kind,
 			row["primary_scenario"],
 			row["open_questions"].replace("\t", " ").strip(),
 		]))
@@ -561,9 +599,21 @@ if [[ "$BRIDGE_SUMMARY" == "1" ]]; then
 	exit 0
 fi
 
+if [[ "$DEPENDENCY_GATE_SUMMARY" == "1" ]]; then
+	printf 'gate_kind\tcount\n'
+	dependency_gates summary
+	exit 0
+fi
+
+if [[ "$ACTIONABLE_GATES" == "1" ]]; then
+	printf 'id\trow_type\towner_cluster\tevidence_state\tport_delta_state\tgate_kind\tprimary_scenario\topen_questions\n'
+	dependency_gates actionable
+	exit 0
+fi
+
 if [[ "$DEPENDENCY_GATES" == "1" ]]; then
 	printf 'id\trow_type\towner_cluster\tevidence_state\tport_delta_state\tgate_kind\tprimary_scenario\topen_questions\n'
-	dependency_gates
+	dependency_gates all
 	exit 0
 fi
 
