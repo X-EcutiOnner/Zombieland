@@ -130,14 +130,19 @@ namespace ZombieLand
 
 			if (contamination > 0)
 			{
-				var hediff = (Hediff_Contamination)pawn.health.hediffSet.GetFirstHediffOfDef(CustomDefs.ContaminationEffect);
-				hediff ??= (Hediff_Contamination)pawn.health.AddHediff(CustomDefs.ContaminationEffect);
+				var hediff = pawn.health.hediffSet.GetFirstHediffOfDef(CustomDefs.ContaminationEffect) as Hediff_Contamination;
+				hediff ??= pawn.health.AddHediff(CustomDefs.ContaminationEffect) as Hediff_Contamination;
+				if (hediff == null)
+				{
+					effects?.Remove(pawn);
+					return;
+				}
 				hediff.Severity = contamination;
 				effects?.Add(pawn);
 			}
 			else
 			{
-				var hediff = (Hediff_Contamination)pawn.health.hediffSet.GetFirstHediffOfDef(CustomDefs.ContaminationEffect);
+				var hediff = pawn.health.hediffSet.GetFirstHediffOfDef(CustomDefs.ContaminationEffect) as Hediff_Contamination;
 				if (hediff != null)
 					pawn.health.RemoveHediff(hediff);
 				effects?.Remove(pawn);

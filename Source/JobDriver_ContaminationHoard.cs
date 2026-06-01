@@ -110,7 +110,18 @@ namespace ZombieLand
 
 			if (state == State.findThing)
 			{
-				cell = storage.RandomElement();
+				if (storage == null || storage.Count == 0)
+				{
+					EndJobWith(JobCondition.Succeeded);
+					return;
+				}
+
+				cell = storage.SafeRandomElement(IntVec3.Invalid);
+				if (cell.IsValid == false)
+				{
+					EndJobWith(JobCondition.Succeeded);
+					return;
+				}
 				storage.Remove(cell);
 				thing = FindNextThing();
 				if (thing == null || storage.Count == 0)

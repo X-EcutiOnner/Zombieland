@@ -285,9 +285,12 @@ namespace ZombieLand
 
 		public static T SafeRandomElement<T>(this IEnumerable<T> source, T defaultValue = default)
 		{
-			if (source.Count() == 0)
+			if (source == null)
 				return defaultValue;
-			return source.RandomElement();
+			var list = source as IList<T> ?? source.ToList();
+			if (list.Count == 0)
+				return defaultValue;
+			return list.RandomElement();
 		}
 
 		public static float RadiusForPawn(Pawn pawn)
@@ -588,7 +591,7 @@ namespace ZombieLand
 			return cachedPlayerReachableRegions;
 		}
 
-		public static T RandomElement<T>(this T[] array) => array[Constants.random.Next() % array.Length];
+		public static T RandomElement<T>(this T[] array) => array == null || array.Length == 0 ? default : array[Constants.random.Next() % array.Length];
 
 		public static IntVec3 RandomSpawnCell(Map map, bool nearEdge, Predicate<IntVec3> predicate)
 		{
@@ -871,9 +874,32 @@ namespace ZombieLand
 				return false;
 			if (hediff.GetType().Namespace == zlNamespace)
 				return true;
-			if (hediff.hediffClass.Namespace == zlNamespace)
+			if (hediff.hediffClass?.Namespace == zlNamespace)
 				return true;
 			return false;
+		}
+
+		public static bool IsSafeMissingPartTarget(Pawn pawn, BodyPartRecord part)
+		{
+			var hediffSet = pawn?.health?.hediffSet;
+			if (hediffSet == null || part == null)
+				return false;
+			if (part.parent == null || part == pawn.RaceProps?.body?.corePart)
+				return false;
+			return hediffSet.PartIsMissing(part) == false;
+		}
+
+		public static bool TryAddMissingPart(Pawn pawn, BodyPartRecord part, HediffDef lastInjury, bool isFresh = true, DamageInfo? dinfo = null, DamageWorker.DamageResult result = null)
+		{
+			if (IsSafeMissingPartTarget(pawn, part) == false)
+				return false;
+			var missingPart = HediffMaker.MakeHediff(HediffDefOf.MissingBodyPart, pawn, part) as Hediff_MissingPart;
+			if (missingPart == null)
+				return false;
+			missingPart.lastInjury = lastInjury;
+			missingPart.IsFresh = isFresh;
+			pawn.health.AddHediff(missingPart, part, dinfo, result);
+			return true;
 		}
 
 		public static void AddZombieInfection(Pawn pawn)
@@ -888,7 +914,7 @@ namespace ZombieLand
 			if (torso == null)
 				return;
 
-			var bite = (Hediff_Injury_ZombieBite)HediffMaker.MakeHediff(HediffDef.Named("ZombieBite"), pawn, torso);
+			var bite = HediffMaker.MakeHediff(HediffDef.Named("ZombieBite"), pawn, torso) as Hediff_Injury_ZombieBite;
 			if (bite == null)
 				return;
 

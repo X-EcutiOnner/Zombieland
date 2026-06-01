@@ -380,12 +380,7 @@ namespace ZombieLand
 			if (head != null)
 			{
 				victim.Map?.GetComponent<TickManager>()?.victimHeads.Add(new VictimHead(victim));
-
-				var part2 = (Hediff_MissingPart)HediffMaker.MakeHediff(HediffDefOf.MissingBodyPart, victim, null);
-				part2.IsFresh = true;
-				part2.lastInjury = HediffDefOf.ExecutionCut;
-				part2.Part = head;
-				victim.health.hediffSet.AddDirect(part2, null, null);
+				_ = Tools.TryAddMissingPart(victim, head, HediffDefOf.ExecutionCut);
 			}
 
 			CustomDefs.Crush.PlayOneShot(SoundInfo.InMap(victim));

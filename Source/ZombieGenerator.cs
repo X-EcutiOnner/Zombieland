@@ -579,7 +579,7 @@ namespace ZombieLand
 			{
 				var headType = DefDatabase<HeadTypeDef>.AllDefsListForReading
 					.Where(def => ZombieBaseValues.IsValidHeadPath(def.graphicPath))
-					.RandomElement();
+					.SafeRandomElement(zombie.story.headType ?? HeadTypeDefOf.Skull);
 
 				zombie.story.melanin = zombie.isAlbino || zombie.isHealer ? 1f : (zombie.isDarkSlimer ? 0f : 0.01f * Rand.Range(10, 91));
 				zombie.story.bodyType = bodyType;

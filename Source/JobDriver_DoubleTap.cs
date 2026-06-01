@@ -84,21 +84,14 @@ namespace ZombieLand
 
 					if (smashBrainProcess >= smashBrainWork)
 					{
-						var part1 = (Hediff_MissingPart)HediffMaker.MakeHediff(HediffDefOf.MissingBodyPart, deadPawn, null);
-						part1.IsFresh = true;
-						part1.lastInjury = HediffDefOf.Misc;
-						part1.Part = brain;
-						deadPawn.health.hediffSet.AddDirect(part1, null, null);
+						if (Tools.TryAddMissingPart(deadPawn, brain, HediffDefOf.Misc) == false)
+						{
+							pawn.jobs.EndCurrentJob(JobCondition.Incompletable, true);
+							return;
+						}
 
 						var head = deadPawn?.health.hediffSet.GetNotMissingParts(BodyPartHeight.Undefined, BodyPartDepth.Undefined, null, null).FirstOrDefault((BodyPartRecord x) => x.def == BodyPartDefOf.Head);
-						if (head != null)
-						{
-							var part2 = (Hediff_MissingPart)HediffMaker.MakeHediff(HediffDefOf.MissingBodyPart, deadPawn, null);
-							part2.IsFresh = true;
-							part2.lastInjury = HediffDefOf.Misc;
-							part2.Part = head;
-							deadPawn.health.hediffSet.AddDirect(part2, null, null);
-						}
+						_ = Tools.TryAddMissingPart(deadPawn, head, HediffDefOf.Misc);
 
 						pawn.jobs.EndCurrentJob(JobCondition.Succeeded, true);
 					}

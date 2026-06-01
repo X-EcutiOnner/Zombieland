@@ -426,10 +426,8 @@ namespace ZombieLand
 			}
 
 			var eatTargetAlive = driver.eatTarget is Pawn eatTarget1 && eatTarget1.Dead == false;
-			var hediff_MissingPart = (Hediff_MissingPart)HediffMaker.MakeHediff(HediffDefOf.MissingBodyPart, eatTargetPawn, bodyPartRecord);
-			hediff_MissingPart.lastInjury = HediffDefOf.Bite;
-			hediff_MissingPart.IsFresh = true;
-			eatTargetPawn.health.AddHediff(hediff_MissingPart, null, null);
+			if (Tools.TryAddMissingPart(eatTargetPawn, bodyPartRecord, HediffDefOf.Bite) == false)
+				return false;
 
 			var eatTargetStillAlive = driver.eatTarget is Pawn eatTarget2 && eatTarget2.Dead == false;
 			if (eatTargetAlive && eatTargetStillAlive == false)
@@ -1092,6 +1090,7 @@ namespace ZombieLand
 				return null;
 			return eatSubject.health.hediffSet
 						.GetNotMissingParts(BodyPartHeight.Undefined, BodyPartDepth.Outside)
+						.Where(part => Tools.IsSafeMissingPartTarget(eatSubject, part))
 						.InRandomOrder()
 						.FirstOrDefault();
 		}

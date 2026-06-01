@@ -293,30 +293,31 @@ namespace ZombieLand
 			allZombiesCached = AllZombies().ToHashSet();
 			var home = map.areaManager.Home;
 			Room[] valuableRooms = null;
-			if (home.TrueCount > 0)
+			var homeCells = home.TrueCount > 0 ? home.ActiveCells.ToArray() : Array.Empty<IntVec3>();
+			if (homeCells.Length > 0)
 			{
-				var homeCells = home.ActiveCells.ToArray();
-				allZombiesCached.Do(zombie => zombie.wanderDestination = homeCells.RandomElement());
+				allZombiesCached.Do(zombie => zombie.wanderDestination = homeCells.SafeRandomElement(IntVec3.Invalid));
 				var tankys = allZombiesCached.Where(zombie => zombie.IsTanky && zombie.tankDestination.IsValid == false);
 				if (tankys.Any())
 				{
 					valuableRooms ??= Tools.ValuableRooms(map).ToArray();
-					if (valuableRooms.Length > 0)
-						tankys.Do(zombie => zombie.tankDestination = valuableRooms.RandomElement().Cells.RandomElement());
+					var valuableCells = valuableRooms.SelectMany(room => room.Cells).ToArray();
+					if (valuableCells.Length > 0)
+						tankys.Do(zombie => zombie.tankDestination = valuableCells.SafeRandomElement(IntVec3.Invalid));
 				}
 
 				if (ticks > centerOfInterestUpdateTicks)
 				{
 					centerOfInterestUpdateTicks = ticks + Constants.CENTER_OF_INTEREST_UPDATE;
 					if (Rand.Bool)
-						nextCenterOfInterest = homeCells.SafeRandomElement();
+						nextCenterOfInterest = homeCells.SafeRandomElement(IntVec3.Invalid);
 					else
 					{
 						valuableRooms ??= Tools.ValuableRooms(map).ToArray();
 						if (valuableRooms.Length > 0)
-							nextCenterOfInterest = valuableRooms.SelectMany(room => room.Cells).SafeRandomElement();
+							nextCenterOfInterest = valuableRooms.SelectMany(room => room.Cells).SafeRandomElement(IntVec3.Invalid);
 						else
-							nextCenterOfInterest = homeCells.SafeRandomElement();
+							nextCenterOfInterest = homeCells.SafeRandomElement(IntVec3.Invalid);
 					}
 				}
 			}
@@ -325,9 +326,15 @@ namespace ZombieLand
 				valuableRooms ??= Tools.ValuableRooms(map).ToArray();
 				if (valuableRooms.Length > 0)
 				{
-					allZombiesCached.Do(zombie => zombie.wanderDestination = valuableRooms[Rand.Range(0, valuableRooms.Length - 1)].Cells.RandomElement());
-					if (ticks > centerOfInterestUpdateTicks)
-						nextCenterOfInterest = valuableRooms.SelectMany(room => room.Cells).SafeRandomElement();
+					var valuableCells = valuableRooms.SelectMany(room => room.Cells).ToArray();
+					if (valuableCells.Length > 0)
+					{
+						allZombiesCached.Do(zombie => zombie.wanderDestination = valuableCells.SafeRandomElement(IntVec3.Invalid));
+						if (ticks > centerOfInterestUpdateTicks)
+							nextCenterOfInterest = valuableCells.SafeRandomElement(IntVec3.Invalid);
+					}
+					else
+						allZombiesCached.Do(zombie => zombie.wanderDestination = new IntVec3(Rand.Range(10, map.Size.x - 10), 0, Rand.Range(10, map.Size.z - 10)));
 				}
 				else
 					allZombiesCached.Do(zombie => zombie.wanderDestination = new IntVec3(Rand.Range(10, map.Size.x - 10), 0, Rand.Range(10, map.Size.z - 10)));

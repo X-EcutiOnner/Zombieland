@@ -28,7 +28,8 @@ namespace ZombieLand
 			base.ExposeData();
 			Scribe_Values.Look(ref destination, "destination", IntVec3.Invalid);
 			Scribe_References.Look(ref eatTarget, "eatTarget");
-			Scribe_References.Look(ref lastEatTarget, "lastEatTarget");
+			if (Scribe.mode != LoadSaveMode.Saving)
+				Scribe_References.Look(ref lastEatTarget, "lastEatTarget");
 			Scribe_Values.Look(ref lastEatTargetPosition, "lastEatTargetPosition", IntVec3.Invalid);
 			Scribe_Values.Look(ref eatDelayCounter, "eatDelayCounter");
 

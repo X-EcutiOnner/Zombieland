@@ -110,7 +110,12 @@ namespace ZombieLand
 				return false;
 			}
 
-			bite = (Hediff_Injury_ZombieBite)HediffMaker.MakeHediff(HediffDef.Named("ZombieBite"), pawn, bodyPart);
+			bite = HediffMaker.MakeHediff(HediffDef.Named("ZombieBite"), pawn, bodyPart) as Hediff_Injury_ZombieBite;
+			if (bite == null)
+			{
+				error = "Zombie bite hediff did not create the expected Hediff_Injury_ZombieBite instance.";
+				return false;
+			}
 			if (bite.TendDuration?.ZombieInfector == null)
 			{
 				error = "Zombie bite hediff has no infector comp.";

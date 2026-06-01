@@ -187,7 +187,7 @@ namespace ZombieLand
 			for (var i = 0; i < zombieCount; i++)
 			{
 				var room = map.regionGrid.allRooms.SafeRandomElement();
-				var cell = room.Cells.Where(cell => cell.Standable(map)).SafeRandomElement();
+				var cell = room?.Cells.Where(cell => cell.Standable(map)).SafeRandomElement(IntVec3.Invalid) ?? IntVec3.Invalid;
 				if (cell.IsValid)
 				{
 					var zombie = ZombieGenerator.SpawnZombie(cell, map, ZombieType.Normal);

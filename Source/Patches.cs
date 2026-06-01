@@ -4778,6 +4778,8 @@ namespace ZombieLand
 						if (brain != null)
 						{
 							var hediff = HediffMaker.MakeHediff(CustomDefs.ZombieInfection, pawn, brain) as Hediff_ZombieInfection;
+							if (hediff == null)
+								return;
 							hediff.InitializeExpiringDate();
 							hediffSet.AddDirect(hediff, null, null);
 						}
@@ -4870,6 +4872,18 @@ namespace ZombieLand
 		static bool IsZombielandSocialPawn(Pawn pawn)
 		{
 			return IsZombielandPawn(pawn);
+		}
+
+		[HarmonyPatch(typeof(Thought_Memory), nameof(Thought_Memory.Save), MethodType.Getter)]
+		static class Thought_Memory_Save_Patch
+		{
+			static void Postfix(Thought_Memory __instance, ref bool __result)
+			{
+				if (__result == false)
+					return;
+				if (__instance?.def.IsZombieDef() == true || IsZombielandSocialPawn(__instance?.otherPawn))
+					__result = false;
+			}
 		}
 
 		[HarmonyPatch(typeof(RelationsUtility))]
