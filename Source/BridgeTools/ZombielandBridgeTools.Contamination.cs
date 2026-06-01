@@ -5852,6 +5852,18 @@ namespace ZombieLand
 					reason = "Wastepack or ClearPollution is unavailable in the active RimWorld configuration."
 				};
 			}
+			if (ModsConfig.BiotechActive == false)
+			{
+				return new
+				{
+					success = true,
+					skipped = true,
+					reason = "Wastepack and ClearPollution defs are available, but RimWorld pollution writes are still gated behind active Biotech.",
+					wastepackDefAvailable = ThingDefOf.Wastepack != null,
+					clearPollutionJobDefAvailable = JobDefOf.ClearPollution != null,
+					biotechActive = false
+				};
+			}
 
 			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
 			if (TryFindClearSpawnCell(map, root, 16f, out var pollutionCell, out var pollutionCellError) == false)
@@ -5862,7 +5874,15 @@ namespace ZombieLand
 			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 			var oldGroundContamination = map.GetContamination(pollutionCell);
 			var oldPolluted = pollutionCell.IsPolluted(map);
-			var oldPollutionClear = map.areaManager.PollutionClear[pollutionCell];
+			var pollutionClearArea = map.areaManager.PollutionClear;
+			var createdPollutionClearArea = false;
+			if (pollutionClearArea == null)
+			{
+				pollutionClearArea = new Area_PollutionClear(map.areaManager);
+				map.areaManager.AllAreas.Add(pollutionClearArea);
+				createdPollutionClearArea = true;
+			}
+			var oldPollutionClear = pollutionClearArea[pollutionCell];
 			var wastepacks = new List<Thing>();
 			try
 			{
@@ -5874,8 +5894,26 @@ namespace ZombieLand
 
 				const float groundContaminationBefore = 0.66f;
 				pollutionCell.Pollute(map, true);
-				map.areaManager.PollutionClear[pollutionCell] = true;
+				pollutionClearArea[pollutionCell] = true;
 				map.SetContamination(pollutionCell, groundContaminationBefore);
+				if (pollutionCell.IsPolluted(map) == false)
+				{
+					return new
+					{
+						success = true,
+						skipped = true,
+						reason = "PollutionGrid.SetPolluted did not mark the cell polluted. RimWorld gates pollution writes behind active Biotech even when Wastepack and ClearPollution defs are fixture-provided.",
+						cleanup,
+						createdPollutionClearArea,
+						pollutionCell = ZombieRuntimeActions.DescribeCell(pollutionCell),
+						workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+						wastepackDefAvailable = ThingDefOf.Wastepack != null,
+						clearPollutionJobDefAvailable = JobDefOf.ClearPollution != null,
+						pollutedBefore = oldPolluted,
+						pollutedAfterSetup = false,
+						groundContaminationBefore
+					};
+				}
 
 				var existingWastepacks = map.listerThings.ThingsOfDef(ThingDefOf.Wastepack).ToHashSet();
 				var workerBefore = worker.GetContamination(false);
@@ -5928,6 +5966,7 @@ namespace ZombieLand
 					pollutionCell = ZombieRuntimeActions.DescribeCell(pollutionCell),
 					jobDefAtCreation,
 					finalJob = worker.CurJobDef?.defName,
+					createdPollutionClearArea,
 					laborSpeed,
 					sourceDerivedLaborTicks,
 					maxGameTicks,
@@ -5967,7 +6006,7 @@ namespace ZombieLand
 					}
 					if (pollutionCell.IsValid && pollutionCell.InBounds(map))
 					{
-						map.areaManager.PollutionClear[pollutionCell] = oldPollutionClear;
+						pollutionClearArea[pollutionCell] = oldPollutionClear;
 						if (oldPolluted)
 							pollutionCell.Pollute(map, true);
 						else if (pollutionCell.IsPolluted(map))
@@ -5975,6 +6014,8 @@ namespace ZombieLand
 						map.SetContamination(pollutionCell, oldGroundContamination);
 					}
 				}
+				if (createdPollutionClearArea)
+					map.areaManager.AllAreas.Remove(pollutionClearArea);
 			}
 		}
 
