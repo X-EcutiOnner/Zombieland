@@ -117,8 +117,6 @@ namespace ZombieLand
 
 		static void CleanMap(Map map)
 		{
-			PathFinder_FindPath_Patch.tickManagerCache = new Dictionary<Map, TickManager>();
-
 			var zombies = PawnsOfType<Zombie>(map);
 			foreach (var zombie in zombies)
 				zombie.Destroy();

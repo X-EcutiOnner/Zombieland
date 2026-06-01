@@ -1376,91 +1376,6 @@ namespace ZombieLand
 			}
 		}
 
-		[HarmonyPatch(typeof(PathFinder))]
-		[HarmonyPatch(nameof(PathFinder.FindPathNow))]
-		[HarmonyPatch(new Type[] { typeof(IntVec3), typeof(LocalTargetInfo), typeof(TraverseParms), typeof(Nullable<PathFinderCostTuning>), typeof(PathEndMode), typeof(PathRequest.IPathGridCustomizer) })]
-		public static class PathFinder_FindPath_Patch
-		{
-			public static Dictionary<Map, TickManager> tickManagerCache = new();
-
-			static bool Prepare() => false; // RimWorld 1.6 moved map pathing to Verse.PathFinder jobs; redesign against PathRequest grid customization.
-
-			// infected colonists will still path so exclude them from this check
-			// by returning 0 - currently disabled because it does cost too much
-			static int GetZombieCosts(Pawn pawn, int idx)
-			{
-				if (pawn == null)
-					return 0;
-				if (Tools.ShouldAvoidZombies(pawn) == false)
-					return 0;
-
-				var map = pawn.Map;
-				if (map == null)
-					return 0;
-				if (tickManagerCache.TryGetValue(map, out var tickManager) == false)
-				{
-					tickManager = map.GetComponent<TickManager>();
-					if (tickManager == null)
-						return 0;
-					tickManagerCache[map] = tickManager;
-				}
-				if (tickManager.avoidGrid == null)
-					return 0;
-				return tickManager.avoidGrid.GetCosts()[idx];
-			}
-
-			static readonly MethodInfo m_CellToIndex_int_int = AccessTools.Method(typeof(CellIndices), nameof(CellIndices.CellToIndex), new Type[] { typeof(int), typeof(int) });
-			static readonly FieldInfo f_TraverseParms_pawn = AccessTools.Field(typeof(TraverseParms), nameof(TraverseParms.pawn));
-			static readonly MethodInfo m_GetExtraCosts = SymbolExtensions.GetMethodInfo(() => GetZombieCosts(null, 0));
-			static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, MethodBase original)
-			{
-				var list = instructions.ToList();
-				while (true)
-				{
-					var t_PathFinderNodeFast = AccessTools.Inner(typeof(PathFinder), "PathFinderNodeFast");
-					var f_knownCost = AccessTools.Field(t_PathFinderNodeFast, "knownCost");
-					if (f_knownCost == null)
-					{
-						Error($"Cannot find field Verse.AI.PathFinder.PathFinderNodeFast.knownCost");
-						break;
-					}
-
-					var idx = list.FirstIndexOf(ins => ins.Calls(m_CellToIndex_int_int));
-					if (idx < 0 || idx >= list.Count() || list[idx + 1].opcode != OpCodes.Stloc_S)
-					{
-						Error($"Cannot find CellToIndex(n,n)/Stloc_S in {original.FullDescription()}");
-						break;
-					}
-					var gridIdx = list[idx + 1].operand;
-
-					var insertLoc = list.FirstIndexOf(ins => ins.opcode == OpCodes.Ldfld && (FieldInfo)ins.operand == f_knownCost);
-					while (insertLoc >= 0 && insertLoc < list.Count)
-					{
-						if (list[insertLoc].opcode == OpCodes.Add)
-							break;
-						insertLoc++;
-					}
-					if (insertLoc < 0 || insertLoc >= list.Count())
-					{
-						Error($"Cannot find Ldfld knownCost ... Add in {original.FullDescription()}");
-						break;
-					}
-
-					var traverseParmsIdx = original.GetParameters().FirstIndexOf(info => info.ParameterType == typeof(TraverseParms)) + 1;
-
-					list.Insert(insertLoc++, new CodeInstruction(OpCodes.Add));
-					list.Insert(insertLoc++, new CodeInstruction(OpCodes.Ldarga_S, traverseParmsIdx));
-					list.Insert(insertLoc++, new CodeInstruction(OpCodes.Ldfld, f_TraverseParms_pawn));
-					list.Insert(insertLoc++, new CodeInstruction(OpCodes.Ldloc_S, gridIdx));
-					list.Insert(insertLoc++, new CodeInstruction(OpCodes.Call, m_GetExtraCosts));
-					break;
-				}
-
-				foreach (var instr in list)
-					yield return instr;
-			}
-		}
-
 		class ZombieAvoidGridPathCustomizer : PathRequest.IPathGridCustomizer, IDisposable
 		{
 			NativeArray<ushort> offsets;
@@ -3069,32 +2984,6 @@ namespace ZombieLand
 					return false;
 				}
 				return true;
-			}
-		}
-
-		// make zombies without head not have a headstump
-		//
-		[HarmonyPatch]
-		static class PawnGraphicSet_HeadMatAt_Patch
-		{
-			static readonly Dictionary<int, Material> headStumpGraphics = new();
-
-			static MethodBase TargetMethod() => AccessTools.Method("Verse.PawnGraphicSet:HeadMatAt");
-			static bool Prepare() => TargetMethod() != null;
-
-			static void Postfix(Pawn ___pawn, RotDrawMode bodyCondition, bool stump, ref Material __result)
-			{
-				if (stump == false || ___pawn is not Zombie)
-					return;
-
-				var id = __result.GetInstanceID() * (bodyCondition == RotDrawMode.Rotting ? -1 : 1);
-				if (headStumpGraphics.TryGetValue(id, out var mat) == false)
-				{
-					var red = bodyCondition == RotDrawMode.Rotting ? 8f : 110f;
-					mat = new Material(__result) { color = new Color(red / 255f, 0, 0) };
-					headStumpGraphics[id] = mat;
-				}
-				__result = mat;
 			}
 		}
 

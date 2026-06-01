@@ -39,21 +39,6 @@ namespace ZombieLand
 		public static void Postfix() => ContaminationManager.Reset();
 	}
 
-	[HarmonyPatch(typeof(ThingMaker), nameof(ThingMaker.MakeThing))]
-	static file class Thing_MakeThing_Patch
-	{
-		static bool Prepare() => false;
-
-		static void Postfix(Thing __result)
-		{
-			if (Tools.IsPlaying() && __result is not Mote)
-			{
-				Log.ResetMessageCount();
-				Log.Message($"NEW {__result}");
-			}
-		}
-	}
-
 	[HarmonyPatch(typeof(Thing), nameof(Thing.Destroy))]
 	static class Thing_Destroy_Patch
 	{
