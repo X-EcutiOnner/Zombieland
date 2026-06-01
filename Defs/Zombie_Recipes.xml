@@ -52,8 +52,8 @@
 
 	<RecipeDef>
 		<defName>MakeZombieSerum</defName>
-		<label>make serum out of zombie extract</label>
-		<description>Craft one zombie serum from zombie extract that cures zombie infections during operations.</description>
+		<label>make zombie serum from zombie extract</label>
+		<description>Craft one zombie serum from zombie extract. Zombie serum cures zombie infections during operations.</description>
 		<jobString>Making zombie serum.</jobString>
 		<workAmount>2400</workAmount>
 		<ingredients>

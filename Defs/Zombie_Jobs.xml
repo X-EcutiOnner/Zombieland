@@ -32,7 +32,7 @@
 	<JobDef>
 		<defName>ExtractZombieSerum</defName>
 		<driverClass>ZombieLand.JobDriver_ExtractZombieSerum</driverClass>
-		<reportString>extracting zombie serum from TargetA.</reportString>
+		<reportString>harvesting zombie extract from TargetA.</reportString>
 		<allowOpportunisticPrefix>false</allowOpportunisticPrefix>
 	</JobDef>
 
@@ -53,7 +53,7 @@
 	<JobDef>
 		<defName>ZapZombies</defName>
 		<driverClass>ZombieLand.JobDriver_ZapZombies</driverClass>
-		<reportString>starting zombie zapper.</reportString>
+		<reportString>starting zombie shocker.</reportString>
 		<allowOpportunisticPrefix>false</allowOpportunisticPrefix>
 	</JobDef>
 
@@ -95,7 +95,7 @@
 	<JobDef>
 		<defName>ContaminationJobMimic</defName>
 		<driverClass>ZombieLand.JobDriver_ContaminationMimic</driverClass>
-		<reportString>mimicing.</reportString>
+		<reportString>mimicking.</reportString>
 		<suspendable>false</suspendable>
 	</JobDef>
 

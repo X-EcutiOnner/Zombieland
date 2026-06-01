@@ -20,7 +20,7 @@
 		<label>suicide bomb</label>
 		<externalViolence>true</externalViolence>
 		<isExplosive>true</isExplosive>
-		<deathMessage>{0} has died in an suicide bomb attack.</deathMessage>
+		<deathMessage>{0} has died in a suicide bomb attack.</deathMessage>
 		<hediff>Shredded</hediff>
 		<hediffSolid>Crack</hediffSolid>
 		<harmAllLayersUntilOutside>true</harmAllLayersUntilOutside>

@@ -4,7 +4,7 @@
 
 	<ToolCapacityDef>
 		<defName>ZombieBite</defName>
-		<label>Zombie Bite</label>
+		<label>zombie bite</label>
 	</ToolCapacityDef>
 
 </Defs>

@@ -48,7 +48,7 @@
         </questNameRules>
         <questDescriptionRules>
             <rulesStrings>
-                <li>questDescription->[asker_faction_leaderTitle] [asker_nameFull] of [asker_faction_name] offers help with reducing contamination. You can to send one colonist away a few days for decontamination.</li>
+                <li>questDescription->[asker_faction_leaderTitle] [asker_nameFull] of [asker_faction_name] offers help with reducing contamination. You can send one colonist away for a few days of decontamination.</li>
             </rulesStrings>
         </questDescriptionRules>
         <root Class="QuestNode_Sequence">

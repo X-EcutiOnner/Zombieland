@@ -40,7 +40,7 @@
 		<defName>TarSlime</defName>
 		<thingClass>ZombieLand.TarSlime</thingClass>
 		<label>super sticky slime</label>
-		<description>A very sticky slime that makes you move much slower</description>
+		<description>A very sticky slime that makes you move much slower.</description>
 		<statBases>
 			<Beauty>-10</Beauty>
 			<Flammability>1.0</Flammability>
@@ -67,7 +67,7 @@
 	<ThingDef>
 		<defName>TarSmoke</defName>
 		<label>smoke</label>
-		<description>A dark smoke making it hard to see things</description>
+		<description>A dark smoke that makes it hard to see things.</description>
 		<thingClass>ZombieLand.TarSmoke</thingClass>
 		<category>Gas</category>
 		<drawerType>RealtimeOnly</drawerType>
@@ -91,7 +91,7 @@
 		<defName>StickyGoo</defName>
 		<thingClass>ZombieLand.StickyGoo</thingClass>
 		<label>toxic &amp; sticky zombie goo</label>
-		<description>A toxic and sticky substance that probably makes you sick</description>
+		<description>A toxic and sticky substance that probably makes you sick.</description>
 		<statBases>
 			<Beauty>-10</Beauty>
 			<Cleanliness>-10</Cleanliness>
@@ -175,7 +175,7 @@
 		<defName>ZombieExtract</defName>
 		<thingClass>ZombieLand.ZombieExtract</thingClass>
 		<label>zombie extract</label>
-		<description>Small amount of extract from a dead zombie. Combine up to 100 extract to craft a drug called Zombie Serum that is used in operations on infected body parts.</description>
+		<description>A small amount of extract from a dead zombie. Combine up to 100 extract to craft a drug called zombie serum that is used in operations on infected body parts.</description>
 		<graphicData>
 			<graphicClass>Graphic_Single</graphicClass>
 			<texPath>ZombieExtract</texPath>
@@ -266,7 +266,7 @@
 	<ThingDef name="ZombieSerumSimple" ParentName="ZombieSerumBase">
 		<defName>ZombieSerumSimple</defName>
 		<label>zombie serum 100%</label>
-		<description>Pure serum from dead zombies that guaranteed cures zombie infections during operations</description>
+		<description>Pure serum from dead zombies that guarantees a cure for zombie infections during operations.</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum100</texPath>
 		</graphicData>
@@ -281,7 +281,7 @@
 	<ThingDef name="Zombie10Serum" ParentName="ZombieSerumCore">
 		<defName>Zombie10Serum</defName>
 		<label>zombie serum 10%</label>
-		<description>Serum from dead zombies that cures zombie infections during operations (10% success rate)</description>
+		<description>Serum from dead zombies that cures zombie infections during operations (10% success rate).</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum10</texPath>
 		</graphicData>
@@ -302,7 +302,7 @@
 	<ThingDef name="Zombie20Serum" ParentName="ZombieSerumCore">
 		<defName>Zombie20Serum</defName>
 		<label>zombie serum 20%</label>
-		<description>Serum from dead zombies that cures zombie infections during operations (20% success rate)</description>
+		<description>Serum from dead zombies that cures zombie infections during operations (20% success rate).</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum20</texPath>
 		</graphicData>
@@ -323,7 +323,7 @@
 	<ThingDef name="Zombie30Serum" ParentName="ZombieSerumCore">
 		<defName>Zombie30Serum</defName>
 		<label>zombie serum 30%</label>
-		<description>Serum from dead zombies that cures zombie infections during operations (30% success rate)</description>
+		<description>Serum from dead zombies that cures zombie infections during operations (30% success rate).</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum30</texPath>
 		</graphicData>
@@ -344,7 +344,7 @@
 	<ThingDef name="Zombie40Serum" ParentName="ZombieSerumCore">
 		<defName>Zombie40Serum</defName>
 		<label>zombie serum 40%</label>
-		<description>Serum from dead zombies that cures zombie infections during operations (40% success rate)</description>
+		<description>Serum from dead zombies that cures zombie infections during operations (40% success rate).</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum40</texPath>
 		</graphicData>
@@ -365,7 +365,7 @@
 	<ThingDef name="Zombie50Serum" ParentName="ZombieSerumCore">
 		<defName>Zombie50Serum</defName>
 		<label>zombie serum 50%</label>
-		<description>Serum from dead zombies that cures zombie infections during operations (50% success rate)</description>
+		<description>Serum from dead zombies that cures zombie infections during operations (50% success rate).</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum50</texPath>
 		</graphicData>
@@ -386,7 +386,7 @@
 	<ThingDef name="Zombie60Serum" ParentName="ZombieSerumCore">
 		<defName>Zombie60Serum</defName>
 		<label>zombie serum 60%</label>
-		<description>Serum from dead zombies that cures zombie infections during operations (60% success rate)</description>
+		<description>Serum from dead zombies that cures zombie infections during operations (60% success rate).</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum60</texPath>
 		</graphicData>
@@ -407,7 +407,7 @@
 	<ThingDef name="Zombie70Serum" ParentName="ZombieSerumCore">
 		<defName>Zombie70Serum</defName>
 		<label>zombie serum 70%</label>
-		<description>Serum from dead zombies that cures zombie infections during operations (70% success rate)</description>
+		<description>Serum from dead zombies that cures zombie infections during operations (70% success rate).</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum70</texPath>
 		</graphicData>
@@ -428,7 +428,7 @@
 	<ThingDef name="Zombie80Serum" ParentName="ZombieSerumCore">
 		<defName>Zombie80Serum</defName>
 		<label>zombie serum 80%</label>
-		<description>Serum from dead zombies that cures zombie infections during operations (80% success rate)</description>
+		<description>Serum from dead zombies that cures zombie infections during operations (80% success rate).</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum80</texPath>
 		</graphicData>
@@ -449,7 +449,7 @@
 	<ThingDef name="Zombie90Serum" ParentName="ZombieSerumCore">
 		<defName>Zombie90Serum</defName>
 		<label>zombie serum 90%</label>
-		<description>Serum from dead zombies that cures zombie infections during operations (90% success rate)</description>
+		<description>Serum from dead zombies that cures zombie infections during operations (90% success rate).</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum90</texPath>
 		</graphicData>
@@ -470,7 +470,7 @@
 	<ThingDef name="Zombie100Serum" ParentName="ZombieSerumCore">
 		<defName>Zombie100Serum</defName>
 		<label>zombie serum 100%</label>
-		<description>Pure serum from dead zombies that guaranteed cures zombie infections during operations</description>
+		<description>Pure serum from dead zombies that guarantees a cure for zombie infections during operations.</description>
 		<graphicData>
 			<texPath>ZombieSerum/ZombieSerum100</texPath>
 		</graphicData>
@@ -674,7 +674,7 @@
 
 	<ThingDef>
 		<defName>ElectricalField</defName>
-		<label>ElectricalField</label>
+		<label>electrical field</label>
 		<category>Item</category>
 		<verbs>
 			<li>
@@ -689,7 +689,7 @@
 		</verbs>
 		<tools>
 			<li>
-				<label>Shock</label>
+				<label>shock</label>
 				<capacities>
 					<li>ElectricalShock</li>
 				</capacities>
@@ -719,8 +719,8 @@
 
 	<ThingDef Name="Thumper" ParentName="BuildingBase">
 		<defName>Thumper</defName>
-		<label>Zombie Thumper</label>
-		<description>A stamper to attract zombies. Uses fuel and does damage to the environment per hit.</description>
+		<label>zombie thumper</label>
+		<description>A thumper to attract zombies. Uses fuel and damages the environment with each hit.</description>
 		<costList>
 			<Steel>200</Steel>
 		</costList>
@@ -802,7 +802,7 @@
 
 	<ThingDef ParentName="BaseBullet">
 		<defName>ZombieBall</defName>
-		<label>a zombie ball</label>
+		<label>zombie ball</label>
 		<graphicData>
 			<texPath>Spitter/ZombieBall</texPath>
 			<graphicClass>Graphic_Single</graphicClass>

@@ -13,7 +13,7 @@
 		<stages>
 			<li>
 				<label>scared by {0}</label>
-				<description>I was scared by someone that acted like a zombie and are worried.</description>
+				<description>I was scared by someone acting like a zombie, and now I'm worried.</description>
 				<baseMoodEffect>-4</baseMoodEffect>
 			</li>
 		</stages>
