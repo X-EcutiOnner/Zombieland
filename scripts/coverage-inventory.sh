@@ -214,6 +214,7 @@ scenario_fixture_names = {
 	"zombieland/settings_state",
 	"zombieland/special_gauntlet_state",
 	"zombieland/uninstall_hygiene_state",
+	"zombieland/create_sos_space_map_fixture",
 }
 
 tool_pattern = re.compile(r'\[Tool\("([^"]+)"(?:,\s*Description\s*=\s*"([^"]*)")?')

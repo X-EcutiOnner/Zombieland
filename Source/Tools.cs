@@ -1842,11 +1842,11 @@ namespace ZombieLand
 			var renderTexture = foreground ? renderTextureFore : renderTextureBack;
 			Find.PawnCacheRenderer.RenderPawn(zombie, renderTexture, Vector3.zero, 1f, 0f, Rot4.South);
 			var texture = new Texture2D(renderTexture.width, renderTexture.height, TextureFormat.RGBA32, false) { name = "FakeZombie" };
+			var previousActive = RenderTexture.active;
 			RenderTexture.active = renderTexture;
 			texture.ReadPixels(new Rect(0, 0, renderTexture.width, renderTexture.height), 0, 0);
 			texture.Apply();
-			RenderTexture.active = null;
-			RenderTexture.ReleaseTemporary(renderTexture);
+			RenderTexture.active = previousActive;
 
 			if (foreground)
 			{

@@ -1,6 +1,7 @@
 using RimBridgeServer.Annotations;
 using HarmonyLib;
 using RimWorld;
+using RimWorld.Planet;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -29,12 +30,15 @@ namespace ZombieLand
 			var settings = ZombieSettings.Values;
 			var zombieGrid = DescribeZombieGrid(map, zombies);
 			var ideology = DescribeIdeologyLoadState(map, zombies);
+			var isSosOuterSpaceMap = map != null && map.Biome == SoSTools.sosOuterSpaceBiomeDef;
 
 			return new
 			{
 				success = true,
 				hasCurrentMap = map != null,
 				mapId = map?.uniqueID ?? -1,
+				mapBiome = map?.Biome?.defName,
+				mapBiomeLabel = map?.Biome?.label,
 				mapSize = map == null ? null : new
 				{
 					x = map.Size.x,
@@ -57,6 +61,20 @@ namespace ZombieLand
 					spawningInProgress = ZombieGenerator.ZombiesSpawning,
 					currentZombiesTickingLength = tickManager.currentZombiesTicking?.Length ?? 0,
 					currentZombiesTickingIndex = tickManager.currentZombiesTickingIndex
+				},
+				sos = new
+				{
+					installed = SoSTools.isInstalled,
+					outerSpaceBiomeDef = SoSTools.sosOuterSpaceBiomeDef?.defName,
+					shipOrbitingWorldObjectDef = SoSTools.sosShipOrbitingWorldObjectDef?.defName,
+					currentMapIsOuterSpace = isSosOuterSpaceMap,
+					floatingZombiesSetting = settings?.floatingZombies,
+					floatingBackCount = tickManager?.floatingSpaceZombiesBack?.Count ?? 0,
+					floatingForeCount = tickManager?.floatingSpaceZombiesFore?.Count ?? 0,
+					expectedBackCount = SoSTools.Floater.backCount,
+					expectedForeCount = SoSTools.Floater.foreCount,
+					floatingBackReady = (tickManager?.floatingSpaceZombiesBack?.Count ?? 0) >= SoSTools.Floater.backCount,
+					floatingForeReady = (tickManager?.floatingSpaceZombiesFore?.Count ?? 0) >= SoSTools.Floater.foreCount
 				},
 				zombieTicker = new
 				{
@@ -92,6 +110,86 @@ namespace ZombieLand
 				},
 					timeSpeed = gameTickManager == null ? null : gameTickManager.CurTimeSpeed.ToString()
 				};
+			}
+
+			[Tool("zombieland/create_sos_space_map_fixture", Description = "Create a Save Our Ship 2 orbiting-ship map fixture so Zombieland space-map behavior can be verified through normal ticks.")]
+			public static object CreateSoSSpaceMapFixture(
+				[ToolParameter(Description = "Square map size to generate.", Required = false, DefaultValue = 200)] int size = 200)
+			{
+				if (SoSTools.isInstalled == false)
+					return new { success = false, message = "Save Our Ship 2 is not installed." };
+				if (SoSTools.sosShipOrbitingWorldObjectDef == null)
+					return new { success = false, message = "Save Our Ship 2 ShipOrbiting world object def was not resolved." };
+
+				size = Mathf.Clamp(size, 50, 300);
+				var previousMap = CurrentMap;
+				var mapGeneratorDef = DefDatabase<MapGeneratorDef>.GetNamed("EmptySpaceMap", false);
+				if (mapGeneratorDef == null)
+					return new { success = false, message = "Save Our Ship 2 EmptySpaceMap generator def was not resolved." };
+
+				try
+				{
+					var parent = WorldObjectMaker.MakeWorldObject(SoSTools.sosShipOrbitingWorldObjectDef) as MapParent;
+					if (parent == null)
+						return new
+						{
+							success = false,
+							message = "ShipOrbiting world object is not a MapParent.",
+							worldObjectClass = SoSTools.sosShipOrbitingWorldObjectDef.worldObjectClass?.FullName
+						};
+
+					parent.SetFaction(Faction.OfPlayer);
+					parent.Tile = FindSoSTestTile(previousMap);
+					Find.WorldObjects.Add(parent);
+
+					var generatedMap = MapGenerator.GenerateMap(new IntVec3(size, 1, size), parent, mapGeneratorDef, null, null, false);
+					Current.Game.CurrentMap = generatedMap;
+
+					var tickManager = generatedMap.GetComponent<TickManager>();
+					return new
+					{
+						success = true,
+						previousMapId = previousMap?.uniqueID ?? -1,
+						mapId = generatedMap.uniqueID,
+						mapIndex = generatedMap.Index,
+						mapSize = new { x = generatedMap.Size.x, z = generatedMap.Size.z },
+						mapBiome = generatedMap.Biome?.defName,
+						parentDef = parent.def?.defName,
+						parentType = parent.GetType().FullName,
+						parentTile = parent.Tile.ToString(),
+						mapGenerator = mapGeneratorDef.defName,
+						currentMapIsOuterSpace = generatedMap.Biome == SoSTools.sosOuterSpaceBiomeDef,
+						tickManagerPresent = tickManager != null,
+						floatingBackCount = tickManager?.floatingSpaceZombiesBack?.Count ?? 0,
+						floatingForeCount = tickManager?.floatingSpaceZombiesFore?.Count ?? 0
+					};
+				}
+				catch (Exception ex)
+				{
+					return new
+					{
+						success = false,
+						message = ex.Message,
+						exceptionType = ex.GetType().FullName,
+						stackTrace = ex.StackTrace
+					};
+				}
+			}
+
+			static PlanetTile FindSoSTestTile(Map previousMap)
+			{
+				var finder = AccessTools.Method("SaveOurShip2.ShipInteriorMod2:FindWorldTileOnLayers", new[] { typeof(bool) });
+				if (finder != null)
+				{
+					var reflectedTile = finder.Invoke(null, new object[] { true });
+					if (reflectedTile is PlanetTile tile && tile != PlanetTile.Invalid)
+						return tile;
+				}
+
+				if (previousMap != null && previousMap.Tile != PlanetTile.Invalid)
+					return previousMap.Tile;
+
+				return TileFinder.RandomStartingTile();
 			}
 
 			[Tool("zombieland/startup_support_state", Description = "Verify startup asset loading and shared Zombieland service hook dispatch without clearing the live game.")]
