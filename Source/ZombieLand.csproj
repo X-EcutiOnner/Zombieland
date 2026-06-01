@@ -117,7 +117,7 @@
 			<CopyTextures Include="..\Textures\**" />
 			<CopyLicense Include="..\LICENSE" />
 			<CopyLoadFolders Include="..\LoadFolders.xml" />
-			<CopyReadme Include="..\Readme.md" />
+			<CopyReadme Include="..\README.md" />
 		</ItemGroup>
 		<Copy SourceFiles="@(Copy_14)" DestinationFolder="$(RIMWORLD_MOD_DIR)\$(ModFileName)\1.4\%(RecursiveDir)" />
 		<Copy SourceFiles="@(Copy_16)" DestinationFolder="$(RIMWORLD_MOD_DIR)\$(ModFileName)\1.6\%(RecursiveDir)" />
