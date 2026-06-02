@@ -1,4 +1,5 @@
 ﻿using HarmonyLib;
+using RimWorld;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -97,6 +98,10 @@ namespace ZombieLand
 			if (pawn.Dead)
 				return false;
 			if (pawn.Downed)
+				return false;
+			if (pawn.activity?.IsDormant == true || pawn.activity?.Deactivated == true)
+				return false;
+			if (pawn.canBeDormant?.Awake == false)
 				return false;
 
 			var i = 0;

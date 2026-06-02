@@ -781,7 +781,7 @@ namespace ZombieLand
 				spitterSpitInterval = spitter?.spitInterval,
 				spitterTickCounter = spitter?.tickCounter,
 				currentJob = pawn?.CurJobDef?.defName,
-				currentJobReport = pawn?.CurJob?.GetReport(pawn),
+				currentJobReport = SafeCurrentJobReport(pawn),
 				patherMoving = pawn?.pather?.Moving ?? false,
 				patherDestination = pawn?.pather?.Moving == true ? ZombieRuntimeActions.DescribeCell(pawn.pather.Destination.Cell) : null
 			};
@@ -802,9 +802,17 @@ namespace ZombieLand
 				faction = pawn?.Faction?.Name,
 				position = pawn == null ? null : ZombieRuntimeActions.DescribeCell(pawn.Position),
 				currentJob = pawn?.CurJobDef?.defName,
-				currentJobReport = pawn?.CurJob?.GetReport(pawn),
+				currentJobReport = SafeCurrentJobReport(pawn),
 				stunned = pawn?.stances?.stunner?.Stunned
 			};
+		}
+
+		static string SafeCurrentJobReport(Pawn pawn)
+		{
+			var job = pawn?.CurJob;
+			if (job == null || job.def == JobDefOf.IdleWhileDespawned)
+				return null;
+			return job.GetReport(pawn);
 		}
 
 		static void DisablePawnWork(Pawn pawn)
