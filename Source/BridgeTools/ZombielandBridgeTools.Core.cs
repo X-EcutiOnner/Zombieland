@@ -31,7 +31,7 @@ namespace ZombieLand
 			var zombieGrid = DescribeZombieGrid(map, zombies);
 			var ideology = DescribeIdeologyLoadState(map, zombies);
 			var isSosOuterSpaceMap = map != null && map.Biome == SoSTools.sosOuterSpaceBiomeDef;
-			var ambientSound = DescribeAmbientSoundState(map, tickManager, settings, zombies.Length);
+			var ambientSound = map == null ? null : DescribeAmbientSoundState(map, tickManager, settings, zombies.Length);
 
 			return new
 			{
