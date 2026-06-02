@@ -2096,6 +2096,22 @@ namespace ZombieLand
 				&& (string)before.GetType().GetProperty("kind").GetValue(before) == (string)after.GetType().GetProperty("kind").GetValue(after);
 		}
 
+		static bool CurrentTickingSliceAllLive(TickManager tickManager)
+		{
+			if (tickManager?.currentZombiesTicking == null)
+				return false;
+			var count = tickManager.currentZombiesTickingCount;
+			if (count < 0 || count > tickManager.currentZombiesTicking.Length)
+				return false;
+			for (var i = 0; i < count; i++)
+			{
+				var zombie = tickManager.currentZombiesTicking[i];
+				if (zombie == null || zombie.Spawned == false || zombie.Dead)
+					return false;
+			}
+			return true;
+		}
+
 		[Tool("zombieland/zombie_ticking_budget_contract", Description = "Verify reduced zombie ticking counts production ticks and keeps move-speed compensation active.")]
 		public static object ZombieTickingBudgetContract()
 		{
@@ -2164,9 +2180,10 @@ namespace ZombieLand
 				var gridRepopulation = VerifyZombieGridRepopulationAfterReset(map, sample);
 				ZombieTicker.zombiesTicked = 0;
 				tickManager.ZombieTicking();
-				var subsetCount = tickManager.currentZombiesTicking?.Length ?? 0;
+				var subsetCount = tickManager.currentZombiesTickingCount;
+				var subsetCapacity = tickManager.currentZombiesTicking?.Length ?? 0;
 				var tickedCount = ZombieTicker.zombiesTicked;
-				var allTickedWereLive = tickManager.currentZombiesTicking?.All(zombie => zombie.Spawned && zombie.Dead == false) ?? false;
+				var allTickedWereLive = CurrentTickingSliceAllLive(tickManager);
 
 				FillZombieTickPercent(1f);
 				var normalSpeed = sample?.GetStatValue(StatDefOf.MoveSpeed) ?? 0f;
@@ -2204,6 +2221,7 @@ namespace ZombieLand
 					percentBeforeTicking,
 					expectedTicking,
 					subsetCount,
+					subsetCapacity,
 					tickedCount,
 					allTickedWereLive,
 					normalSpeed,
@@ -2227,8 +2245,7 @@ namespace ZombieLand
 				ZombieTicker.zombiesTicked = originalZombiesTicked;
 				ZombieTicker.maxTicking = originalMaxTicking;
 				ZombieTicker.currentTicking = originalCurrentTicking;
-				tickManager.currentZombiesTicking = Array.Empty<Zombie>();
-				tickManager.currentZombiesTickingIndex = 0;
+				tickManager.ClearZombieTickingBuffers();
 			}
 			}
 
@@ -2851,13 +2868,13 @@ namespace ZombieLand
 					&& prefixCurrentTicking < prefixMaxTicking;
 
 				ZombieTicker.zombiesTicked = 0;
-				tickManager.currentZombiesTicking = Array.Empty<Zombie>();
-				tickManager.currentZombiesTickingIndex = 0;
+				tickManager.ClearZombieTickingBuffers();
 				gameTickManager.DoSingleTick();
 				var singleTickExpected = Mathf.FloorToInt(liveCached * prefixPercentRead);
 				var singleTickTickedCount = ZombieTicker.zombiesTicked;
-				var singleTickSubsetCount = tickManager.currentZombiesTicking?.Length ?? 0;
-				var singleTickAllLive = tickManager.currentZombiesTicking?.All(zombie => zombie.Spawned && zombie.Dead == false) ?? false;
+				var singleTickSubsetCount = tickManager.currentZombiesTickingCount;
+				var singleTickSubsetCapacity = tickManager.currentZombiesTicking?.Length ?? 0;
+				var singleTickAllLive = CurrentTickingSliceAllLive(tickManager);
 				var singleTickRanBudget = singleTickTickedCount == singleTickExpected
 					&& singleTickSubsetCount == singleTickExpected
 					&& singleTickAllLive;
@@ -2901,6 +2918,7 @@ namespace ZombieLand
 						updateBudgetTicking = prefixCurrentTicking,
 						singleTickTickedCount,
 						singleTickSubsetCount,
+						singleTickSubsetCapacity,
 						singleTickAllLive,
 						singleTickRanBudget
 					},
@@ -2928,8 +2946,7 @@ namespace ZombieLand
 				ZombieTicker.maxTicking = originalMaxTicking;
 				ZombieTicker.currentTicking = originalCurrentTicking;
 				ZombieTicker.managers = originalManagers;
-				tickManager.currentZombiesTicking = Array.Empty<Zombie>();
-				tickManager.currentZombiesTickingIndex = 0;
+				tickManager.ClearZombieTickingBuffers();
 			}
 		}
 

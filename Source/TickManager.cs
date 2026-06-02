@@ -89,8 +89,14 @@ namespace ZombieLand
 		IEnumerator taskTicker;
 		bool runZombiesForNewIncident = false;
 
-		public Zombie[] currentZombiesTicking;
+		public Zombie[] currentZombiesTicking = Array.Empty<Zombie>();
+		public int currentZombiesTickingCount;
 		public int currentZombiesTickingIndex;
+		Zombie[] currentZombiesTickingCandidates = Array.Empty<Zombie>();
+		int currentZombiesTickingCandidatesCount;
+
+		public int CurrentZombiesTickingCandidatesCount => currentZombiesTickingCandidatesCount;
+		public int CurrentZombiesTickingCandidatesCapacity => currentZombiesTickingCandidates?.Length ?? 0;
 
 		public List<ZombieCorpse> allZombieCorpses;
 		public AvoidGrid avoidGrid;
@@ -242,6 +248,7 @@ namespace ZombieLand
 			{
 				allZombiesCached ??= new HashSet<Zombie>();
 				allZombiesCached = allZombiesCached.Where(zombie => zombie != null && zombie.Spawned && zombie.Dead == false).ToHashSet();
+				ClearZombieTickingBuffers();
 
 				allZombieCorpses ??= new List<ZombieCorpse>();
 				allZombieCorpses = allZombieCorpses.Where(corpse => corpse.DestroyedOrNull() == false && corpse.Spawned).ToList();
@@ -266,11 +273,11 @@ namespace ZombieLand
 		{
 			foreach (var head in victimHeads)
 			{
-				var mat = new Material(head.material);
-				head.material.color = new Color(mat.color.r, mat.color.g, mat.color.b, head.alpha);
-				GraphicToolbox.DrawScaledMesh(HeadMesh, mat, head.Position, head.quat, 0.7f, 0.7f);
-				// don't do the following, it will also remove the original graphic (result: pink texture):
-				// UnityEngine.Object.Destroy(mat);
+				var material = head.material;
+				var color = material.color;
+				color.a = head.alpha;
+				material.color = color;
+				GraphicToolbox.DrawScaledMesh(HeadMesh, material, head.Position, head.quat, 0.7f, 0.7f);
 			}
 		}
 
@@ -368,7 +375,7 @@ namespace ZombieLand
 			PrepareThreadedTicking(this);
 			var threatLevel = ZombieWeather.GetThreatLevel(map);
 			var ticking = currentZombiesTicking;
-			for (var i = 0; i < ticking.Length; i++)
+			for (var i = 0; i < currentZombiesTickingCount; i++)
 			{
 				ticking[i].CustomTick(threatLevel);
 				ZombieTicker.zombiesTicked++;
@@ -388,31 +395,74 @@ namespace ZombieLand
 		{
 			var tickManager = (TickManager)input;
 			var f = ZombieTicker.PercentTicking;
-			var zombies = new List<Zombie>(tickManager.allZombiesCached.Count);
-			foreach (var zombie in tickManager.allZombiesCached)
-				if (zombie != null && zombie.Spawned && zombie.Dead == false)
-					zombies.Add(zombie);
+			var previousCandidateCount = tickManager.currentZombiesTickingCandidatesCount;
+			var allZombies = tickManager.allZombiesCached;
+			var candidateCapacity = allZombies?.Count ?? 0;
+			EnsureZombieBufferCapacity(ref tickManager.currentZombiesTickingCandidates, candidateCapacity);
+			var zombies = tickManager.currentZombiesTickingCandidates;
+			var zombieCount = 0;
+			if (allZombies != null)
+				foreach (var zombie in allZombies)
+					if (zombie != null && zombie.Spawned && zombie.Dead == false)
+						zombies[zombieCount++] = zombie;
+
+			ClearZombieBuffer(zombies, zombieCount, previousCandidateCount);
+			tickManager.currentZombiesTickingCandidatesCount = zombieCount;
+
+			var previousTickingCount = tickManager.currentZombiesTickingCount;
 			if (f >= 1f)
-				tickManager.currentZombiesTicking = zombies.ToArray();
+			{
+				EnsureZombieBufferCapacity(ref tickManager.currentZombiesTicking, zombieCount);
+				Array.Copy(zombies, tickManager.currentZombiesTicking, zombieCount);
+				tickManager.currentZombiesTickingCount = zombieCount;
+			}
 			else
 			{
-				var partition = Mathf.FloorToInt(zombies.Count * f);
+				var partition = Mathf.FloorToInt(zombieCount * f);
 				if (partition <= 0)
-					tickManager.currentZombiesTicking = Array.Empty<Zombie>();
+					tickManager.currentZombiesTickingCount = 0;
 				else
 				{
-					var selected = new Zombie[partition];
+					EnsureZombieBufferCapacity(ref tickManager.currentZombiesTicking, partition);
+					var selected = tickManager.currentZombiesTicking;
 					for (var i = 0; i < partition; i++)
 					{
-						var idx = Rand.RangeInclusive(i, zombies.Count - 1);
+						var idx = Rand.RangeInclusive(i, zombieCount - 1);
 						selected[i] = zombies[idx];
 						zombies[idx] = zombies[i];
 						zombies[i] = selected[i];
 					}
-					tickManager.currentZombiesTicking = selected;
+					tickManager.currentZombiesTickingCount = partition;
 				}
 			}
-			tickManager.currentZombiesTickingIndex = tickManager.currentZombiesTicking.Length;
+			ClearZombieBuffer(tickManager.currentZombiesTicking, tickManager.currentZombiesTickingCount, previousTickingCount);
+			tickManager.currentZombiesTickingIndex = tickManager.currentZombiesTickingCount;
+		}
+
+		static void EnsureZombieBufferCapacity(ref Zombie[] buffer, int capacity)
+		{
+			if (buffer != null && buffer.Length >= capacity)
+				return;
+
+			var current = buffer?.Length ?? 0;
+			var next = Math.Max(capacity, Math.Max(16, current * 2));
+			Array.Resize(ref buffer, next);
+		}
+
+		static void ClearZombieBuffer(Zombie[] buffer, int from, int previousCount)
+		{
+			if (buffer == null || previousCount <= from)
+				return;
+			Array.Clear(buffer, from, previousCount - from);
+		}
+
+		public void ClearZombieTickingBuffers()
+		{
+			ClearZombieBuffer(currentZombiesTicking, 0, currentZombiesTickingCount);
+			currentZombiesTickingCount = 0;
+			currentZombiesTickingIndex = 0;
+			ClearZombieBuffer(currentZombiesTickingCandidates, 0, currentZombiesTickingCandidatesCount);
+			currentZombiesTickingCandidatesCount = 0;
 		}
 
 		public static void DoThreadedSingleTick(object input)
@@ -668,13 +718,15 @@ namespace ZombieLand
 
 		public void TickHeads()
 		{
-			var heads = victimHeads.ToArray();
-			foreach (var head in heads)
+			for (var i = victimHeads.Count - 1; i >= 0; i--)
+			{
+				var head = victimHeads[i];
 				if (head.Tick())
 				{
 					head.Cleanup();
-					_ = victimHeads.Remove(head);
+					victimHeads.RemoveAt(i);
 				}
+			}
 		}
 
 		public void AddExplosion(IntVec3 pos)
@@ -714,10 +766,15 @@ namespace ZombieLand
 			}
 
 			var cameraPos = Find.CameraDriver.transform.position;
-			var nearestElectricalZombieDistance = hummingZombies
-				.Select(zombie => (cameraPos - zombie.DrawPos).magnitude)
-				.OrderBy(dist => dist)
-				.First();
+			var nearestElectricalZombieDistance = float.MaxValue;
+			foreach (var zombie in hummingZombies)
+			{
+				if (zombie == null)
+					continue;
+				var distance = (cameraPos - zombie.DrawPos).magnitude;
+				if (distance < nearestElectricalZombieDistance)
+					nearestElectricalZombieDistance = distance;
+			}
 
 			electricSustainer.info.volumeFactor = GenMath.LerpDoubleClamped(12f, 36f, 1f, 0f, nearestElectricalZombieDistance);
 		}
@@ -744,10 +801,15 @@ namespace ZombieLand
 			}
 
 			var cameraPos = Find.CameraDriver.transform.position;
-			var nearestTankZombieDistance = tankZombies
-				.Select(zombie => (cameraPos - zombie.DrawPos).magnitude)
-				.OrderBy(dist => dist)
-				.First();
+			var nearestTankZombieDistance = float.MaxValue;
+			foreach (var zombie in tankZombies)
+			{
+				if (zombie == null)
+					continue;
+				var distance = (cameraPos - zombie.DrawPos).magnitude;
+				if (distance < nearestTankZombieDistance)
+					nearestTankZombieDistance = distance;
+			}
 
 			tankSustainer.info.volumeFactor = GenMath.LerpDoubleClamped(24f, 64f, 1f, 0f, nearestTankZombieDistance);
 		}

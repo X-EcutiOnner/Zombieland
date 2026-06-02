@@ -60,7 +60,9 @@ namespace ZombieLand
 					liveZombieCount = tickManager.ZombieCount(),
 					currentColonyPoints = tickManager.currentColonyPoints,
 					spawningInProgress = ZombieGenerator.ZombiesSpawning,
-					currentZombiesTickingLength = tickManager.currentZombiesTicking?.Length ?? 0,
+					currentZombiesTickingLength = tickManager.currentZombiesTickingCount,
+					currentZombiesTickingCount = tickManager.currentZombiesTickingCount,
+					currentZombiesTickingCapacity = tickManager.currentZombiesTicking?.Length ?? 0,
 					currentZombiesTickingIndex = tickManager.currentZombiesTickingIndex
 				},
 				sos = new
@@ -111,6 +113,125 @@ namespace ZombieLand
 						&& Mathf.Abs(zombieRace.baseHealthScale - settings.healthFactor) < 0.0001f
 				},
 					timeSpeed = gameTickManager == null ? null : gameTickManager.CurTimeSpeed.ToString()
+				};
+			}
+
+			[Tool("zombieland/zombie_lightweight_perf_state", Description = "Read cheap read-only zombie performance counters without resetting frameWatch or running the heavier status probe.")]
+			public static object ZombieLightweightPerfState(
+				[ToolParameter(Description = "When true, try to include Unity Profiler memory counters via reflection. This is optional and best-effort.", Required = false, DefaultValue = false)] bool includeUnityProfilerMemory = false)
+			{
+				var map = CurrentMap;
+				var tickManager = map?.GetComponent<TickManager>();
+				var cached = tickManager?.allZombiesCached;
+				var cachedZombieCount = cached?.Count ?? 0;
+				var liveCachedZombieCount = 0;
+
+				if (cached != null)
+					foreach (var zombie in cached)
+						if (zombie != null && zombie.Spawned && zombie.Dead == false)
+							liveCachedZombieCount++;
+
+				var ordinaryZombies = 0;
+				var blobs = 0;
+				var spitters = 0;
+				var tanky = 0;
+				var activeElectrical = 0;
+				var electrifiers = 0;
+				var miners = 0;
+				var albinos = 0;
+				var darkSlimers = 0;
+				var suicideBombers = 0;
+				var toxicSplashers = 0;
+				var healers = 0;
+
+				var pawns = map?.mapPawns?.AllPawnsSpawned;
+				if (pawns != null)
+					foreach (var pawn in pawns)
+					{
+						if (pawn == null || pawn.Spawned == false || pawn.Dead)
+							continue;
+						if (pawn is Zombie zombie)
+						{
+							ordinaryZombies++;
+							if (zombie.IsTanky)
+								tanky++;
+							if (zombie.IsActiveElectric)
+								activeElectrical++;
+							if (zombie.isElectrifier)
+								electrifiers++;
+							if (zombie.isMiner)
+								miners++;
+							if (zombie.isAlbino)
+								albinos++;
+							if (zombie.isDarkSlimer)
+								darkSlimers++;
+							if (zombie.IsSuicideBomber)
+								suicideBombers++;
+							if (zombie.isToxicSplasher)
+								toxicSplashers++;
+							if (zombie.isHealer)
+								healers++;
+						}
+						else if (pawn is ZombieBlob)
+							blobs++;
+						else if (pawn is ZombieSpitter)
+							spitters++;
+					}
+
+				return new
+				{
+					success = true,
+					hasCurrentMap = map != null,
+					mapId = map?.uniqueID ?? -1,
+					mapSize = map == null ? null : new
+					{
+						x = map.Size.x,
+						z = map.Size.z,
+						area = map.Size.x * map.Size.z
+					},
+					memory = new
+					{
+						gcTotalMemoryBytes = GC.GetTotalMemory(false),
+						gcCollectionForced = false,
+						unityProfiler = includeUnityProfilerMemory ? TryReadUnityProfilerMemory() : null
+					},
+					zombies = new
+					{
+						cachedZombieCount,
+						liveCachedZombieCount,
+						liveZombielandPawnCount = ordinaryZombies + blobs + spitters,
+						pendingSpawns = ZombieGenerator.ZombiesSpawning,
+						liveCountIncludingPendingSpawns = liveCachedZombieCount + blobs + spitters + ZombieGenerator.ZombiesSpawning,
+						special = new
+						{
+							ordinaryZombies,
+							blobs,
+							spitters,
+							tanky,
+							activeElectrical,
+							electrifiers,
+							miners,
+							albinos,
+							darkSlimers,
+							suicideBombers,
+							toxicSplashers,
+							healers
+						}
+					},
+					ticking = tickManager == null ? null : new
+					{
+						currentCount = tickManager.currentZombiesTickingCount,
+						currentCapacity = tickManager.currentZombiesTicking?.Length ?? 0,
+						currentIndex = tickManager.currentZombiesTickingIndex,
+						candidateCount = tickManager.CurrentZombiesTickingCandidatesCount,
+						candidateCapacity = tickManager.CurrentZombiesTickingCandidatesCapacity
+					},
+					zombieGrid = DescribeZombieGridDensity(map),
+					frameWatch = new
+					{
+						running = ZombielandMod.frameWatch.IsRunning,
+						elapsedMilliseconds = ZombielandMod.frameWatch.ElapsedMilliseconds
+					}
 				};
 			}
 
@@ -1280,7 +1401,91 @@ namespace ZombieLand
 				}
 			}
 
-			static object DescribeZombieGrid(Map map, Pawn[] zombies)
+		static object DescribeZombieGridDensity(Map map)
+		{
+			if (map == null)
+				return null;
+
+			var grid = map.GetComponent<PheromoneGrid>();
+			if (grid == null)
+				return new
+				{
+					available = false,
+					nonZeroCells = 0,
+					totalZombieCount = 0,
+					maxZombieCount = 0,
+					mapArea = map.Size.x * map.Size.z,
+					nonZeroCellDensity = 0f,
+					zombieCountDensity = 0f
+				};
+
+			var nonZeroCells = 0;
+			var totalZombieCount = 0;
+			var maxZombieCount = 0;
+			grid.IterateCellsQuick(cell =>
+			{
+				if (cell.zombieCount == 0)
+					return;
+				nonZeroCells++;
+				totalZombieCount += cell.zombieCount;
+				maxZombieCount = Math.Max(maxZombieCount, cell.zombieCount);
+			});
+
+			var area = map.Size.x * map.Size.z;
+			return new
+			{
+				available = true,
+				nonZeroCells,
+				totalZombieCount,
+				maxZombieCount,
+				mapArea = area,
+				nonZeroCellDensity = area == 0 ? 0f : nonZeroCells / (float)area,
+				zombieCountDensity = area == 0 ? 0f : totalZombieCount / (float)area
+			};
+		}
+
+		static object TryReadUnityProfilerMemory()
+		{
+			try
+			{
+				var profilerType = AccessTools.TypeByName("UnityEngine.Profiling.Profiler");
+				if (profilerType == null)
+					return new
+					{
+						available = false,
+						error = "UnityEngine.Profiling.Profiler type was not found."
+					};
+
+				long? ReadLong(string methodName)
+				{
+					var method = AccessTools.Method(profilerType, methodName, Type.EmptyTypes);
+					if (method == null)
+						return null;
+					var value = method.Invoke(null, Array.Empty<object>());
+					return value == null ? null : Convert.ToInt64(value);
+				}
+
+				return new
+				{
+					available = true,
+					totalAllocatedMemoryBytes = ReadLong("GetTotalAllocatedMemoryLong"),
+					totalReservedMemoryBytes = ReadLong("GetTotalReservedMemoryLong"),
+					totalUnusedReservedMemoryBytes = ReadLong("GetTotalUnusedReservedMemoryLong"),
+					monoUsedSizeBytes = ReadLong("GetMonoUsedSizeLong"),
+					monoHeapSizeBytes = ReadLong("GetMonoHeapSizeLong")
+				};
+			}
+			catch (Exception ex)
+			{
+				return new
+				{
+					available = false,
+					error = ex.GetType().FullName + ": " + ex.Message
+				};
+			}
+		}
+
+		static object DescribeZombieGrid(Map map, Pawn[] zombies)
 			{
 			if (map == null)
 				return null;

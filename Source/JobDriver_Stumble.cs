@@ -16,6 +16,7 @@ namespace ZombieLand
 		public IntVec3 lastEatTargetPosition;
 		public int eatDelayCounter;
 		public int eatDelay;
+		public readonly List<IntVec3> adjacentMoveBuffer = new(8);
 
 		void InitAction()
 		{

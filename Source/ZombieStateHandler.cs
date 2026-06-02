@@ -1,5 +1,6 @@
 ﻿using HarmonyLib;
 using RimWorld;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -195,7 +196,7 @@ namespace ZombieLand
 			var possibleMoves = PossibleMoves(driver, zombie);
 			var destination = master.Position;
 			possibleMoves.Sort((p1, p2) => p1.DistanceToSquared(destination).CompareTo(p2.DistanceToSquared(destination)));
-			var newCell = possibleMoves.FirstOrDefault();
+			var newCell = possibleMoves.Count > 0 ? possibleMoves[0] : default;
 			if (newCell != destination)
 				driver.destination = newCell;
 			return true;
@@ -601,14 +602,38 @@ namespace ZombieLand
 			var idx = Tools.CellsAroundIndex(delta);
 			if (idx == -1)
 				return false;
-			var adjacted = GenAdj.AdjacentCellsAround;
-			var cells = allDirections ? adjacted.ToList() : new List<IntVec3>() { adjacted[idx], adjacted[(idx + 1) % 8], adjacted[(idx + 7) % 8] };
-
-			var mineable = cells
-				.Select(c => basePos + c)
-				.Where(c => c.InBounds(map))
-				.Select(c => c.GetFirstThing<Mineable>(map))
-				.FirstOrDefault();
+			var adjacent = GenAdj.AdjacentCellsAround;
+			Mineable mineable = null;
+			if (allDirections)
+			{
+				for (var i = 0; i < adjacent.Length; i++)
+				{
+					var cell = basePos + adjacent[i];
+					if (cell.InBounds(map) == false)
+						continue;
+					mineable = cell.GetFirstThing<Mineable>(map);
+					if (mineable != null)
+						break;
+				}
+			}
+			else
+			{
+				var cell = basePos + adjacent[idx];
+				if (cell.InBounds(map))
+					mineable = cell.GetFirstThing<Mineable>(map);
+				if (mineable == null)
+				{
+					cell = basePos + adjacent[(idx + 1) % 8];
+					if (cell.InBounds(map))
+						mineable = cell.GetFirstThing<Mineable>(map);
+				}
+				if (mineable == null)
+				{
+					cell = basePos + adjacent[(idx + 7) % 8];
+					if (cell.InBounds(map))
+						mineable = cell.GetFirstThing<Mineable>(map);
+				}
+			}
 			if (mineable == null)
 				return false;
 
@@ -629,10 +654,11 @@ namespace ZombieLand
 		//
 		public static List<IntVec3> PossibleMoves(this JobDriver_Stumble driver, Zombie zombie)
 		{
+			var result = driver.adjacentMoveBuffer;
+			result.Clear();
 			if (driver.destination.IsValid)
-				return new List<IntVec3>();
+				return result;
 
-			var result = new List<IntVec3>(8);
 			var pos = zombie.Position;
 			foreach (var vec in GenAdj.AdjacentCells)
 			{
@@ -705,8 +731,32 @@ namespace ZombieLand
 			}
 
 			// move to least populated place
-			var zCount = possibleMoves.Select(grid.GetZombieCount).Min();
-			driver.destination = possibleMoves.Where(p => grid.GetZombieCount(p) == zCount).SafeRandomElement();
+			var zCount = int.MaxValue;
+			var candidateCount = 0;
+			for (var i = 0; i < possibleMoves.Count; i++)
+			{
+				var count = grid.GetZombieCount(possibleMoves[i]);
+				if (count < zCount)
+				{
+					zCount = count;
+					candidateCount = 1;
+				}
+				else if (count == zCount)
+					candidateCount++;
+			}
+
+			var chosen = Rand.Range(0, candidateCount);
+			for (var i = 0; i < possibleMoves.Count; i++)
+			{
+				var cell = possibleMoves[i];
+				if (grid.GetZombieCount(cell) != zCount)
+					continue;
+				if (chosen-- == 0)
+				{
+					driver.destination = cell;
+					break;
+				}
+			}
 			return false;
 		}
 
@@ -738,9 +788,7 @@ namespace ZombieLand
 							if (destination.IsValid)
 							{
 								possibleMoves.Sort((p1, p2) => p1.DistanceToSquared(destination).CompareTo(p2.DistanceToSquared(destination)));
-								possibleMoves = possibleMoves.Take(Constants.NUMBER_OF_TOP_MOVEMENT_PICKS).ToList();
-								possibleMoves = possibleMoves.OrderBy(grid.GetZombieCount).ToList();
-								driver.destination = possibleMoves.First();
+								driver.destination = FirstLowestZombieCountInTopMoves(possibleMoves, grid);
 								return;
 							}
 							else
@@ -751,16 +799,14 @@ namespace ZombieLand
 					{
 						var center = zombie.wanderDestination.IsValid ? zombie.wanderDestination : map.Center;
 						possibleMoves.Sort((p1, p2) => p1.DistanceToSquared(center).CompareTo(p2.DistanceToSquared(center)));
-						possibleMoves = possibleMoves.Take(Constants.NUMBER_OF_TOP_MOVEMENT_PICKS).ToList();
-						possibleMoves = possibleMoves.OrderBy(grid.GetZombieCount).ToList();
-						driver.destination = possibleMoves.First();
+						driver.destination = FirstLowestZombieCountInTopMoves(possibleMoves, grid);
 						return;
 					}
 				}
 			}
 
 			// random wandering
-			var n = possibleMoves.Count();
+			var n = possibleMoves.Count;
 			driver.destination = possibleMoves[Constants.random.Next(n)];
 		}
 
@@ -1108,8 +1154,29 @@ namespace ZombieLand
 
 		static int CountSurroundingZombies(IntVec3 pos, PheromoneGrid grid)
 		{
-			return GenAdj.AdjacentCellsAndInside.Select(vec => pos + vec)
-				.Select(grid.GetZombieCount).Sum();
+			var count = 0;
+			var adjacent = GenAdj.AdjacentCellsAndInside;
+			for (var i = 0; i < adjacent.Length; i++)
+				count += grid.GetZombieCount(pos + adjacent[i]);
+			return count;
+		}
+
+		static IntVec3 FirstLowestZombieCountInTopMoves(List<IntVec3> possibleMoves, PheromoneGrid grid)
+		{
+			var count = Math.Min(Constants.NUMBER_OF_TOP_MOVEMENT_PICKS, possibleMoves.Count);
+			var bestCell = IntVec3.Invalid;
+			var bestZombieCount = int.MaxValue;
+			for (var i = 0; i < count; i++)
+			{
+				var cell = possibleMoves[i];
+				var zombieCount = grid.GetZombieCount(cell);
+				if (zombieCount < bestZombieCount)
+				{
+					bestZombieCount = zombieCount;
+					bestCell = cell;
+				}
+			}
+			return bestCell;
 		}
 
 		static readonly float[] minRageLength = new float[] { 0.1f, 0.2f, 0.5f, 1f, 2f };
@@ -1148,12 +1215,24 @@ namespace ZombieLand
 				return true;
 			}
 
-			var zombieFreePossibleMoves = possibleMoves.Where(cell => grid.GetZombieCount(cell) == 0).ToArray();
-			var n = zombieFreePossibleMoves.Length;
+			var n = 0;
+			for (var i = 0; i < possibleMoves.Count; i++)
+				if (grid.GetZombieCount(possibleMoves[i]) == 0)
+					n++;
 			if (n > 0)
 			{
-				destination = zombieFreePossibleMoves[Constants.random.Next(n)];
-				return true;
+				var chosen = Constants.random.Next(n);
+				for (var i = 0; i < possibleMoves.Count; i++)
+				{
+					var cell = possibleMoves[i];
+					if (grid.GetZombieCount(cell) != 0)
+						continue;
+					if (chosen-- == 0)
+					{
+						destination = cell;
+						return true;
+					}
+				}
 			}
 
 			return false;
