@@ -465,6 +465,82 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/anomaly_story_smoke", Description = "Run bounded Anomaly fun/perf/exploit scenario smokes: Horaxian moat, player ghoul choke, stealth Everything, Fleshmass field, and Nociosphere field.")]
+		public static object AnomalyStorySmoke(
+			[ToolParameter(Description = "Scenario names: all, horaxianMoat, ghoulChoke, stealthEverything, fleshmassField, or nociosphereField. Comma-separated.", Required = false, DefaultValue = "all")] string scenarios = "all",
+			[ToolParameter(Description = "Ticks to step inside each scenario. Clamped to 60..900.", Required = false, DefaultValue = 360)] int ticks = 360,
+			[ToolParameter(Description = "Zombie count for field scenarios. Clamped to 6..80.", Required = false, DefaultValue = 36)] int zombieCount = 36,
+			[ToolParameter(Description = "Destroy staged Anomaly pawns, zombies, walls, and buildings at the end of each scenario.", Required = false, DefaultValue = true)] bool cleanup = true)
+		{
+			var map = CurrentMap;
+			if (map == null)
+				return new { success = false, error = "No current map is loaded." };
+
+			var selectedScenarios = SelectAnomalyStoryScenarios(scenarios);
+			var clampedTicks = Mathf.Clamp(ticks, 60, 900);
+			var clampedZombieCount = Mathf.Clamp(zombieCount, 6, 80);
+			var results = new List<object>();
+			var settingsSnapshot = SnapshotZombieSettings();
+
+			try
+			{
+				foreach (var scenario in selectedScenarios)
+				{
+					var spawned = new List<Thing>();
+					try
+					{
+						ZombieRuntimeActions.DestroyZombies(map);
+						ClearAnomalyEngagementGrid(map);
+						var result = scenario switch
+						{
+							"horaxianMoat" => RunHoraxianMoatSmoke(map, clampedTicks, clampedZombieCount, spawned),
+							"ghoulChoke" => RunGhoulChokeSmoke(map, clampedTicks, clampedZombieCount, spawned),
+							"stealthEverything" => RunStealthEverythingSmoke(map, clampedTicks, clampedZombieCount, spawned),
+							"fleshmassField" => RunFleshmassFieldSmoke(map, clampedTicks, clampedZombieCount, spawned),
+							"nociosphereField" => RunNociosphereFieldSmoke(map, clampedTicks, clampedZombieCount, spawned),
+							_ => new { id = scenario, success = false, classification = "wrong", error = "Unknown scenario." } as object
+						};
+						results.Add(result);
+					}
+					finally
+					{
+						if (cleanup)
+						{
+							for (var i = spawned.Count - 1; i >= 0; i--)
+							{
+								if (spawned[i] != null && spawned[i].Destroyed == false)
+									CleanupAnomalyThing(spawned[i]);
+							}
+							ZombieRuntimeActions.DestroyZombies(map);
+							ClearAnomalyEngagementGrid(map);
+						}
+					}
+				}
+
+				return new
+				{
+					success = results.All(result => GetAnonymousString(result, "classification") == "nominal"),
+					scenarioCount = results.Count,
+					ticks = clampedTicks,
+					zombieCount = clampedZombieCount,
+					classificationCounts = results
+						.GroupBy(result => GetAnonymousString(result, "classification") ?? "unknown")
+						.ToDictionary(group => group.Key, group => group.Count()),
+					results = results.ToArray(),
+					logNote = "Use rimbridge/list_logs minimumLevel=warning after this operation for the log-clean gate. Screenshots or footage still own subjective fun/exploit judgement."
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+				if (cleanup)
+				{
+					ZombieRuntimeActions.DestroyZombies(map);
+					ClearAnomalyEngagementGrid(map);
+				}
+			}
+		}
+
 		static AnomalyMatrixCase[] SelectAnomalyMatrixCases(string cases)
 		{
 			if (string.IsNullOrWhiteSpace(cases))
@@ -486,6 +562,20 @@ namespace ZombieLand
 				.ToArray();
 		}
 
+		static string[] SelectAnomalyStoryScenarios(string scenarios)
+		{
+			var all = new[] { "horaxianMoat", "ghoulChoke", "stealthEverything", "fleshmassField", "nociosphereField" };
+			if (string.IsNullOrWhiteSpace(scenarios) || string.Equals(scenarios.Trim(), "all", StringComparison.OrdinalIgnoreCase))
+				return all;
+			var requested = scenarios.Split(',')
+				.Select(item => item.Trim())
+				.Where(item => item.Length > 0)
+				.ToArray();
+			if (requested.Any(item => string.Equals(item, "all", StringComparison.OrdinalIgnoreCase)))
+				return all;
+			return requested;
+		}
+
 		static AnomalyMatrixCase[] SelectAnomalyEngagementCases(string cases)
 		{
 			if (string.IsNullOrWhiteSpace(cases))
@@ -502,6 +592,349 @@ namespace ZombieLand
 				return anomalyMatrixCases.Where(testCase => ids.Contains(testCase.id)).ToArray();
 			}
 			return SelectAnomalyMatrixCases(cases);
+		}
+
+		static object RunHoraxianMoatSmoke(Map map, int ticks, int zombieCount, List<Thing> spawned)
+		{
+			ApplyZombieSettingsOverride(values =>
+			{
+				values.attackMode = AttackMode.OnlyHumans;
+				values.enemiesAttackZombies = false;
+				values.animalsAttackZombies = false;
+			});
+			var root = map.Center + new IntVec3(-32, 0, -26);
+			if (TrySpawnAnomalyPawn(map, "Horaxian_Gunner", "horax", root + new IntVec3(6, 0, 0), spawned, out var horaxian, out var pawnError) == false)
+				return pawnError;
+			var walls = SpawnScenarioWallLine(map, root + new IntVec3(2, 0, -5), 11, IntVec3.North, spawned);
+			var zombies = SpawnScenarioZombies(map, root, Math.Min(zombieCount, 28), 10, spawned);
+			var attackable = zombies.Any(zombie => Tools.Attackable(zombie, ZombieSettings.Values.attackMode, horaxian));
+			var moved = MovePawnForPheromone(horaxian);
+			AdvanceGameTicks(ticks);
+			var tracking = CountTracking(zombies);
+			var damaged = horaxian.health?.hediffSet?.hediffs?.Any(hediff => hediff is Hediff_Injury) ?? false;
+			var classification = attackable && moved && tracking > 0 ? "nominal" : "unclear";
+			return new
+			{
+				id = "horaxianMoat",
+				classification,
+				success = classification == "nominal",
+				ticks,
+				nominalBehavior = "Hostile human DLC pawns should turn a zombie perimeter into a real raid hazard under OnlyHumans.",
+				wallCount = walls.Length,
+				zombiesSpawned = zombies.Length,
+				zombiesTracking = tracking,
+				horaxianAttackable = attackable,
+				horaxianMovedForPheromone = moved,
+				horaxianDamaged = damaged,
+				horaxian = DescribePawn(horaxian),
+				sampleZombies = CompactZombieSamples(zombies)
+			};
+		}
+
+		static object RunGhoulChokeSmoke(Map map, int ticks, int zombieCount, List<Thing> spawned)
+		{
+			var root = map.Center + new IntVec3(26, 0, -26);
+			if (TrySpawnAnomalyPawn(map, "Ghoul", "player", root, spawned, out var ghoul, out var pawnError) == false)
+				return pawnError;
+			var walls = SpawnScenarioWallLine(map, root + new IntVec3(-1, 0, -4), 9, IntVec3.North, spawned)
+				.Concat(SpawnScenarioWallLine(map, root + new IntVec3(1, 0, -4), 9, IntVec3.North, spawned))
+				.ToArray();
+
+			ApplyZombieSettingsOverride(values =>
+			{
+				values.attackMode = AttackMode.OnlyColonists;
+				values.enemiesAttackZombies = false;
+				values.animalsAttackZombies = false;
+			});
+			var onlyColonistsZombies = SpawnScenarioZombies(map, root + new IntVec3(-4, 0, 0), Math.Min(zombieCount, 24), 8, spawned);
+			var onlyColonistsAttackable = onlyColonistsZombies.Any(zombie => Tools.Attackable(zombie, ZombieSettings.Values.attackMode, ghoul));
+			var onlyColonistsMoved = MovePawnForPheromone(ghoul);
+			AdvanceGameTicks(ticks);
+			var onlyColonistsTracking = CountTracking(onlyColonistsZombies);
+			foreach (var zombie in onlyColonistsZombies)
+				CleanupAnomalyThing(zombie);
+			ClearAnomalyEngagementGrid(map);
+
+			ApplyZombieSettingsOverride(values =>
+			{
+				values.attackMode = AttackMode.OnlyHumans;
+				values.enemiesAttackZombies = false;
+				values.animalsAttackZombies = false;
+			});
+			var onlyHumansZombies = SpawnScenarioZombies(map, root + new IntVec3(-4, 0, 0), Math.Min(zombieCount, 24), 8, spawned);
+			var onlyHumansAttackable = onlyHumansZombies.Any(zombie => Tools.Attackable(zombie, ZombieSettings.Values.attackMode, ghoul));
+			var onlyHumansMoved = MovePawnForPheromone(ghoul);
+			AdvanceGameTicks(ticks);
+			var onlyHumansTracking = CountTracking(onlyHumansZombies);
+			var classification = onlyColonistsAttackable == false && onlyColonistsTracking == 0 && onlyHumansAttackable && onlyHumansTracking > 0 ? "nominal" : "unclear";
+			return new
+			{
+				id = "ghoulChoke",
+				classification,
+				success = classification == "nominal",
+				ticks,
+				nominalBehavior = "Player ghoul is not a colonist target under OnlyColonists but becomes zombie-attracting under OnlyHumans.",
+				wallCount = walls.Length,
+				onlyColonists = new
+				{
+					zombiesSpawned = onlyColonistsZombies.Length,
+					moved = onlyColonistsMoved,
+					attackable = onlyColonistsAttackable,
+					zombiesTracking = onlyColonistsTracking
+				},
+				onlyHumans = new
+				{
+					zombiesSpawned = onlyHumansZombies.Length,
+					moved = onlyHumansMoved,
+					attackable = onlyHumansAttackable,
+					zombiesTracking = onlyHumansTracking
+				},
+				ghoul = DescribePawn(ghoul)
+			};
+		}
+
+		static object RunStealthEverythingSmoke(Map map, int ticks, int zombieCount, List<Thing> spawned)
+		{
+			ApplyZombieSettingsOverride(values =>
+			{
+				values.attackMode = AttackMode.Everything;
+				values.enemiesAttackZombies = false;
+				values.animalsAttackZombies = false;
+			});
+			var root = map.Center + new IntVec3(-30, 0, 20);
+			var rows = new List<object>();
+			foreach (var kindDef in new[] { "Sightstealer", "Revenant" })
+			{
+				if (TrySpawnAnomalyPawn(map, kindDef, "entities", root + new IntVec3(rows.Count * 18, 0, 0), spawned, out var entity, out var pawnError) == false)
+					return pawnError;
+				var zombies = SpawnScenarioZombies(map, entity.Position + new IntVec3(-5, 0, 0), Math.Min(zombieCount / 2, 18), 8, spawned);
+				var attackable = zombies.Any(zombie => Tools.Attackable(zombie, ZombieSettings.Values.attackMode, entity));
+				var moved = MovePawnForPheromone(entity);
+				AdvanceGameTicks(ticks);
+				var tracking = CountTracking(zombies);
+				rows.Add(new
+				{
+					kindDef,
+					moved,
+					attackable,
+					zombiesSpawned = zombies.Length,
+					zombiesTracking = tracking,
+					entity = DescribePawn(entity),
+					sampleZombies = CompactZombieSamples(zombies)
+				});
+			}
+			var classification = rows.All(row => (bool)row.GetType().GetProperty("attackable").GetValue(row) && (int)row.GetType().GetProperty("zombiesTracking").GetValue(row) > 0)
+				? "nominal"
+				: "unclear";
+			return new
+			{
+				id = "stealthEverything",
+				classification,
+				success = classification == "nominal",
+				ticks,
+				nominalBehavior = "Everything mode allows zombies to track invisible/stealth Anomaly entities as unhinged zombie-smell behavior.",
+				rows = rows.ToArray()
+			};
+		}
+
+		static object RunFleshmassFieldSmoke(Map map, int ticks, int zombieCount, List<Thing> spawned)
+		{
+			ApplyZombieSettingsOverride(values =>
+			{
+				values.attackMode = AttackMode.Everything;
+				values.enemiesAttackZombies = false;
+				values.animalsAttackZombies = false;
+			});
+			var root = map.Center + new IntVec3(28, 0, 20);
+			var heartDef = DefDatabase<ThingDef>.GetNamedSilentFail("FleshmassHeart");
+			if (heartDef == null)
+				return new { id = "fleshmassField", classification = "wrong", success = false, error = "FleshmassHeart def was not loaded." };
+			if (TryFindClearSpawnCell(map, root, 16f, out var heartCell, out var heartCellError) == false)
+				return heartCellError;
+			var heartThing = ThingMaker.MakeThing(heartDef);
+			if (heartThing is not Building_FleshmassHeart heart)
+				return new { id = "fleshmassField", classification = "wrong", success = false, error = "FleshmassHeart did not create expected building type." };
+			heart.SetFaction(ResolveAnomalyMatrixFaction("entities"));
+			GenSpawn.Spawn(heart, heartCell, map, Rot4.South);
+			spawned.Add(heart);
+			var heartHitPointsBefore = heart.HitPoints;
+
+			if (TrySpawnAnomalyPawn(map, "Gorehulk", "entities", heartCell + new IntVec3(5, 0, 0), spawned, out var fleshbeast, out var pawnError) == false)
+				return pawnError;
+			var zombies = SpawnScenarioZombies(map, heartCell + new IntVec3(-5, 0, 0), Math.Min(zombieCount, 32), 10, spawned);
+			var heartAttackable = zombies.Any(zombie => Tools.Attackable(zombie, ZombieSettings.Values.attackMode, heart));
+			var fleshbeastAttackable = zombies.Any(zombie => Tools.Attackable(zombie, ZombieSettings.Values.attackMode, fleshbeast));
+			var moved = MovePawnForPheromone(fleshbeast);
+			AdvanceGameTicks(ticks);
+			var tracking = CountTracking(zombies);
+			var heartUnchanged = heart.Destroyed == false && heart.HitPoints == heartHitPointsBefore;
+			var classification = heartAttackable == false && heartUnchanged && fleshbeastAttackable && moved && tracking > 0 ? "nominal" : "unclear";
+			return new
+			{
+				id = "fleshmassField",
+				classification,
+				success = classification == "nominal",
+				ticks,
+				nominalBehavior = "Zombie fields should disrupt fleshbeast pawns but not trivialize the FleshmassHeart building.",
+				zombiesSpawned = zombies.Length,
+				zombiesTracking = tracking,
+				heartAttackable,
+				heartHitPointsBefore,
+				heartHitPointsAfter = heart.Destroyed ? 0 : heart.HitPoints,
+				heartUnchanged,
+				fleshbeastAttackable,
+				fleshbeastMovedForPheromone = moved,
+				heart = DescribeAnomalyThing(heart),
+				fleshbeast = DescribePawn(fleshbeast)
+			};
+		}
+
+		static object RunNociosphereFieldSmoke(Map map, int ticks, int zombieCount, List<Thing> spawned)
+		{
+			ApplyZombieSettingsOverride(values =>
+			{
+				values.attackMode = AttackMode.Everything;
+				values.enemiesAttackZombies = true;
+				values.animalsAttackZombies = true;
+			});
+			var root = map.Center + new IntVec3(0, 0, 34);
+			if (TrySpawnAnomalyPawn(map, "Nociosphere", "entities", root, spawned, out var nociosphere, out var pawnError, activityState: "active", disableWork: false) == false)
+				return pawnError;
+			var zombies = SpawnScenarioZombies(map, root + new IntVec3(-5, 0, 0), zombieCount, 14, spawned);
+			var attackable = zombies.Any(zombie => Tools.Attackable(zombie, ZombieSettings.Values.attackMode, nociosphere));
+			var moved = MovePawnForPheromone(nociosphere);
+			var zombiesTickedBefore = ZombieTicker.zombiesTicked;
+			var startedAt = DateTime.UtcNow;
+			AdvanceGameTicks(ticks);
+			var elapsedMs = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds;
+			var liveZombies = zombies.Count(zombie => zombie != null && zombie.Destroyed == false && zombie.Dead == false && zombie.Spawned);
+			var downedZombies = zombies.Count(zombie => zombie != null && zombie.Destroyed == false && zombie.Downed);
+			var destroyedOrDead = zombies.Length - liveZombies;
+			var classification = attackable && moved && zombies.Length > 0 && nociosphere.Destroyed == false ? "nominal" : "unclear";
+			return new
+			{
+				id = "nociosphereField",
+				classification,
+				success = classification == "nominal",
+				ticks,
+				nominalBehavior = "Active Nociosphere crossing a zombie-heavy field should stay log/perf clean while exposing whether it becomes chaos or a meat blender.",
+				zombiesSpawned = zombies.Length,
+				liveZombies,
+				downedZombies,
+				destroyedOrDead,
+				attackable,
+				movedForPheromone = moved,
+				elapsedMs,
+				zombiesTickedDelta = ZombieTicker.zombiesTicked - zombiesTickedBefore,
+				nociosphere = DescribePawn(nociosphere),
+				sampleZombies = CompactZombieSamples(zombies)
+			};
+		}
+
+		static bool TrySpawnAnomalyPawn(Map map, string kindDefName, string factionKey, IntVec3 root, List<Thing> spawned, out Pawn pawn, out object error, string activityState = null, string dormancyState = null, bool disableWork = true)
+		{
+			pawn = null;
+			error = null;
+			var kindDef = DefDatabase<PawnKindDef>.GetNamedSilentFail(kindDefName);
+			if (kindDef == null)
+			{
+				error = new { id = kindDefName, classification = "wrong", success = false, error = $"PawnKindDef {kindDefName} was not loaded." };
+				return false;
+			}
+			if (TryFindClearSpawnCell(map, root, 18f, out var cell, out var cellError) == false)
+			{
+				error = cellError;
+				return false;
+			}
+			pawn = PawnGenerator.GeneratePawn(kindDef, ResolveAnomalyMatrixFaction(factionKey));
+			GenSpawn.Spawn(pawn, cell, map, Rot4.South);
+			if (disableWork)
+				DisablePawnWork(pawn);
+			ApplyAnomalyState(pawn, activityState, dormancyState);
+			spawned.Add(pawn);
+			return true;
+		}
+
+		static Zombie[] SpawnScenarioZombies(Map map, IntVec3 center, int count, int radius, List<Thing> spawned)
+		{
+			var zombies = new List<Zombie>();
+			foreach (var cell in GenRadial.RadialCellsAround(center, radius, true)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetThingList(map).OfType<Pawn>().Any() == false)
+				.Take(count))
+			{
+				var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+				if (zombie == null)
+					continue;
+				PrepareWallPushZombie(map, zombie, cell);
+				spawned.Add(zombie);
+				zombies.Add(zombie);
+			}
+			return zombies.ToArray();
+		}
+
+		static Building[] SpawnScenarioWallLine(Map map, IntVec3 start, int length, IntVec3 step, List<Thing> spawned)
+		{
+			var walls = new List<Building>();
+			var stuffDef = ThingDefOf.WoodLog;
+			for (var i = 0; i < length; i++)
+			{
+				var cell = start + step * i;
+				if (cell.InBounds(map) == false || cell.Fogged(map))
+					continue;
+				foreach (var existing in cell.GetThingList(map).Where(thing => thing.def.category == ThingCategory.Building).ToArray())
+					existing.Destroy(DestroyMode.Vanish);
+				var wall = ThingMaker.MakeThing(ThingDefOf.Wall, stuffDef) as Building;
+				if (wall == null)
+					continue;
+				GenSpawn.Spawn(wall, cell, map, WipeMode.Vanish);
+				wall.SetFaction(Faction.OfPlayer);
+				spawned.Add(wall);
+				walls.Add(wall);
+			}
+			map.regionAndRoomUpdater.RebuildAllRegionsAndRooms();
+			return walls.ToArray();
+		}
+
+		static bool MovePawnForPheromone(Pawn pawn)
+		{
+			if (pawn?.Spawned != true || TryFindAdjacentMoveCell(pawn, out var moveCell) == false)
+				return false;
+			pawn.Position = moveCell;
+			pawn.Notify_Teleported(false, false);
+			return true;
+		}
+
+		static int CountTracking(IEnumerable<Zombie> zombies)
+		{
+			return zombies.Count(zombie => zombie != null && zombie.Destroyed == false && zombie.Spawned && zombie.state == ZombieState.Tracking);
+		}
+
+		static object[] CompactZombieSamples(IEnumerable<Zombie> zombies, int count = 3)
+		{
+			return zombies
+				.Where(zombie => zombie != null)
+				.Take(count)
+				.Select(zombie => new
+				{
+					id = ZombieRuntimeActions.StableThingId(zombie),
+					spawned = zombie.Spawned,
+					destroyed = zombie.Destroyed,
+					dead = zombie.Dead,
+					downed = zombie.Downed,
+					state = zombie.state.ToString(),
+					currentJob = zombie.CurJobDef?.defName,
+					position = zombie.Spawned ? ZombieRuntimeActions.DescribeCell(zombie.Position) : null
+				})
+				.Cast<object>()
+				.ToArray();
+		}
+
+		static string GetAnonymousString(object instance, string propertyName)
+		{
+			return instance?.GetType().GetProperty(propertyName)?.GetValue(instance)?.ToString();
 		}
 
 		static object DescribeAnomalyMatrixRow(AnomalyMatrixCase testCase, Pawn pawn, Zombie zombie, Faction zombieFaction, SettingsGroup settings)
