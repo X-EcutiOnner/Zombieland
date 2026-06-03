@@ -9,14 +9,28 @@ namespace ZombieLand
 	public class ZombieCorpse : Corpse
 	{
 		public static Type type = typeof(ZombieCorpse);
+		public ZombieCorpseAppearance appearance;
 
 		public override bool IngestibleNow => false;
+
+		public ZombieCorpseAppearance Appearance
+		{
+			get
+			{
+				if (appearance == null && InnerPawn is Zombie zombie)
+					appearance = ZombieCorpseAppearance.From(zombie);
+				return appearance;
+			}
+		}
 
 		public override void SpawnSetup(Map map, bool respawningAfterLoad)
 		{
 			base.SpawnSetup(map, respawningAfterLoad);
 
-			InnerPawn.Rotation = Rot4.Random;
+			if (InnerPawn is Zombie zombie)
+				appearance ??= ZombieCorpseAppearance.From(zombie);
+			if (InnerPawn != null)
+				InnerPawn.Rotation = Rot4.Random;
 			this.SetForbidden(false, false);
 
 			GetComps<CompRottable>()
@@ -59,6 +73,7 @@ namespace ZombieLand
 		public override void ExposeData()
 		{
 			base.ExposeData();
+			Scribe_Deep.Look(ref appearance, "zombieCorpseAppearance");
 		}
 
 		public override void DrawExtraSelectionOverlays()
@@ -95,6 +110,9 @@ namespace ZombieLand
 					return;
 				}
 			}
+
+			if (InnerPawn == null)
+				return;
 
 			comps = InnerPawn.AllComps;
 			for (var i = 0; i < comps.Count; i++)

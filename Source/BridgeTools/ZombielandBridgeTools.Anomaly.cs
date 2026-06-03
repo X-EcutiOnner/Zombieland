@@ -197,6 +197,149 @@ namespace ZombieLand
 			}
 		}
 
+		[Tool("zombieland/death_pall_zombie_corpse_contract", Description = "Verify Death Pall raises a Zombieland zombie corpse as a stronger fresh Zombieland zombie without invoking vanilla shambler resurrection.")]
+		public static object DeathPallZombieCorpseContract(
+			[ToolParameter(Description = "Destroy the staged corpse and raised zombie at the end.", Required = false, DefaultValue = true)] bool cleanup = true)
+		{
+			var map = CurrentMap;
+			if (map == null)
+				return new { success = false, error = "No current map is loaded." };
+			if (ModsConfig.AnomalyActive == false)
+				return new { success = true, skipped = true, reason = "Anomaly is not active in the current mod list." };
+
+			var tickManager = map.GetComponent<TickManager>();
+			if (tickManager == null)
+				return new { success = false, error = "No Zombieland TickManager is attached to the current map." };
+
+			Zombie source = null;
+			Zombie raised = null;
+			ZombieCorpse corpse = null;
+			try
+			{
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root, 24f, out var cell, out var cellError) == false)
+					return cellError;
+
+				source = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Electrifier, true);
+				if (source == null)
+					return new { success = false, error = "ZombieRuntimeActions.SpawnZombie returned no source zombie." };
+
+				source.Name = new NameTriple("Death", "Pall", "Probe");
+				source.wasMapPawnBefore = false;
+				var expectedApparelDef = EquipDeathPallProbeApparel(source);
+				if (expectedApparelDef == null)
+					return new { success = false, source = DescribeZombie(source), error = "Could not equip source zombie with probe head apparel." };
+				var expectedGender = source.gender;
+				var expectedBodyType = source.story?.bodyType;
+				var expectedHeadType = source.story?.headType;
+
+				source.Kill(null);
+				corpse = source.Corpse as ZombieCorpse;
+				if (corpse == null || corpse.Destroyed)
+					return new { success = false, source = DescribeZombie(source), error = "Killing the source zombie did not create a live ZombieCorpse." };
+
+				var corpseBefore = DescribeCorpse(corpse);
+				var canRaiseDefault = MutantUtility.CanResurrectAsShambler(corpse);
+				var canRaiseIgnoringIndoors = MutantUtility.CanResurrectAsShambler(corpse, true);
+				var liveZombieIdsBeforeRaise = map.mapPawns.AllPawnsSpawned
+					.OfType<Zombie>()
+					.Select(zombie => zombie.ThingID)
+					.ToHashSet();
+
+				MutantUtility.ResurrectAsShambler(corpse.InnerPawn, 60000);
+
+				raised = map.mapPawns.AllPawnsSpawned
+					.OfType<Zombie>()
+					.FirstOrDefault(zombie => liveZombieIdsBeforeRaise.Contains(zombie.ThingID) == false);
+
+				var raisedApparelDefs = raised?.apparel?.WornApparel
+					.Select(apparel => apparel.def.defName)
+					.ToArray() ?? Array.Empty<string>();
+				var apparelMatches = raisedApparelDefs.Contains(expectedApparelDef.defName);
+				var appearanceMatches = raised != null
+					&& raised.gender == expectedGender
+					&& raised.story?.bodyType == expectedBodyType
+					&& raised.story?.headType == expectedHeadType
+					&& raised.isElectrifier
+					&& raised.wasMapPawnBefore;
+				var success = canRaiseIgnoringIndoors
+					&& raised != null
+					&& raised.Dead == false
+					&& raised.IsMutant == false
+					&& raised.Position == cell
+					&& tickManager.allZombiesCached.Contains(raised)
+					&& (corpse.Destroyed || corpse.Spawned == false)
+					&& appearanceMatches
+					&& apparelMatches;
+
+				return new
+				{
+					success,
+					canRaiseDefault,
+					canRaiseIgnoringIndoors,
+					corpseBefore,
+					corpseAfterDestroyed = corpse.Destroyed,
+					raised = DescribeZombie(raised),
+					appearanceMatches,
+					apparelMatches,
+					expected = new
+					{
+						gender = expectedGender.ToString(),
+						bodyType = expectedBodyType?.defName,
+						headType = expectedHeadType?.defName,
+						isElectrifier = true,
+						wasMapPawnBefore = true,
+						apparelDef = expectedApparelDef.defName
+					},
+					raisedAppearance = new
+					{
+						gender = raised?.gender.ToString(),
+						bodyType = raised?.story?.bodyType?.defName,
+						headType = raised?.story?.headType?.defName,
+						isElectrifier = raised?.isElectrifier,
+						wasMapPawnBefore = raised?.wasMapPawnBefore,
+						isMutant = raised?.IsMutant,
+						apparelDefs = raisedApparelDefs
+					},
+					logNote = "Use rimbridge/list_logs minimumLevel=warning after this operation for the log-clean gate."
+				};
+			}
+			finally
+			{
+				if (cleanup)
+				{
+					if (raised != null && raised.Destroyed == false)
+						raised.Destroy();
+					if (corpse != null && corpse.Destroyed == false)
+						corpse.Destroy();
+					if (source != null && source.Spawned && source.Destroyed == false)
+						source.Destroy();
+				}
+			}
+		}
+
+		static ThingDef EquipDeathPallProbeApparel(Pawn pawn)
+		{
+			if (pawn?.apparel == null)
+				return null;
+
+			var apparelDef = DefDatabase<ThingDef>.GetNamedSilentFail("Apparel_SimpleHelmet")
+				?? DefDatabase<ThingDef>.GetNamedSilentFail("Apparel_CowboyHat")
+				?? DefDatabase<ThingDef>.AllDefsListForReading
+					.Where(def => def.IsApparel && def.apparel?.wornGraphicPath.NullOrEmpty() == false)
+					.FirstOrDefault(def => PawnApparelGenerator.IsHeadgear(def));
+			if (apparelDef == null)
+				return null;
+
+			pawn.apparel.DestroyAll();
+			var apparel = ThingMaker.MakeThing(apparelDef, GenStuff.DefaultStuffFor(apparelDef)) as Apparel;
+			if (apparel == null)
+				return null;
+
+			pawn.apparel.Wear(apparel, false);
+			return pawn.apparel.WornApparel.Contains(apparel) ? apparelDef : null;
+		}
+
 		[Tool("zombieland/anomaly_policy_edges", Description = "Verify narrow Anomaly zombie policy edges that do not belong in the broad pawn matrix: active Nociosphere and FleshmassHeart.")]
 		public static object AnomalyPolicyEdges(
 			[ToolParameter(Description = "Optional short tick window after staging. Default 0 keeps the probe static and avoids Nociosphere onslaught AI.", Required = false, DefaultValue = 0)] int ticks = 0,

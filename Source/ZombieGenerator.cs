@@ -70,6 +70,8 @@ namespace ZombieLand
 			var parts = headPath.Split('/');
 			if (parts.Length < 2)
 				return false;
+			if (parts[0] != "Zombie")
+				return false;
 			return eyeOffsets.ContainsKey(parts.Last());
 		}
 
@@ -280,6 +282,13 @@ namespace ZombieLand
 
 		public static string FixGlowingEyeOffset(Zombie zombie)
 		{
+			if (zombie.hasTankyHelmet != 1f && ZombieBaseValues.IsValidHeadPath(zombie.story?.headType?.graphicPath))
+			{
+				var storedHeadPath = zombie.story.headType.graphicPath;
+				zombie.sideEyeOffset = ZombieBaseValues.SideEyeOffset(storedHeadPath.ReplaceFirst("Zombie/", ""));
+				return storedHeadPath;
+			}
+
 			var headShape = zombie.hasTankyHelmet == 1f ? "Wide" : headShapes[Rand.Range(0, 3)];
 			var headPath = "Zombie/" + zombie.gender + "_" + ("Average"/*zombie.story.crownType*/) + "_" + headShape;
 			zombie.sideEyeOffset = ZombieBaseValues.SideEyeOffset(headPath.ReplaceFirst("Zombie/", ""));
@@ -388,9 +397,33 @@ namespace ZombieLand
 		static bool GraphicFileExist(ApparelProperties apparel, string bodyTypeDefName)
 		{
 			var path = apparel.wornGraphicPath;
-			if (apparel.LastLayer != ApparelLayerDefOf.Overhead)
+			if (apparel.LastLayer != ApparelLayerDefOf.Overhead
+				&& apparel.LastLayer != ApparelLayerDefOf.EyeCover
+				&& path != BaseContent.PlaceholderImagePath
+				&& path != BaseContent.PlaceholderGearImagePath)
 				path += "_" + bodyTypeDefName;
 			return ContentFinder<Texture2D>.Get(path + "_north", false) != null;
+		}
+
+		public static bool TryResolveApparelGraphic(Apparel apparel, BodyTypeDef bodyType)
+		{
+			if (apparel == null || bodyType == null)
+				return false;
+
+			var oldSuppressError = Graphic_Multi_Init_Patch.suppressError;
+			var oldTextureError = Graphic_Multi_Init_Patch.textureError;
+			try
+			{
+				Graphic_Multi_Init_Patch.suppressError = true;
+				Graphic_Multi_Init_Patch.textureError = false;
+				var result = ApparelGraphicRecordGetter.TryGetGraphicApparel(apparel, bodyType, false, out var record);
+				return result && record.graphic != null && Graphic_Multi_Init_Patch.textureError == false;
+			}
+			finally
+			{
+				Graphic_Multi_Init_Patch.suppressError = oldSuppressError;
+				Graphic_Multi_Init_Patch.textureError = oldTextureError;
+			}
 		}
 
 		public static IEnumerator GenerateStartingApparelFor(Zombie zombie)
@@ -420,25 +453,31 @@ namespace ZombieLand
 					yield return null;
 					PawnGenerator.PostProcessGeneratedGear(apparel, zombie);
 					yield return null;
-					if (ApparelUtility.HasPartsToWear(zombie, apparel.def) && apparel.PawnCanWear(zombie, true))
+					if (TryResolveApparelGraphic(apparel, zombie.story.bodyType) && ApparelUtility.HasPartsToWear(zombie, apparel.def) && apparel.PawnCanWear(zombie, true))
 					{
 						if (zombie.apparel.WornApparel.All(pa => ApparelUtility.CanWearTogether(pair.thing, pa.def, zombie.RaceProps.body)))
 						{
 							var colorComp = apparel.GetComp<CompColorable>();
 							colorComp?.SetColor(Zombie.zombieColors[Rand.Range(0, Zombie.zombieColors.Length)].SaturationChanged(0.25f));
-							Graphic_Multi_Init_Patch.suppressError = true;
-							Graphic_Multi_Init_Patch.textureError = false;
+							var oldSuppressError = Graphic_Multi_Init_Patch.suppressError;
+							var oldTextureError = Graphic_Multi_Init_Patch.textureError;
 							try
 							{
+								Graphic_Multi_Init_Patch.suppressError = true;
+								Graphic_Multi_Init_Patch.textureError = false;
 								zombie.apparel.Wear(apparel, false);
 							}
 							catch (Exception ex)
 							{
 								Log.Warning($"Wear error: {ex.Message} for {apparel}");
 							}
-							if (Graphic_Multi_Init_Patch.textureError)
-								zombie.apparel.Remove(apparel);
-							Graphic_Multi_Init_Patch.suppressError = false;
+							finally
+							{
+								if (Graphic_Multi_Init_Patch.textureError)
+									zombie.apparel.Remove(apparel);
+								Graphic_Multi_Init_Patch.suppressError = oldSuppressError;
+								Graphic_Multi_Init_Patch.textureError = oldTextureError;
+							}
 						}
 					}
 					yield return null;

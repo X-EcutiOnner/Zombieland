@@ -3030,6 +3030,29 @@ namespace ZombieLand
 			}
 		}
 
+		[HarmonyPatch(typeof(HealthUtility))]
+		[HarmonyPatch(nameof(HealthUtility.DamageUntilDowned))]
+		static class HealthUtility_DamageUntilDowned_Patch
+		{
+			static readonly MethodInfo m_MakeDowned = AccessTools.Method(typeof(Pawn_HealthTracker), nameof(Pawn_HealthTracker.MakeDowned));
+
+			static bool Prefix(Pawn p)
+			{
+				if (p is not Zombie || ZombieSettings.Values.doubleTapRequired == false)
+					return true;
+				if (p.health == null || p.health.Dead || p.health.Downed)
+					return false;
+				try
+				{
+					m_MakeDowned?.Invoke(p.health, new object[m_MakeDowned.GetParameters().Length]);
+				}
+				catch
+				{
+				}
+				return false;
+			}
+		}
+
 		// patch to keep shooting even if a zombie is down (only if self-healing is on)
 		//
 		[HarmonyPatch]
@@ -5155,6 +5178,46 @@ namespace ZombieLand
 				if (ThingFilter_SetAllow_Patch.IsZombieDef(td))
 				{
 					__result = false;
+					return false;
+				}
+				return true;
+			}
+		}
+
+		// patch for Death Pall raising zombie corpses as fresh Zombieland zombies
+		//
+		[HarmonyPatch]
+		static class MutantUtility_CanResurrectAsShambler_Patch
+		{
+			static bool Prepare() => ModsConfig.AnomalyActive && TargetMethod() != null;
+
+			static MethodBase TargetMethod()
+			{
+				return AccessTools.Method(typeof(MutantUtility), nameof(MutantUtility.CanResurrectAsShambler), new[] { typeof(Corpse), typeof(bool) });
+			}
+
+			static void Postfix(Corpse corpse, bool ignoreIndoors, ref bool __result)
+			{
+				if (__result == false && ZombieDeathPallUtility.CanDeathPallRaise(corpse, ignoreIndoors))
+					__result = true;
+			}
+		}
+
+		[HarmonyPatch]
+		static class MutantUtility_ResurrectAsShambler_Patch
+		{
+			static bool Prepare() => ModsConfig.AnomalyActive && TargetMethod() != null;
+
+			static MethodBase TargetMethod()
+			{
+				return AccessTools.Method(typeof(MutantUtility), nameof(MutantUtility.ResurrectAsShambler), new[] { typeof(Pawn), typeof(int), typeof(Faction) });
+			}
+
+			static bool Prefix(Pawn pawn)
+			{
+				if (pawn is Zombie zombie && zombie.Corpse is ZombieCorpse corpse)
+				{
+					_ = ZombieDeathPallUtility.TryRaiseZombieCorpse(corpse, out _);
 					return false;
 				}
 				return true;
