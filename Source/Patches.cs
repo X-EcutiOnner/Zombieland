@@ -2528,7 +2528,7 @@ namespace ZombieLand
 
 				// manhunting will always trigger senses
 				//
-				if (pawn.MentalState == null || (pawn.MentalState.def != def1 && pawn.MentalState.def != def2))
+				if (AnomalyTargeting.IsForcedTarget(pawn) == false && (pawn.MentalState == null || (pawn.MentalState.def != def1 && pawn.MentalState.def != def2)))
 				{
 					if (ZombieSettings.Values.attackMode == AttackMode.OnlyHumans)
 						if (pawn.RaceProps.Humanlike == false

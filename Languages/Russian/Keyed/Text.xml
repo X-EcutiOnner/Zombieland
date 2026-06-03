@@ -70,6 +70,17 @@
 	<AttackMode_OnlyColonists>Только колонистов и их вещи</AttackMode_OnlyColonists>
 	<EnemiesAttackZombies>Враги атакуют зомби</EnemiesAttackZombies>
 	<AnimalsAttackZombies>Животные атакуют зомби</AnimalsAttackZombies>
+	<AnomalyTargetingTitle>Исключения Anomaly</AnomalyTargetingTitle>
+	<AnomalyTargetingRelations>Зомби могут атаковать:</AnomalyTargetingRelations>
+	<AnomalyTargetGhouls>Гули</AnomalyTargetGhouls>
+	<AnomalyTargetShamblers>Шамблеры и мутанты-люди</AnomalyTargetShamblers>
+	<AnomalyTargetOtherEntities>Другие сущности Anomaly</AnomalyTargetOtherEntities>
+	<AnomalyTargetNociosphere>Ноциосфера</AnomalyTargetNociosphere>
+	<AnomalyZombieHostilityRelations>Пешки Anomaly могут атаковать зомби:</AnomalyZombieHostilityRelations>
+	<AnomalyTargetingOverride_Automatic>Автоматически</AnomalyTargetingOverride_Automatic>
+	<AnomalyTargetingOverride_Never>Никогда</AnomalyTargetingOverride_Never>
+	<AnomalyTargetingOverride_Allow>Разрешить</AnomalyTargetingOverride_Allow>
+	<AnomalyTargetingOverride_Mixed>Смешано</AnomalyTargetingOverride_Mixed>
 
 	<WhatDoZombiesSmash>Что именно зомби будут ломать?</WhatDoZombiesSmash>
 	<SmashMode_Nothing>Ничего</SmashMode_Nothing>

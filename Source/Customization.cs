@@ -103,6 +103,11 @@ namespace ZombieLand
 				return false;
 			if (pawn.canBeDormant?.Awake == false)
 				return false;
+			if (pawn.RaceProps.Humanlike && pawn.InfectionState() >= InfectionState.Infecting)
+				return false;
+
+			if (AnomalyTargeting.TryGetAttractionOverride(pawn, out var anomalyAttracts))
+				return anomalyAttracts;
 
 			var i = 0;
 			var j = attractsZombiesEvaluators.Count;
@@ -121,8 +126,6 @@ namespace ZombieLand
 				if (AlienTools.IsFleshPawn(pawn) == false)
 					return false;
 				if (SoSTools.IsHologram(pawn))
-					return false;
-				if (pawn.InfectionState() >= InfectionState.Infecting)
 					return false;
 			}
 			return ZombieSettings.Values.attackMode switch

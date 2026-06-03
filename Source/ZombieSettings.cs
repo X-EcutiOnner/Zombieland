@@ -30,6 +30,13 @@ namespace ZombieLand
 		OnlyColonists
 	}
 
+	public enum AnomalyTargetingOverride
+	{
+		Automatic,
+		Never,
+		Allow
+	}
+
 	public enum SmashMode
 	{
 		Nothing,
@@ -179,6 +186,11 @@ namespace ZombieLand
 		public AttackMode attackMode = AttackMode.OnlyHumans;
 		public bool enemiesAttackZombies = true;
 		public bool animalsAttackZombies = false;
+		public AnomalyTargetingOverride anomalyGhoulTargeting = AnomalyTargetingOverride.Automatic;
+		public AnomalyTargetingOverride anomalyShamblerTargeting = AnomalyTargetingOverride.Automatic;
+		public AnomalyTargetingOverride anomalyEntityTargeting = AnomalyTargetingOverride.Automatic;
+		public AnomalyTargetingOverride anomalyNociosphereTargeting = AnomalyTargetingOverride.Automatic;
+		public AnomalyTargetingOverride anomalyAttacksZombies = AnomalyTargetingOverride.Automatic;
 		public SmashMode smashMode = SmashMode.DoorsOnly;
 		public bool smashOnlyWhenAgitated = true;
 		public bool doubleTapRequired = true;
@@ -269,6 +281,15 @@ namespace ZombieLand
 
 			this.AutoExposeDataWithDefaults((settings, name, value, defaultValue) =>
 			{
+				if (value is AnomalyTargetingOverride anomalyTargetingOverride && defaultValue is AnomalyTargetingOverride defaultAnomalyTargetingOverride)
+				{
+					var savedValue = anomalyTargetingOverride.ToString();
+					Scribe_Values.Look(ref savedValue, name, defaultAnomalyTargetingOverride.ToString());
+					if (Scribe.mode == LoadSaveMode.LoadingVars)
+						AccessTools.Field(typeof(SettingsGroup), name).SetValue(settings, ParseAnomalyTargetingOverride(savedValue, defaultAnomalyTargetingOverride));
+					return true;
+				}
+
 				const string fieldName = nameof(dangerousAreas);
 				if (name != fieldName)
 					return false;
@@ -312,6 +333,23 @@ namespace ZombieLand
 
 			if (Scribe.mode == LoadSaveMode.PostLoadInit)
 				Tools.UpdateBiomeBlacklist(biomesWithoutZombies);
+		}
+
+		static AnomalyTargetingOverride ParseAnomalyTargetingOverride(string value, AnomalyTargetingOverride defaultValue)
+		{
+			if (value.NullOrEmpty())
+				return defaultValue;
+
+			if (Enum.TryParse<AnomalyTargetingOverride>(value, true, out var result))
+				return result;
+
+			return value.Trim().ToLowerInvariant() switch
+			{
+				"default" or "baserule" or "base rule" => AnomalyTargetingOverride.Automatic,
+				"ignore" or "ignored" => AnomalyTargetingOverride.Never,
+				"attack" => AnomalyTargetingOverride.Allow,
+				_ => defaultValue
+			};
 		}
 	}
 

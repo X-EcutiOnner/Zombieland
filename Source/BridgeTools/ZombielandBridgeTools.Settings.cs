@@ -1651,6 +1651,10 @@ namespace ZombieLand
 				group.childChance,
 				group.spitterThreat,
 				group.minimumZombiesForWallPushing,
+				anomalyShamblerTargeting = group.anomalyShamblerTargeting.ToString(),
+				anomalyEntityTargeting = group.anomalyEntityTargeting.ToString(),
+				anomalyNociosphereTargeting = group.anomalyNociosphereTargeting.ToString(),
+				anomalyAttacksZombies = group.anomalyAttacksZombies.ToString(),
 				blacklistedApparel = group.blacklistedApparel?.ToArray() ?? Array.Empty<string>(),
 				biomesWithoutZombies = group.biomesWithoutZombies?.ToArray() ?? Array.Empty<string>()
 			};

@@ -160,29 +160,32 @@ namespace ZombieLand
 		public static bool Dialog_RadioButton(this Listing_Standard list, bool active, string labelId)
 		{
 			var label = labelId.SafeTranslate();
-			var indent = 24 + "_".GetWidthCached();
+			var indent = RadioButtonIndent();
 			var height = Math.Max(Text.LineHeight, Text.CalcHeight(label, list.ColumnWidth - indent));
 
 			list.Help(labelId, height);
 
 			var rect = list.GetRect(height);
 			rect.xMin += inset;
-			var line = new Rect(rect);
-			var result = Widgets.RadioButton(line.xMin, line.yMin, active);
+			return RadioButtonLine(rect, active, label);
+		}
 
-			var curX = list.curX;
-			list.curX = curX + indent;
+		public static float RadioButtonIndent()
+			=> 24 + "_".GetWidthCached();
+
+		public static bool RadioButtonLine(Rect rect, bool active, string label)
+		{
+			var result = Widgets.RadioButton(rect.xMin, rect.yMin, active);
+			var line = new Rect(rect);
+			line.xMin += RadioButtonIndent();
 
 			var anchor = Text.Anchor;
-			Text.Anchor = TextAnchor.UpperLeft;
-			line.xMin += indent;
+			Text.Anchor = TextAnchor.MiddleLeft;
 			var color = GUI.color;
 			GUI.color = contentColor;
 			Widgets.Label(line, label);
 			GUI.color = color;
 			Text.Anchor = anchor;
-
-			list.curX = curX;
 
 			result |= Widgets.ButtonInvisible(rect, false);
 			if (result && !active)

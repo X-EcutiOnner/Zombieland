@@ -70,6 +70,17 @@
 	<AttackMode_OnlyColonists>只攻击殖民者</AttackMode_OnlyColonists>
 	<EnemiesAttackZombies>敌人攻击丧尸</EnemiesAttackZombies>
 	<AnimalsAttackZombies>动物攻击丧尸</AnimalsAttackZombies>
+	<AnomalyTargetingTitle>Anomaly 例外</AnomalyTargetingTitle>
+	<AnomalyTargetingRelations>丧尸可以攻击：</AnomalyTargetingRelations>
+	<AnomalyTargetGhouls>尸鬼</AnomalyTargetGhouls>
+	<AnomalyTargetShamblers>蹒跚者和变异人类</AnomalyTargetShamblers>
+	<AnomalyTargetOtherEntities>其他 Anomaly 实体</AnomalyTargetOtherEntities>
+	<AnomalyTargetNociosphere>Nociosphere</AnomalyTargetNociosphere>
+	<AnomalyZombieHostilityRelations>Anomaly 角色可以攻击丧尸：</AnomalyZombieHostilityRelations>
+	<AnomalyTargetingOverride_Automatic>自动</AnomalyTargetingOverride_Automatic>
+	<AnomalyTargetingOverride_Never>从不</AnomalyTargetingOverride_Never>
+	<AnomalyTargetingOverride_Allow>允许</AnomalyTargetingOverride_Allow>
+	<AnomalyTargetingOverride_Mixed>混合</AnomalyTargetingOverride_Mixed>
 
 	<WhatDoZombiesSmash>丧尸会摧毁什么建筑？</WhatDoZombiesSmash>
 	<SmashMode_Nothing>无</SmashMode_Nothing>

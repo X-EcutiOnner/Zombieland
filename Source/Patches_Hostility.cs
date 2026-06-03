@@ -60,10 +60,25 @@ namespace ZombieLand
 			var zombiesAttackOnlyHumans = settings.attackMode == AttackMode.OnlyHumans;
 			var animalsDoNotAttackZombies = settings.animalsAttackZombies == false;
 			var enemiesDoNotAttackZombies = settings.enemiesAttackZombies == false;
+			var anomalyAttacksZombies = false;
+			var anomalyHostilityOverride = isPlayer == false && attacker is Pawn attackerPawn && AnomalyTargeting.TryGetZombieHostilityOverride(attackerPawn, out anomalyAttacksZombies);
 
 			// handle all attacker cases: (player | friendly | enemy) x (human | mech | animal | thing)
 			//
-			if (isPlayer)
+			if (anomalyHostilityOverride)
+			{
+				removeSpitter = true;
+				if (anomalyAttacksZombies == false)
+					removeAllZombies = true;
+				else
+				{
+					removeHarmlessZombies = true;
+					removeConfusedZombies = true;
+					removeDistantZombies = true;
+					removeLongDistanceMelee = true;
+				}
+			}
+			else if (isPlayer)
 			{
 				removeRopedZombies = true;
 				removeConfusedZombies = true;
@@ -271,6 +286,36 @@ namespace ZombieLand
 			if (attacker is Zombie)
 				return;
 
+			var attackerFaction = attacker.Faction;
+			var attackerFactionDef = attackerFaction?.def;
+
+			// attacker is player
+			if (attackerFactionDef?.isPlayer ?? false)
+			{
+				validator = (Thing t) =>
+				{
+					if (t is Zombie zombie && zombie.IsRopedOrConfused)
+						return false;
+					return oldValidator(t);
+				};
+
+				return;
+			}
+
+			if (AnomalyTargeting.TryGetZombieHostilityOverride(attacker, out var anomalyAttacksZombies))
+			{
+				validator = (Thing t) =>
+				{
+					if (t is ZombieBlob || t is ZombieSpitter)
+						return false;
+					if (t is Zombie)
+						return anomalyAttacksZombies;
+					return oldValidator(t);
+				};
+
+				return;
+			}
+
 			// attacker is animal
 			if (attacker.RaceProps?.Animal ?? false)
 			{
@@ -286,23 +331,8 @@ namespace ZombieLand
 				return;
 			}
 
-			var attackerFaction = attacker.Faction;
-			var attackerFactionDef = attackerFaction?.def;
 			if (attackerFactionDef == null)
 				return;
-
-			// attacker is player
-			if (attackerFactionDef.isPlayer)
-			{
-				validator = (Thing t) =>
-				{
-					if (t is Zombie zombie && zombie.IsRopedOrConfused)
-						return false;
-					return oldValidator(t);
-				};
-
-				return;
-			}
 
 			// attacker is friendly (disabled because the postfix deals with that)
 
@@ -548,7 +578,14 @@ namespace ZombieLand
 				return false;
 			}
 
-			if (faction.HostileTo(Faction.OfPlayer))
+			var anomalyFactionOverride = AnomalyTargeting.TryGetZombieHostilityOverride(faction, out var anomalyAttacksZombies);
+			if (anomalyFactionOverride && anomalyAttacksZombies == false)
+			{
+				__result = false;
+				return false;
+			}
+
+			if (anomalyFactionOverride == false && faction.HostileTo(Faction.OfPlayer))
 				if (ZombieSettings.Values.enemiesAttackZombies == false)
 				{
 					__result = false;

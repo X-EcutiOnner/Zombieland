@@ -70,6 +70,17 @@
 	<AttackMode_OnlyColonists>Only colonists</AttackMode_OnlyColonists>
 	<EnemiesAttackZombies>Enemies attack zombies</EnemiesAttackZombies>
 	<AnimalsAttackZombies>Animals attack zombies</AnimalsAttackZombies>
+	<AnomalyTargetingTitle>Anomaly exceptions</AnomalyTargetingTitle>
+	<AnomalyTargetingRelations>Zombies may attack:</AnomalyTargetingRelations>
+	<AnomalyTargetGhouls>Ghouls</AnomalyTargetGhouls>
+	<AnomalyTargetShamblers>Shamblers and mutant humans</AnomalyTargetShamblers>
+	<AnomalyTargetOtherEntities>Other Anomaly entities</AnomalyTargetOtherEntities>
+	<AnomalyTargetNociosphere>Nociosphere</AnomalyTargetNociosphere>
+	<AnomalyZombieHostilityRelations>Anomaly pawns may attack zombies:</AnomalyZombieHostilityRelations>
+	<AnomalyTargetingOverride_Automatic>Automatic</AnomalyTargetingOverride_Automatic>
+	<AnomalyTargetingOverride_Never>Never</AnomalyTargetingOverride_Never>
+	<AnomalyTargetingOverride_Allow>Allow</AnomalyTargetingOverride_Allow>
+	<AnomalyTargetingOverride_Mixed>Mixed</AnomalyTargetingOverride_Mixed>
 
 	<WhatDoZombiesSmash>What will zombies destroy?</WhatDoZombiesSmash>
 	<SmashMode_Nothing>Nothing</SmashMode_Nothing>

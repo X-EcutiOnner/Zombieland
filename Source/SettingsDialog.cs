@@ -8,7 +8,7 @@ namespace ZombieLand
 {
 	static class SettingsDialog
 	{
-		public static readonly float totalEstimatedHeight = 4020f;
+		public static readonly float totalEstimatedHeight = 4350f;
 		public static Vector2 scrollPosition = Vector2.zero;
 
 		public static void DoWindowContentsInternal(ref SettingsGroup settings, ref List<SettingsKeyFrame> settingsOverTime, Rect inRect)
@@ -89,13 +89,26 @@ namespace ZombieLand
 				}
 
 				// Attack?
-				if (DialogExtensions.Section<AttackMode>(":WhatDoZombiesAttack", ":EnemiesAttackZombies", ":AnimalsAttackZombies", ":WallPushing"))
+				if (DialogExtensions.Section<AttackMode>(":WhatDoZombiesAttack", ":EnemiesAttackZombies", ":AnimalsAttackZombies", ModsConfig.AnomalyActive ? ":AnomalyTargetingTitle" : "", ModsConfig.AnomalyActive ? ":AnomalyTargetingRelations" : "", ModsConfig.AnomalyActive ? ":AnomalyTargetGhouls" : "", ModsConfig.AnomalyActive ? ":AnomalyTargetShamblers" : "", ModsConfig.AnomalyActive ? ":AnomalyTargetOtherEntities" : "", ModsConfig.AnomalyActive ? ":AnomalyTargetNociosphere" : "", ModsConfig.AnomalyActive ? ":AnomalyZombieHostilityRelations" : "", ":WallPushing"))
 				{
 					list.Dialog_Enum("WhatDoZombiesAttack", ref settings.attackMode);
 					list.Dialog_Checkbox("EnemiesAttackZombies", ref settings.enemiesAttackZombies);
 					list.Dialog_Checkbox("AnimalsAttackZombies", ref settings.animalsAttackZombies);
 					list.Gap(10f);
 					list.Dialog_IntSlider("WallPushing", n => n == 0 ? "Off".TranslateSimple() : n.ToString(), ref settings.minimumZombiesForWallPushing, 0, 48);
+					if (ModsConfig.AnomalyActive)
+					{
+						list.Gap(10f);
+						list.Dialog_Label("AnomalyTargetingTitle", headerColor);
+						list.Dialog_Text(GameFont.Small, "AnomalyTargetingRelations");
+						list.Dialog_AnomalyTargetingOverride("AnomalyTargetGhouls", ref settings.anomalyGhoulTargeting, AnomalyAutomaticTargetingDetail(settings.attackMode, AnomalyTargetingCategory.Ghouls));
+						list.Dialog_AnomalyTargetingOverride("AnomalyTargetShamblers", ref settings.anomalyShamblerTargeting, AnomalyAutomaticTargetingDetail(settings.attackMode, AnomalyTargetingCategory.ShamblerMutants));
+						list.Dialog_AnomalyTargetingOverride("AnomalyTargetOtherEntities", ref settings.anomalyEntityTargeting, AnomalyAutomaticTargetingDetail(settings.attackMode, AnomalyTargetingCategory.OtherEntities));
+						list.Dialog_AnomalyTargetingOverride("AnomalyTargetNociosphere", ref settings.anomalyNociosphereTargeting, AnomalyAutomaticTargetingDetail(settings.attackMode, AnomalyTargetingCategory.Nociosphere));
+						list.Gap(16f);
+						list.Dialog_Text(GameFont.Small, "AnomalyZombieHostilityRelations");
+						list.Dialog_AnomalyTargetingOverride(null, ref settings.anomalyAttacksZombies, AnomalyAutomaticZombieHostilityDetail(settings), "AnomalyZombieHostilityRelations");
+					}
 					list.Gap(30f);
 				}
 
@@ -427,6 +440,152 @@ namespace ZombieLand
 				var ticks = GenTicks.TicksGame;
 				ZombieSettings.Values = ZombieSettings.CalculateInterpolation(ZombieSettings.ValuesOverTime, ticks);
 			}
+		}
+
+		enum AnomalyAutomaticDetail
+		{
+			Never,
+			Allow,
+			Mixed
+		}
+
+		static void Dialog_AnomalyTargetingOverride(this Listing_Standard list, string labelId, ref AnomalyTargetingOverride mode, string automaticDetail, string helpId = null)
+		{
+			list.Dialog_AnomalyOverrideRow(labelId, ref mode, automaticDetail, helpId ?? labelId);
+		}
+
+		static void Dialog_AnomalyOverrideRow(this Listing_Standard list, string labelId, ref AnomalyTargetingOverride mode, string automaticDetail, string helpId)
+		{
+			const float groupGap = 11f;
+			const float rowGap = 0f;
+			const float optionIndent = 14f;
+
+			list.Gap(groupGap);
+			var hasLabel = labelId.NullOrEmpty() == false;
+			var label = hasLabel ? labelId.SafeTranslate() : "";
+			var savedFont = Text.Font;
+			var savedAnchor = Text.Anchor;
+			var savedColor = GUI.color;
+
+			Text.Font = GameFont.Small;
+			var width = list.ColumnWidth - 2f * DialogExtensions.inset;
+			var radioHeight = Mathf.Max(Text.LineHeight, 24f);
+			var labelWidth = Mathf.Min(250f, Mathf.Max(170f, width * 0.42f));
+			var radioWidth = AnomalyRadioRowWidth(automaticDetail);
+			var stack = hasLabel && labelWidth + 12f + radioWidth > width;
+			var labelHeight = hasLabel ? Mathf.Max(radioHeight, Text.CalcHeight(label, stack ? width : labelWidth)) : 0f;
+			var height = hasLabel
+				? stack ? labelHeight + rowGap + radioHeight : Mathf.Max(labelHeight, radioHeight)
+				: radioHeight;
+			if (helpId.NullOrEmpty() == false)
+				list.Help(helpId, height);
+
+			var rect = list.GetRect(height).Rounded();
+			rect.xMin += DialogExtensions.inset + optionIndent;
+			rect.xMax -= DialogExtensions.inset;
+
+			GUI.color = Color.white;
+			Text.Anchor = TextAnchor.MiddleLeft;
+			Rect labelRect;
+			if (hasLabel)
+			{
+				labelRect = new Rect(rect.x, rect.y, stack ? rect.width : labelWidth, labelHeight);
+				Widgets.Label(labelRect, label);
+			}
+			else
+				labelRect = Rect.zero;
+
+			var radioRect = stack || hasLabel == false
+				? new Rect(rect.x, hasLabel ? labelRect.yMax + rowGap : rect.y, rect.width, radioHeight)
+				: new Rect(rect.xMax - radioWidth, rect.y, radioWidth, radioHeight);
+			DrawAnomalyTargetingRadioRow(ref mode, radioRect, automaticDetail);
+
+			GUI.color = savedColor;
+			Text.Anchor = savedAnchor;
+			Text.Font = savedFont;
+		}
+
+		static float AnomalyRadioRowWidth(string automaticDetail)
+		{
+			var options = AnomalyOverrideLabels(automaticDetail);
+			var maxLabelWidth = options.Max(option => Text.CalcSize(option).x);
+			var indent = DialogExtensions.RadioButtonIndent();
+			var spacing = 28f;
+			return 3f * (maxLabelWidth + indent) + 2f * spacing;
+		}
+
+		static void DrawAnomalyTargetingRadioRow(ref AnomalyTargetingOverride mode, Rect rowRect, string automaticDetail)
+		{
+			var labels = AnomalyOverrideLabels(automaticDetail);
+			var options = new[]
+			{
+				(AnomalyTargetingOverride.Automatic, labels[0]),
+				(AnomalyTargetingOverride.Never, labels[1]),
+				(AnomalyTargetingOverride.Allow, labels[2])
+			};
+			var maxLabelWidth = options.Max(option => Text.CalcSize(option.Item2).x);
+			var indent = DialogExtensions.RadioButtonIndent();
+			var spacing = 28f;
+			var optionWidth = maxLabelWidth + indent;
+			var x = rowRect.x;
+			foreach (var option in options)
+			{
+				var rect = new Rect(x, rowRect.y, optionWidth, rowRect.height);
+				DrawAnomalyTargetingRadio(ref mode, option.Item1, option.Item2, rect);
+				x += optionWidth + spacing;
+			}
+		}
+
+		static void DrawAnomalyTargetingRadio(ref AnomalyTargetingOverride mode, AnomalyTargetingOverride value, string label, Rect rect)
+		{
+			if (DialogExtensions.RadioButtonLine(rect, mode == value, label))
+				mode = value;
+		}
+
+		static string[] AnomalyOverrideLabels(string automaticDetail)
+		{
+			var automatic = "AnomalyTargetingOverride_Automatic".SafeTranslate();
+			if (automaticDetail.NullOrEmpty() == false)
+				automatic = $"{automatic} ({automaticDetail})";
+
+			return new[]
+			{
+				automatic,
+				"AnomalyTargetingOverride_Never".SafeTranslate(),
+				"AnomalyTargetingOverride_Allow".SafeTranslate()
+			};
+		}
+
+		static string AnomalyAutomaticTargetingDetail(AttackMode attackMode, AnomalyTargetingCategory category)
+		{
+			var detail = category switch
+			{
+				AnomalyTargetingCategory.Ghouls => attackMode == AttackMode.OnlyColonists ? AnomalyAutomaticDetail.Never : AnomalyAutomaticDetail.Allow,
+				AnomalyTargetingCategory.ShamblerMutants => attackMode switch
+				{
+					AttackMode.Everything => AnomalyAutomaticDetail.Allow,
+					AttackMode.OnlyHumans => AnomalyAutomaticDetail.Mixed,
+					_ => AnomalyAutomaticDetail.Never
+				},
+				AnomalyTargetingCategory.OtherEntities => attackMode == AttackMode.Everything ? AnomalyAutomaticDetail.Allow : AnomalyAutomaticDetail.Never,
+				AnomalyTargetingCategory.Nociosphere => attackMode == AttackMode.Everything ? AnomalyAutomaticDetail.Allow : AnomalyAutomaticDetail.Never,
+				_ => AnomalyAutomaticDetail.Never
+			};
+			return AnomalyAutomaticDetailLabel(detail);
+		}
+
+		static string AnomalyAutomaticZombieHostilityDetail(SettingsGroup settings)
+		{
+			if (settings.enemiesAttackZombies == settings.animalsAttackZombies)
+				return AnomalyAutomaticDetailLabel(settings.enemiesAttackZombies ? AnomalyAutomaticDetail.Allow : AnomalyAutomaticDetail.Never);
+			return AnomalyAutomaticDetailLabel(AnomalyAutomaticDetail.Mixed);
+		}
+
+		static string AnomalyAutomaticDetailLabel(AnomalyAutomaticDetail detail)
+		{
+			if (detail == AnomalyAutomaticDetail.Mixed)
+				return "AnomalyTargetingOverride_Mixed".SafeTranslate();
+			return $"AnomalyTargetingOverride_{detail}".SafeTranslate();
 		}
 	}
 }

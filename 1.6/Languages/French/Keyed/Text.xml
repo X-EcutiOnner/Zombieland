@@ -70,6 +70,17 @@
 	<AttackMode_OnlyColonists>Seulement les colons</AttackMode_OnlyColonists>
 	<EnemiesAttackZombies>Les ennemis attaquent les zombies</EnemiesAttackZombies>
 	<AnimalsAttackZombies>Les animaux attaquent les zombies</AnimalsAttackZombies>
+	<AnomalyTargetingTitle>Exceptions Anomaly</AnomalyTargetingTitle>
+	<AnomalyTargetingRelations>Les zombies peuvent attaquer :</AnomalyTargetingRelations>
+	<AnomalyTargetGhouls>Goules</AnomalyTargetGhouls>
+	<AnomalyTargetShamblers>Shamblers et humains mutants</AnomalyTargetShamblers>
+	<AnomalyTargetOtherEntities>Autres entités Anomaly</AnomalyTargetOtherEntities>
+	<AnomalyTargetNociosphere>Nociosphère</AnomalyTargetNociosphere>
+	<AnomalyZombieHostilityRelations>Les pions Anomaly peuvent attaquer les zombies :</AnomalyZombieHostilityRelations>
+	<AnomalyTargetingOverride_Automatic>Automatique</AnomalyTargetingOverride_Automatic>
+	<AnomalyTargetingOverride_Never>Jamais</AnomalyTargetingOverride_Never>
+	<AnomalyTargetingOverride_Allow>Autoriser</AnomalyTargetingOverride_Allow>
+	<AnomalyTargetingOverride_Mixed>Mixte</AnomalyTargetingOverride_Mixed>
 
 	<WhatDoZombiesSmash>Que vont détruire les Zombies ?</WhatDoZombiesSmash>
 	<SmashMode_Nothing>Rien</SmashMode_Nothing>

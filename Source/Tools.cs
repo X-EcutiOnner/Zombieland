@@ -354,6 +354,9 @@ namespace ZombieLand
 			if (zombie.IsActiveElectric || zombie.isAlbino || zombie.IsRopedOrConfused)
 				return false;
 
+			if (attacker.ActivePartOfColony() == false && AnomalyTargeting.TryGetZombieHostilityOverride(attacker, out var anomalyAttacksZombies))
+				return anomalyAttacksZombies;
+
 			if (ShouldAvoidZombies(attacker) == false)
 				return false;
 
@@ -982,6 +985,9 @@ namespace ZombieLand
 
 		public static bool IsHostileToZombies(Pawn pawn)
 		{
+			if (pawn.ActivePartOfColony() == false && AnomalyTargeting.TryGetZombieHostilityOverride(pawn, out var anomalyAttacksZombies))
+				return anomalyAttacksZombies;
+
 			if (pawn.RaceProps.Animal)
 				return ZombieSettings.Values.animalsAttackZombies;
 
@@ -1014,6 +1020,9 @@ namespace ZombieLand
 
 				if (target.InfectionState() == InfectionState.Infecting)
 					return false;
+
+				if (AnomalyTargeting.IsForcedTarget(target))
+					return true;
 
 				if (mode == AttackMode.Everything)
 					return true;

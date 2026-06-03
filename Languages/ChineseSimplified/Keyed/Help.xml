@@ -25,6 +25,13 @@
 	<AttackMode_OnlyColonists_Help>如果你认为僵尸只该攻击你的殖民者，那么此模式适合你。它们被攻击时可能会反击，但绝不会主动攻击其他人。</AttackMode_OnlyColonists_Help>
 	<EnemiesAttackZombies_Help>关闭此项后，敌人会无视并避开僵尸。开启后，袭击者会把它们视为危险并尽力战斗。祝你好运！</EnemiesAttackZombies_Help>
 	<AnimalsAttackZombies_Help>开启后，动物在狩猎或变得攻击性时会攻击僵尸。若想让它们忽略僵尸，请关闭此选项。</AnimalsAttackZombies_Help>
+	<AnomalyTargetingTitle_Help>这些设置是 Anomaly 专用的双向例外。自动会保留普通规则，从不会阻止关系，允许会允许活跃且有效的目标。</AnomalyTargetingTitle_Help>
+	<AnomalyTargetingRelations_Help>控制丧尸可以选择哪些 Anomaly 角色作为目标。自动遵循主要丧尸目标规则。从不阻止该组。允许会允许活跃且有效的目标，即使主规则会忽略它们。死亡、倒地、休眠或停用的角色仍会被忽略。</AnomalyTargetingRelations_Help>
+	<AnomalyTargetGhouls_Help>单独控制丧尸是否可以将尸鬼作为目标，不影响蹒跚者和其他变异人类。玩家控制的尸鬼可能很珍贵，因此可单独设置。</AnomalyTargetGhouls_Help>
+	<AnomalyTargetShamblers_Help>控制蹒跚者和其他 Anomaly 变异人类，不改变尸鬼或普通人类袭击者的反应。</AnomalyTargetShamblers_Help>
+	<AnomalyTargetOtherEntities_Help>控制活跃的非人类 Anomaly 实体，例如 fleshbeast、metalhorror、sightstealer、revenant 和类似生物。</AnomalyTargetOtherEntities_Help>
+	<AnomalyTargetNociosphere_Help>控制丧尸是否会对活跃的 Nociosphere 作出反应。设为从不可以防止 Nociosphere 过于轻松地清理丧尸群。</AnomalyTargetNociosphere_Help>
+	<AnomalyZombieHostilityRelations_Help>控制非玩家 Anomaly 角色是否可以选择丧尸作为目标。自动遵循敌人和动物对丧尸的敌意设置。从不阻止攻击丧尸。允许会允许活跃且有效的 Anomaly 角色攻击丧尸，即使基础设置会阻止它们。</AnomalyZombieHostilityRelations_Help>
 
 	<WhatDoZombiesSmash_Help>僵尸靠近建筑或物品时，可能会开始砸附近的东西。它们不会策划复杂攻击，但数量大且时间足够长时，可以摧毁你的防御。</WhatDoZombiesSmash_Help>
 	<SmashMode_Nothing_Help>让僵尸只攻击生物。它们会忽略墙、建筑、炮塔和其他物品。</SmashMode_Nothing_Help>

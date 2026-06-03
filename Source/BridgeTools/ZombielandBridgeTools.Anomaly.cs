@@ -27,6 +27,37 @@ namespace ZombieLand
 			public Zombie zombie;
 		}
 
+		sealed class AnomalyTargetingOverrideCase
+		{
+			public string id;
+			public string kindDef;
+			public string faction;
+			public string activityState;
+			public string dormancyState;
+			public AttackMode attackMode;
+			public AnomalyTargetingCategory category;
+			public AnomalyTargetingOverride mode;
+			public bool expectedOverridePresent;
+			public bool expectedOverrideAttracts;
+			public bool expectedAttracts;
+			public bool expectedAttackable;
+		}
+
+		sealed class AnomalyZombieHostilityOverrideCase
+		{
+			public string id;
+			public string kindDef;
+			public string faction;
+			public string activityState;
+			public string dormancyState;
+			public bool enemiesAttackZombies;
+			public bool animalsAttackZombies;
+			public AnomalyTargetingOverride mode;
+			public bool expectedOverridePresent;
+			public bool expectedOverrideAttacks;
+			public bool expectedHostile;
+		}
+
 		sealed class AnomalyEngagementState
 		{
 			public string testCase;
@@ -76,6 +107,36 @@ namespace ZombieLand
 			new() { id = "Horaxian_Underthrall", kindDef = "Horaxian_Underthrall", faction = "horax" },
 			new() { id = "Horaxian_Gunner", kindDef = "Horaxian_Gunner", faction = "horax" },
 			new() { id = "Horaxian_Highthrall", kindDef = "Horaxian_Highthrall", faction = "horax" },
+		};
+
+		static readonly AnomalyTargetingOverrideCase[] anomalyTargetingOverrideCases =
+		{
+			new() { id = "ghoul-automatic-onlyHumans", kindDef = "Ghoul", faction = "player", attackMode = AttackMode.OnlyHumans, category = AnomalyTargetingCategory.Ghouls, mode = AnomalyTargetingOverride.Automatic, expectedAttracts = true, expectedAttackable = true },
+			new() { id = "ghoul-automatic-onlyColonists", kindDef = "Ghoul", faction = "player", attackMode = AttackMode.OnlyColonists, category = AnomalyTargetingCategory.Ghouls, mode = AnomalyTargetingOverride.Automatic, expectedAttracts = false, expectedAttackable = false },
+			new() { id = "ghoul-never-everything", kindDef = "Ghoul", faction = "player", attackMode = AttackMode.Everything, category = AnomalyTargetingCategory.Ghouls, mode = AnomalyTargetingOverride.Never, expectedOverridePresent = true, expectedOverrideAttracts = false, expectedAttracts = false, expectedAttackable = false },
+			new() { id = "ghoul-allow-onlyColonists", kindDef = "Ghoul", faction = "player", attackMode = AttackMode.OnlyColonists, category = AnomalyTargetingCategory.Ghouls, mode = AnomalyTargetingOverride.Allow, expectedOverridePresent = true, expectedOverrideAttracts = true, expectedAttracts = true, expectedAttackable = true },
+			new() { id = "shambler-human-automatic-onlyHumans", kindDef = "ShamblerSoldier", faction = "entities", dormancyState = "awake", attackMode = AttackMode.OnlyHumans, category = AnomalyTargetingCategory.ShamblerMutants, mode = AnomalyTargetingOverride.Automatic, expectedAttracts = true, expectedAttackable = true },
+			new() { id = "shambler-gorehulk-automatic-onlyHumans", kindDef = "ShamblerGorehulk", faction = "entities", dormancyState = "awake", attackMode = AttackMode.OnlyHumans, category = AnomalyTargetingCategory.ShamblerMutants, mode = AnomalyTargetingOverride.Automatic, expectedAttracts = false, expectedAttackable = false },
+			new() { id = "shambler-never-everything", kindDef = "ShamblerSoldier", faction = "entities", dormancyState = "awake", attackMode = AttackMode.Everything, category = AnomalyTargetingCategory.ShamblerMutants, mode = AnomalyTargetingOverride.Never, expectedOverridePresent = true, expectedOverrideAttracts = false, expectedAttracts = false, expectedAttackable = false },
+			new() { id = "shambler-allow-onlyHumans", kindDef = "ShamblerGorehulk", faction = "entities", dormancyState = "awake", attackMode = AttackMode.OnlyHumans, category = AnomalyTargetingCategory.ShamblerMutants, mode = AnomalyTargetingOverride.Allow, expectedOverridePresent = true, expectedOverrideAttracts = true, expectedAttracts = true, expectedAttackable = true },
+			new() { id = "entity-automatic-onlyHumans", kindDef = "Metalhorror", faction = "entities", dormancyState = "awake", attackMode = AttackMode.OnlyHumans, category = AnomalyTargetingCategory.OtherEntities, mode = AnomalyTargetingOverride.Automatic, expectedAttracts = false, expectedAttackable = false },
+			new() { id = "entity-allow-onlyHumans", kindDef = "Metalhorror", faction = "entities", dormancyState = "awake", attackMode = AttackMode.OnlyHumans, category = AnomalyTargetingCategory.OtherEntities, mode = AnomalyTargetingOverride.Allow, expectedOverridePresent = true, expectedOverrideAttracts = true, expectedAttracts = true, expectedAttackable = true },
+			new() { id = "entity-never-everything", kindDef = "Gorehulk", faction = "entities", attackMode = AttackMode.Everything, category = AnomalyTargetingCategory.OtherEntities, mode = AnomalyTargetingOverride.Never, expectedOverridePresent = true, expectedOverrideAttracts = false, expectedAttracts = false, expectedAttackable = false },
+			new() { id = "entity-dormant-allow-hardgate", kindDef = "Metalhorror", faction = "entities", dormancyState = "dormant", attackMode = AttackMode.Everything, category = AnomalyTargetingCategory.OtherEntities, mode = AnomalyTargetingOverride.Allow, expectedOverridePresent = true, expectedOverrideAttracts = true, expectedAttracts = false, expectedAttackable = false },
+			new() { id = "nociosphere-automatic-onlyHumans", kindDef = "Nociosphere", faction = "entities", activityState = "active", attackMode = AttackMode.OnlyHumans, category = AnomalyTargetingCategory.Nociosphere, mode = AnomalyTargetingOverride.Automatic, expectedAttracts = false, expectedAttackable = false },
+			new() { id = "nociosphere-allow-onlyHumans", kindDef = "Nociosphere", faction = "entities", activityState = "active", attackMode = AttackMode.OnlyHumans, category = AnomalyTargetingCategory.Nociosphere, mode = AnomalyTargetingOverride.Allow, expectedOverridePresent = true, expectedOverrideAttracts = true, expectedAttracts = true, expectedAttackable = true },
+			new() { id = "nociosphere-never-everything", kindDef = "Nociosphere", faction = "entities", activityState = "active", attackMode = AttackMode.Everything, category = AnomalyTargetingCategory.Nociosphere, mode = AnomalyTargetingOverride.Never, expectedOverridePresent = true, expectedOverrideAttracts = false, expectedAttracts = false, expectedAttackable = false },
+		};
+
+		static readonly AnomalyZombieHostilityOverrideCase[] anomalyZombieHostilityOverrideCases =
+		{
+			new() { id = "entity-automatic-disabled", kindDef = "Metalhorror", faction = "entities", dormancyState = "awake", enemiesAttackZombies = false, animalsAttackZombies = false, mode = AnomalyTargetingOverride.Automatic, expectedHostile = false },
+			new() { id = "entity-automatic-enabled", kindDef = "Metalhorror", faction = "entities", dormancyState = "awake", enemiesAttackZombies = true, animalsAttackZombies = true, mode = AnomalyTargetingOverride.Automatic, expectedHostile = true },
+			new() { id = "entity-allow-disabled", kindDef = "Metalhorror", faction = "entities", dormancyState = "awake", enemiesAttackZombies = false, animalsAttackZombies = false, mode = AnomalyTargetingOverride.Allow, expectedOverridePresent = true, expectedOverrideAttacks = true, expectedHostile = true },
+			new() { id = "entity-never-enabled", kindDef = "Gorehulk", faction = "entities", enemiesAttackZombies = true, animalsAttackZombies = true, mode = AnomalyTargetingOverride.Never, expectedOverridePresent = true, expectedOverrideAttacks = false, expectedHostile = false },
+			new() { id = "shambler-allow-disabled", kindDef = "ShamblerSoldier", faction = "entities", dormancyState = "awake", enemiesAttackZombies = false, animalsAttackZombies = false, mode = AnomalyTargetingOverride.Allow, expectedOverridePresent = true, expectedOverrideAttacks = true, expectedHostile = true },
+			new() { id = "nociosphere-allow-disabled", kindDef = "Nociosphere", faction = "entities", activityState = "active", enemiesAttackZombies = false, animalsAttackZombies = false, mode = AnomalyTargetingOverride.Allow, expectedOverridePresent = true, expectedOverrideAttacks = true, expectedHostile = true },
+			new() { id = "dormant-allow-hardgate", kindDef = "Metalhorror", faction = "entities", dormancyState = "dormant", enemiesAttackZombies = true, animalsAttackZombies = true, mode = AnomalyTargetingOverride.Allow, expectedOverridePresent = true, expectedOverrideAttacks = false, expectedHostile = false },
 		};
 
 		[Tool("zombieland/anomaly_zombie_matrix", Description = "Stage Anomaly pawn-kind/state rows and report Zombieland zombie attraction, attack-mode, hostility, infection, and short tick outcomes.")]
@@ -192,6 +253,242 @@ namespace ZombieLand
 						if (spawned[i] != null && spawned[i].Destroyed == false)
 							CleanupAnomalyThing(spawned[i]);
 					}
+					ZombieRuntimeActions.DestroyZombies(map);
+				}
+			}
+		}
+
+		[Tool("zombieland/anomaly_targeting_overrides", Description = "Verify Anomaly-specific zombie targeting overrides preserve Automatic base behavior and apply Never/Allow only to active valid Anomaly target categories.")]
+		public static object AnomalyTargetingOverrides(
+			[ToolParameter(Description = "Destroy staged Anomaly pawns and zombies at the end.", Required = false, DefaultValue = true)] bool cleanup = true)
+		{
+			var map = CurrentMap;
+			if (map == null)
+				return new { success = false, error = "No current map is loaded." };
+			if (ModsConfig.AnomalyActive == false)
+				return new { success = true, skipped = true, reason = "Anomaly is not active in the current mod list." };
+
+			var missingKinds = anomalyTargetingOverrideCases
+				.Select(testCase => testCase.kindDef)
+				.Distinct()
+				.Where(kind => DefDatabase<PawnKindDef>.GetNamedSilentFail(kind) == null)
+				.ToArray();
+			if (missingKinds.Length > 0)
+				return new { success = false, missingKinds, error = "One or more required Anomaly PawnKindDefs were not loaded." };
+
+			var settingsSnapshot = SnapshotZombieSettings();
+			var spawned = new List<Thing>();
+			var rows = new List<object>();
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+
+			try
+			{
+				ZombieRuntimeActions.DestroyZombies(map);
+				for (var i = 0; i < anomalyTargetingOverrideCases.Length; i++)
+				{
+					var testCase = anomalyTargetingOverrideCases[i];
+					var rowRoot = root + new IntVec3((i % 4) * 10 - 15, 0, (i / 4) * 8 - 16);
+					if (rowRoot.InBounds(map) == false)
+						rowRoot = root;
+					if (TryFindClearSpawnCell(map, rowRoot, 20f, out var targetCell, out var targetCellError) == false)
+						return targetCellError;
+					if (TryFindClearSpawnCell(map, targetCell + new IntVec3(2, 0, 0), 8f, out var zombieCell, out var zombieCellError) == false)
+						return zombieCellError;
+
+					if (TrySpawnAnomalyPawn(map, testCase.kindDef, testCase.faction, targetCell, spawned, out var pawn, out var pawnError, testCase.activityState, testCase.dormancyState, testCase.kindDef != "Nociosphere") == false)
+						return pawnError;
+					var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+					if (zombie == null)
+						return new { success = false, testCase.id, error = "ZombieGenerator.SpawnZombie returned no normal zombie." };
+					spawned.Add(zombie);
+
+					ApplyZombieSettingsOverride(settings => ConfigureAnomalyTargetingOverride(settings, testCase.attackMode, testCase.category, testCase.mode));
+
+					var categoryPresent = AnomalyTargeting.TryGetCategory(pawn, out var category);
+					var overridePresent = AnomalyTargeting.TryGetAttractionOverride(pawn, out var overrideAttracts);
+					var attracts = Customization.DoesAttractsZombies(pawn);
+					var attackable = Tools.Attackable(zombie, testCase.attackMode, pawn);
+					var rowSuccess = categoryPresent
+						&& category == testCase.category
+						&& overridePresent == testCase.expectedOverridePresent
+						&& (overridePresent == false || overrideAttracts == testCase.expectedOverrideAttracts)
+						&& attracts == testCase.expectedAttracts
+						&& attackable == testCase.expectedAttackable;
+
+					rows.Add(new
+					{
+						testCase.id,
+						testCase.kindDef,
+						testCase.faction,
+						mode = testCase.attackMode.ToString(),
+						overrideMode = testCase.mode.ToString(),
+						expectedCategory = testCase.category.ToString(),
+						categoryPresent,
+						category = category.ToString(),
+						overridePresent,
+						overrideAttracts,
+						attracts,
+						attackable,
+						expected = new
+						{
+							testCase.expectedOverridePresent,
+							testCase.expectedOverrideAttracts,
+							testCase.expectedAttracts,
+							testCase.expectedAttackable
+						},
+						activity = DescribeAnomalyActivity(pawn),
+						dormancy = DescribeAnomalyDormancy(pawn),
+						pawn = DescribePawn(pawn),
+						zombie = DescribeZombie(zombie),
+						success = rowSuccess
+					});
+				}
+
+				var rowArray = rows.ToArray();
+				return new
+				{
+					success = rowArray.All(row => (bool)row.GetType().GetProperty("success").GetValue(row)),
+					caseCount = rowArray.Length,
+					rows = rowArray,
+					logNote = "Use rimbridge/list_logs minimumLevel=warning after this operation for the log-clean gate."
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+				if (cleanup)
+				{
+					for (var i = spawned.Count - 1; i >= 0; i--)
+						if (spawned[i] != null && spawned[i].Destroyed == false)
+							CleanupAnomalyThing(spawned[i]);
+					ZombieRuntimeActions.DestroyZombies(map);
+				}
+			}
+		}
+
+		[Tool("zombieland/anomaly_zombie_hostility_overrides", Description = "Verify Anomaly-specific overrides for non-player Anomaly pawns choosing zombies as targets.")]
+		public static object AnomalyZombieHostilityOverrides(
+			[ToolParameter(Description = "Destroy staged Anomaly pawns and zombies at the end.", Required = false, DefaultValue = true)] bool cleanup = true)
+		{
+			var map = CurrentMap;
+			if (map == null)
+				return new { success = false, error = "No current map is loaded." };
+			if (ModsConfig.AnomalyActive == false)
+				return new { success = true, skipped = true, reason = "Anomaly is not active in the current mod list." };
+
+			var missingKinds = anomalyZombieHostilityOverrideCases
+				.Select(testCase => testCase.kindDef)
+				.Distinct()
+				.Where(kind => DefDatabase<PawnKindDef>.GetNamedSilentFail(kind) == null)
+				.ToArray();
+			var zombieFaction = Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies);
+			if (missingKinds.Length > 0 || zombieFaction == null)
+			{
+				return new
+				{
+					success = false,
+					missingKinds,
+					zombieFactionPresent = zombieFaction != null,
+					error = missingKinds.Length > 0
+						? "One or more required Anomaly PawnKindDefs were not loaded."
+						: "Zombie faction was not loaded."
+				};
+			}
+
+			var settingsSnapshot = SnapshotZombieSettings();
+			var spawned = new List<Thing>();
+			var rows = new List<object>();
+			var successes = new List<bool>();
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+
+			try
+			{
+				ZombieRuntimeActions.DestroyZombies(map);
+				for (var i = 0; i < anomalyZombieHostilityOverrideCases.Length; i++)
+				{
+					var testCase = anomalyZombieHostilityOverrideCases[i];
+					var rowRoot = root + new IntVec3((i % 4) * 10 - 15, 0, (i / 4) * 8 - 16);
+					if (rowRoot.InBounds(map) == false)
+						rowRoot = root;
+					if (TryFindClearSpawnCell(map, rowRoot, 20f, out var pawnCell, out var pawnCellError) == false)
+						return pawnCellError;
+					if (TryFindClearSpawnCell(map, pawnCell + new IntVec3(2, 0, 0), 8f, out var zombieCell, out var zombieCellError) == false)
+						return zombieCellError;
+
+					if (TrySpawnAnomalyPawn(map, testCase.kindDef, testCase.faction, pawnCell, spawned, out var pawn, out var pawnError, testCase.activityState, testCase.dormancyState, testCase.kindDef != "Nociosphere") == false)
+						return pawnError;
+					var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+					if (zombie == null)
+						return new { success = false, testCase.id, error = "ZombieRuntimeActions.SpawnZombie returned no normal zombie." };
+					spawned.Add(zombie);
+
+					ApplyZombieSettingsOverride(settings =>
+					{
+						settings.enemiesAttackZombies = testCase.enemiesAttackZombies;
+						settings.animalsAttackZombies = testCase.animalsAttackZombies;
+						settings.anomalyAttacksZombies = testCase.mode;
+					});
+
+					var categoryPresent = AnomalyTargeting.TryGetCategory(pawn, out var category);
+					var overridePresent = AnomalyTargeting.TryGetZombieHostilityOverride(pawn, out var overrideAttacks);
+					var isHostileToZombies = Tools.IsHostileToZombies(pawn);
+					var thingHostility = TryHostileTo(pawn, zombie);
+					var factionHostility = TryHostileTo(pawn, zombieFaction);
+					var rowSuccess = categoryPresent
+						&& overridePresent == testCase.expectedOverridePresent
+						&& (overridePresent == false || overrideAttacks == testCase.expectedOverrideAttacks)
+						&& isHostileToZombies == testCase.expectedHostile
+						&& thingHostility.error == null
+						&& factionHostility.error == null
+						&& thingHostility.value == testCase.expectedHostile
+						&& factionHostility.value == testCase.expectedHostile;
+					successes.Add(rowSuccess);
+
+					rows.Add(new
+					{
+						testCase.id,
+						testCase.kindDef,
+						testCase.faction,
+						testCase.enemiesAttackZombies,
+						testCase.animalsAttackZombies,
+						overrideMode = testCase.mode.ToString(),
+						categoryPresent,
+						category = category.ToString(),
+						overridePresent,
+						overrideAttacks,
+						isHostileToZombies,
+						toZombieThing = DescribeHostility(thingHostility),
+						toZombieFaction = DescribeHostility(factionHostility),
+						expected = new
+						{
+							testCase.expectedOverridePresent,
+							testCase.expectedOverrideAttacks,
+							testCase.expectedHostile
+						},
+						activity = DescribeAnomalyActivity(pawn),
+						dormancy = DescribeAnomalyDormancy(pawn),
+						pawn = DescribePawn(pawn),
+						zombie = DescribeZombie(zombie),
+						success = rowSuccess
+					});
+				}
+
+				return new
+				{
+					success = successes.All(success => success),
+					caseCount = rows.Count,
+					rows = rows.ToArray(),
+					logNote = "Use rimbridge/list_logs minimumLevel=warning after this operation for the log-clean gate."
+				};
+			}
+			finally
+			{
+				RestoreZombieSettings(settingsSnapshot);
+				if (cleanup)
+				{
+					for (var i = spawned.Count - 1; i >= 0; i--)
+						if (spawned[i] != null && spawned[i].Destroyed == false)
+							CleanupAnomalyThing(spawned[i]);
 					ZombieRuntimeActions.DestroyZombies(map);
 				}
 			}
@@ -1085,6 +1382,7 @@ namespace ZombieLand
 			var oldAttackMode = settings.attackMode;
 			var oldEnemiesAttackZombies = settings.enemiesAttackZombies;
 			var oldAnimalsAttackZombies = settings.animalsAttackZombies;
+			var oldAnomalyAttacksZombies = settings.anomalyAttacksZombies;
 			try
 			{
 				var attackModes = new[] { AttackMode.OnlyColonists, AttackMode.OnlyHumans, AttackMode.Everything }
@@ -1102,6 +1400,7 @@ namespace ZombieLand
 
 				settings.enemiesAttackZombies = false;
 				settings.animalsAttackZombies = false;
+				settings.anomalyAttacksZombies = AnomalyTargetingOverride.Automatic;
 				var reverseDisabled = new
 				{
 					toZombieThing = DescribeHostility(TryHostileTo(pawn, zombie)),
@@ -1111,6 +1410,7 @@ namespace ZombieLand
 
 				settings.enemiesAttackZombies = true;
 				settings.animalsAttackZombies = true;
+				settings.anomalyAttacksZombies = AnomalyTargetingOverride.Automatic;
 				var reverseEnabled = new
 				{
 					toZombieThing = DescribeHostility(TryHostileTo(pawn, zombie)),
@@ -1153,6 +1453,34 @@ namespace ZombieLand
 				settings.attackMode = oldAttackMode;
 				settings.enemiesAttackZombies = oldEnemiesAttackZombies;
 				settings.animalsAttackZombies = oldAnimalsAttackZombies;
+				settings.anomalyAttacksZombies = oldAnomalyAttacksZombies;
+			}
+		}
+
+		static void ConfigureAnomalyTargetingOverride(SettingsGroup settings, AttackMode attackMode, AnomalyTargetingCategory category, AnomalyTargetingOverride mode)
+		{
+			settings.attackMode = attackMode;
+			settings.enemiesAttackZombies = false;
+			settings.animalsAttackZombies = false;
+			settings.anomalyGhoulTargeting = AnomalyTargetingOverride.Automatic;
+			settings.anomalyShamblerTargeting = AnomalyTargetingOverride.Automatic;
+			settings.anomalyEntityTargeting = AnomalyTargetingOverride.Automatic;
+			settings.anomalyNociosphereTargeting = AnomalyTargetingOverride.Automatic;
+			settings.anomalyAttacksZombies = AnomalyTargetingOverride.Automatic;
+			switch (category)
+			{
+				case AnomalyTargetingCategory.Ghouls:
+					settings.anomalyGhoulTargeting = mode;
+					break;
+				case AnomalyTargetingCategory.ShamblerMutants:
+					settings.anomalyShamblerTargeting = mode;
+					break;
+				case AnomalyTargetingCategory.OtherEntities:
+					settings.anomalyEntityTargeting = mode;
+					break;
+				case AnomalyTargetingCategory.Nociosphere:
+					settings.anomalyNociosphereTargeting = mode;
+					break;
 			}
 		}
 
@@ -1410,10 +1738,12 @@ namespace ZombieLand
 		{
 			var oldEnemiesAttackZombies = settings.enemiesAttackZombies;
 			var oldAnimalsAttackZombies = settings.animalsAttackZombies;
+			var oldAnomalyAttacksZombies = settings.anomalyAttacksZombies;
 			try
 			{
 				settings.enemiesAttackZombies = false;
 				settings.animalsAttackZombies = false;
+				settings.anomalyAttacksZombies = AnomalyTargetingOverride.Automatic;
 				var disabled = new
 				{
 					toZombieThing = DescribeHostility(TryHostileTo(pawn, zombie)),
@@ -1423,6 +1753,7 @@ namespace ZombieLand
 
 				settings.enemiesAttackZombies = true;
 				settings.animalsAttackZombies = true;
+				settings.anomalyAttacksZombies = AnomalyTargetingOverride.Automatic;
 				var enabled = new
 				{
 					toZombieThing = DescribeHostility(TryHostileTo(pawn, zombie)),
@@ -1440,6 +1771,7 @@ namespace ZombieLand
 			{
 				settings.enemiesAttackZombies = oldEnemiesAttackZombies;
 				settings.animalsAttackZombies = oldAnimalsAttackZombies;
+				settings.anomalyAttacksZombies = oldAnomalyAttacksZombies;
 			}
 		}
 

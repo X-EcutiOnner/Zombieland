@@ -70,6 +70,17 @@
 	<AttackMode_OnlyColonists>Sadece kolonistler</AttackMode_OnlyColonists>
 	<EnemiesAttackZombies>Düşmanlar zombi saldırır</EnemiesAttackZombies>
 	<AnimalsAttackZombies>Hayvanlar zombi saldırı</AnimalsAttackZombies>
+	<AnomalyTargetingTitle>Anomaly istisnaları</AnomalyTargetingTitle>
+	<AnomalyTargetingRelations>Zombiler saldırabilir:</AnomalyTargetingRelations>
+	<AnomalyTargetGhouls>Ghoullar</AnomalyTargetGhouls>
+	<AnomalyTargetShamblers>Shamblerlar ve mutant insanlar</AnomalyTargetShamblers>
+	<AnomalyTargetOtherEntities>Diğer Anomaly varlıkları</AnomalyTargetOtherEntities>
+	<AnomalyTargetNociosphere>Nociosphere</AnomalyTargetNociosphere>
+	<AnomalyZombieHostilityRelations>Anomaly piyonları zombilere saldırabilir:</AnomalyZombieHostilityRelations>
+	<AnomalyTargetingOverride_Automatic>Otomatik</AnomalyTargetingOverride_Automatic>
+	<AnomalyTargetingOverride_Never>Asla</AnomalyTargetingOverride_Never>
+	<AnomalyTargetingOverride_Allow>İzin ver</AnomalyTargetingOverride_Allow>
+	<AnomalyTargetingOverride_Mixed>Karışık</AnomalyTargetingOverride_Mixed>
 
 	<WhatDoZombiesSmash>Zombiler neyi mahvedecek?</WhatDoZombiesSmash>
 	<SmashMode_Nothing>Hiçbir şey</SmashMode_Nothing>
