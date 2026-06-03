@@ -117,6 +117,13 @@
 	<BetterZombieAvoidance_Help>Чтобы улучшить пути вокруг зомби, включите эту опцию. Zombieland будет постоянно корректировать путь колониста, чтобы избегать зомби. Очень полезно для меньшего микроконтроля и спасения других колонистов.</BetterZombieAvoidance_Help>
 	<ZombiesDropBlood_Help>Настройка скорости игры: выключите, и зомби больше не будут оставлять кровь.</ZombiesDropBlood_Help>
 	<ZombiesBurnLonger_Help>Для более интересной игры зомби загораются и горят дольше, пока ходят вокруг. Выключите, если компьютер слишком медленный для большого количества огня.</ZombiesBurnLonger_Help>
+	<AwarenessCuesTitle_Help>Эти настройки управляют письмами, звуками и визуальными подсказками, которые могут раскрывать активность зомби. Отключение меняет только обратную связь, а не поведение зомби.</AwarenessCuesTitle_Help>
+	<ShowZombieEventLetters_Help>Показывает или скрывает автоматические оповещения Zombieland, включая письма RimWorld о появлении зомби и событиях плевуна.</ShowZombieEventLetters_Help>
+	<PlayZombieEventSiren_Help>Проигрывает громкую сирену у камеры, когда начинается крупное событие зомби или событие плевуна.</PlayZombieEventSiren_Help>
+	<PlaySpecialZombieAmbientSounds_Help>Проигрывает фоновые звуки особых зомби у камеры, например движение танка и электрическое гудение.</PlaySpecialZombieAmbientSounds_Help>
+	<PlayZombieActionSounds_Help>Проигрывает звуки действий зомби, например еду, выслеживание, ярость, выкапывание, плевки, токсичные, танковые и электрические звуки.</PlayZombieActionSounds_Help>
+	<PlayWallAndSabotageSounds_Help>Проигрывает звуки взаимодействия зомби с вашей базой, например толкание стен, удары по постройкам, взлом, переключатели и крики саботажа.</PlayWallAndSabotageSounds_Help>
+	<ShowZombieThoughtBubbles_Help>Показывает особые облачка мыслей Zombieland для действий зомби, например мозги, еда, ярость и взлом.</ShowZombieThoughtBubbles_Help>
 	<ShowHealthBar_Help>Так как зомби нельзя выбрать, можно включить полосу здоровья при наведении мыши. Она показывает общее здоровье и уровень сознания.</ShowHealthBar_Help>
 	<ShowZombieStats_Help>Управляет отображением информации о зомби справа на экране.</ShowZombieStats_Help>
 	<HighlightDangerousAreas_Help>Когда колонист находится в опасной зоне или покидает безопасную, эта настройка подсвечивает область.\n\nДля управления опасными зонами можно использовать обычный менеджер зон.</HighlightDangerousAreas_Help>

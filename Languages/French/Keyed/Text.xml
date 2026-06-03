@@ -181,6 +181,14 @@
 	<ZombiesDropBlood>Les zombies lache du sang</ZombiesDropBlood>
 	<ZombiesBurnLonger>Les zombies brûlent plus longtemps</ZombiesBurnLonger>
 
+	<AwarenessCuesTitle>Indices d'activité</AwarenessCuesTitle>
+	<ShowZombieEventLetters>Afficher les alertes d'événements zombies</ShowZombieEventLetters>
+	<PlayZombieEventSiren>Jouer la sirène des événements zombies</PlayZombieEventSiren>
+	<PlaySpecialZombieAmbientSounds>Jouer l'ambiance des zombies spéciaux</PlaySpecialZombieAmbientSounds>
+	<PlayZombieActionSounds>Jouer les sons d'action des zombies</PlayZombieActionSounds>
+	<PlayWallAndSabotageSounds>Jouer les sons de murs et de sabotage</PlayWallAndSabotageSounds>
+	<ShowZombieThoughtBubbles>Afficher les bulles de pensée des zombies</ShowZombieThoughtBubbles>
+
 	<ZombieActionsTitle>Actions</ZombieActionsTitle>
 	<ZombieSettingsReset>Restaurer les paramètres par defaut</ZombieSettingsReset>
 	<FactoryResetButton>Réinitialisation d'usine</FactoryResetButton>

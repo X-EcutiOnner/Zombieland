@@ -44,8 +44,11 @@ namespace ZombieLand
 			if (pawn.IsHashIntervalTick(240))
 			{
 				Tools.CastThoughtBubble(pawn, Constants.BRRAINZ);
-				var info = SoundInfo.InMap(pawn);
-				CustomDefs.ZombieTracking.PlayOneShot(info);
+				if (ZombieAwarenessCues.ShouldPlayZombieActionSound())
+				{
+					var info = SoundInfo.InMap(pawn);
+					CustomDefs.ZombieTracking.PlayOneShot(info);
+				}
 			}
 		}
 

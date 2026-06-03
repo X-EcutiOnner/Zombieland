@@ -469,7 +469,7 @@ namespace ZombieLand
 			if (hasFilth >= 6)
 			{
 				GenExplosion.DoExplosion(pos, map, Mathf.Max(0.5f, Mathf.Sqrt(maxRadius) - 1), CustomDefs.ToxicSplatter, null, 0, 0);
-				if (Constants.USE_SOUND)
+				if (ZombieAwarenessCues.ShouldPlayZombieActionSound())
 					CustomDefs.ToxicSplash.PlayOneShot(SoundInfo.InMap(new TargetInfo(pos, map)));
 			}
 		}
@@ -485,7 +485,7 @@ namespace ZombieLand
 
 		void HandleRubble()
 		{
-			if (rubbleCounter == 0 && Constants.USE_SOUND && Prefs.VolumeAmbient > 0f)
+			if (rubbleCounter == 0 && ZombieAwarenessCues.ShouldPlayZombieActionSound() && Prefs.VolumeAmbient > 0f)
 			{
 				var map = Map;
 				if (map != null)

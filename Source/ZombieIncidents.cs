@@ -238,7 +238,7 @@ namespace ZombieLand
 
 			if (zombiesSpawning > 3)
 			{
-				if (useAlert)
+				if (useAlert && ZombieAwarenessCues.ShouldShowZombieEventLetter())
 				{
 					var headline = "LetterLabelZombiesRising".Translate();
 					var text = "ZombiesRising".Translate();
@@ -254,7 +254,7 @@ namespace ZombieLand
 
 				var (capable, incapable) = Tools.ColonistsInfo(map);
 				var isSubstantialZombieCount = zombiesSpawning > capable * 4;
-				if (isSubstantialZombieCount && Constants.USE_SOUND && Prefs.VolumeAmbient > 0f)
+				if (isSubstantialZombieCount && ZombieAwarenessCues.ShouldPlayZombieEventSiren())
 					CustomDefs.ZombiesRising.PlayOneShotOnCamera(null);
 			}
 		}

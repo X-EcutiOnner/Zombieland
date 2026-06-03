@@ -181,6 +181,14 @@
 	<ZombiesDropBlood>Zombiler kan damlar</ZombiesDropBlood>
 	<ZombiesBurnLonger>Zombiler uzun süre yanacak</ZombiesBurnLonger>
 
+	<AwarenessCuesTitle>Zombi etkinliği ipuçları</AwarenessCuesTitle>
+	<ShowZombieEventLetters>Zombi olay uyarılarını göster</ShowZombieEventLetters>
+	<PlayZombieEventSiren>Zombi olay sirenini çal</PlayZombieEventSiren>
+	<PlaySpecialZombieAmbientSounds>Özel zombi ortam seslerini çal</PlaySpecialZombieAmbientSounds>
+	<PlayZombieActionSounds>Zombi eylem seslerini çal</PlayZombieActionSounds>
+	<PlayWallAndSabotageSounds>Duvar ve sabotaj seslerini çal</PlayWallAndSabotageSounds>
+	<ShowZombieThoughtBubbles>Zombi düşünce balonlarını göster</ShowZombieThoughtBubbles>
+
 	<ZombieActionsTitle>Eylemler</ZombieActionsTitle>
 	<ZombieSettingsReset>Ayarları varsayılan duruma getirmek</ZombieSettingsReset>
 	<FactoryResetButton>Fabrika Ayarlarına Sıfırla</FactoryResetButton>

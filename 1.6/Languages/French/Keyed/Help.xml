@@ -117,6 +117,13 @@
 	<BetterZombieAvoidance_Help>Pour améliorer les trajets autour des zombies, activez cette option. Zombieland ajuste constamment le chemin d'un colon pour éviter les zombies. Très utile pour réduire la microgestion et secourir d'autres colons.</BetterZombieAvoidance_Help>
 	<ZombiesDropBlood_Help>Optimisation de vitesse : désactivez cette option et les zombies ne laissent plus de sang.</ZombiesDropBlood_Help>
 	<ZombiesBurnLonger_Help>Pour un gameplay plus intéressant, les zombies prennent feu et brûlent plus longtemps en marchant. Désactivez si votre ordinateur est trop lent pour gérer beaucoup de feu.</ZombiesBurnLonger_Help>
+	<AwarenessCuesTitle_Help>Ces réglages contrôlent les lettres, sons et indices visuels qui peuvent révéler l'activité des zombies. Les désactiver change seulement le retour d'information, pas le comportement des zombies.</AwarenessCuesTitle_Help>
+	<ShowZombieEventLetters_Help>Affiche ou masque les alertes automatiques de Zombieland, notamment les lettres RimWorld pour les événements de zombies surgissants et de cracheurs.</ShowZombieEventLetters_Help>
+	<PlayZombieEventSiren_Help>Joue la forte sirène centrée sur la caméra quand un grand événement zombie ou un événement de cracheur commence.</PlayZombieEventSiren_Help>
+	<PlaySpecialZombieAmbientSounds_Help>Joue les sons d'ambiance centrés sur la caméra des zombies spéciaux, comme le déplacement des tanks et le bourdonnement électrique.</PlaySpecialZombieAmbientSounds_Help>
+	<PlayZombieActionSounds_Help>Joue les sons d'action des zombies, comme manger, traquer, enrager, sortir du sol, cracher, empoisonner, encaisser et électrifier.</PlayZombieActionSounds_Help>
+	<PlayWallAndSabotageSounds_Help>Joue les sons des zombies qui interagissent avec votre base, comme pousser les murs, frapper les bâtiments, pirater, actionner des interrupteurs et crier pendant un sabotage.</PlayWallAndSabotageSounds_Help>
+	<ShowZombieThoughtBubbles_Help>Affiche les bulles de pensée personnalisées de Zombieland pour les actions zombies comme les cerveaux, manger, enrager et pirater.</ShowZombieThoughtBubbles_Help>
 	<ShowHealthBar_Help>Comme les zombies ne peuvent pas être sélectionnés, vous pouvez activer une barre de santé au survol. Elle montre la santé globale et le niveau de conscience.</ShowHealthBar_Help>
 	<ShowZombieStats_Help>Contrôle l'affichage des informations de zombies sur la droite de l'écran.</ShowZombieStats_Help>
 	<HighlightDangerousAreas_Help>Quand un colon se trouve dans une zone dangereuse ou quitte une zone sûre, ce réglage met cette zone en surbrillance.\n\nVous pouvez gérer les zones dangereuses avec le gestionnaire de zones normal.</HighlightDangerousAreas_Help>

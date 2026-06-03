@@ -193,7 +193,8 @@ namespace ZombieLand
 		{
 			if (driver.hackCounter == 0)
 			{
-				CustomDefs.Hacking.PlayOneShot(new TargetInfo(thing.Position, thing.Map, false));
+				if (ZombieAwarenessCues.ShouldPlayWallAndSabotageSound())
+					CustomDefs.Hacking.PlayOneShot(new TargetInfo(thing.Position, thing.Map, false));
 				Tools.CastThoughtBubble(driver.pawn, Constants.HACKING);
 				driver.hackCounter = 240;
 				return true;
@@ -238,7 +239,8 @@ namespace ZombieLand
 					{
 						compFlickable.SwitchIsOn = false;
 						driver.pawn.rotationTracker.FaceTarget(thing);
-						SoundDefOf.FlickSwitch.PlayOneShot(new TargetInfo(thing.Position, thing.Map, false));
+						if (ZombieAwarenessCues.ShouldPlayWallAndSabotageSound())
+							SoundDefOf.FlickSwitch.PlayOneShot(new TargetInfo(thing.Position, thing.Map, false));
 						Tools.CastThoughtBubble(driver.pawn, Constants.HACKING);
 						driver.hackTarget = null;
 						return;
@@ -249,7 +251,8 @@ namespace ZombieLand
 					{
 						compPowerTrader.PowerOn = false;
 						driver.pawn.rotationTracker.FaceTarget(thing);
-						SoundDefOf.FlickSwitch.PlayOneShot(new TargetInfo(thing.Position, thing.Map, false));
+						if (ZombieAwarenessCues.ShouldPlayWallAndSabotageSound())
+							SoundDefOf.FlickSwitch.PlayOneShot(new TargetInfo(thing.Position, thing.Map, false));
 						Tools.CastThoughtBubble(driver.pawn, Constants.HACKING);
 						driver.hackTarget = null;
 						return;
@@ -291,7 +294,8 @@ namespace ZombieLand
 
 			if (zombie.scream == 0)
 			{
-				CustomDefs.Scream.PlayOneShot(new TargetInfo(zombie.Position, zombie.Map, false));
+				if (ZombieAwarenessCues.ShouldPlayWallAndSabotageSound())
+					CustomDefs.Scream.PlayOneShot(new TargetInfo(zombie.Position, zombie.Map, false));
 				Tools.CastThoughtBubble(driver.pawn, Constants.RAGING);
 			}
 

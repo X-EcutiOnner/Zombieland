@@ -621,7 +621,7 @@ namespace ZombieLand
 
 		public static void PlayTink(Thing thing)
 		{
-			if (Constants.USE_SOUND)
+			if (ZombieAwarenessCues.ShouldPlayZombieActionSound())
 			{
 				var info = SoundInfo.InMap(thing);
 				CustomDefs.TankyTink.PlayOneShot(info);
@@ -630,7 +630,7 @@ namespace ZombieLand
 
 		public static void PlayAbsorb(Thing thing)
 		{
-			if (Constants.USE_SOUND)
+			if (ZombieAwarenessCues.ShouldPlayZombieActionSound())
 			{
 				var info = SoundInfo.InMap(thing);
 				CustomDefs.Bzzt.PlayOneShot(info);
@@ -701,9 +701,17 @@ namespace ZombieLand
 
 				if (zombie.ageTracker != null && pawn.ageTracker != null)
 				{
-					zombie.ageTracker.AgeBiologicalTicks = pawn.ageTracker.AgeBiologicalTicks;
-					zombie.ageTracker.AgeChronologicalTicks = pawn.ageTracker.AgeChronologicalTicks;
-					zombie.ageTracker.BirthAbsTicks = pawn.ageTracker.BirthAbsTicks;
+					try
+					{
+						zombie.ageTracker.AgeBiologicalTicks = pawn.ageTracker.AgeBiologicalTicks;
+						zombie.ageTracker.AgeChronologicalTicks = pawn.ageTracker.AgeChronologicalTicks;
+						zombie.ageTracker.BirthAbsTicks = pawn.ageTracker.BirthAbsTicks;
+					}
+					catch
+					{
+						// Life-stage notifications can touch trackers that converted zombies do not fully use.
+						// Keeping the generated zombie age is better than aborting the conversion callback.
+					}
 				}
 
 				if (zombie.story != null && pawn.story != null)
@@ -782,7 +790,7 @@ namespace ZombieLand
 
 				if (map.Biome != SoSTools.sosOuterSpaceBiomeDef)
 				{
-					if (ZombieSettings.Values.deadBecomesZombieMessage || wasPlayer)
+					if (ZombieSettings.Values.deadBecomesZombieMessage)
 					{
 						var label = wasPlayer ? "ColonistBecameAZombieLabel".Translate() : "OtherBecameAZombieLabel".Translate();
 						var text = "BecameAZombieDesc".SafeTranslate(new object[] { pawnName.ToStringShort });
@@ -1477,6 +1485,9 @@ namespace ZombieLand
 
 		public static void CastThoughtBubble(Pawn pawn, Material material)
 		{
+			if (ZombieAwarenessCues.ShouldShowZombieThoughtBubble() == false)
+				return;
+
 			var newThing = (MoteBubble)ThingMaker.MakeThing(CustomDefs.ZombieThought, null);
 			newThing.iconMat = material;
 			newThing.Attach(pawn);

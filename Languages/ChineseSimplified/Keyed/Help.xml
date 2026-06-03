@@ -117,6 +117,13 @@
 	<BetterZombieAvoidance_Help>若想让角色更好地绕开僵尸，可以开启此选项。Zombieland 会不断调整殖民者的路径以避开僵尸。它对减少微操和救援其他殖民者很有用。</BetterZombieAvoidance_Help>
 	<ZombiesDropBlood_Help>游戏速度调整：关闭后僵尸不再掉落血迹。</ZombiesDropBlood_Help>
 	<ZombiesBurnLonger_Help>为增加有趣玩法，僵尸会着火并在四处行走时燃烧更久。如果你的电脑处理不了大量火焰，请关闭。</ZombiesBurnLonger_Help>
+	<AwarenessCuesTitle_Help>这些设置控制可能暴露僵尸活动的信件、声音和视觉提示。关闭它们只改变反馈，不改变僵尸行为。</AwarenessCuesTitle_Help>
+	<ShowZombieEventLetters_Help>显示或隐藏 Zombieland 自动事件警报，包括僵尸出现事件和喷吐者事件的 RimWorld 信件。</ShowZombieEventLetters_Help>
+	<PlayZombieEventSiren_Help>大型僵尸事件或喷吐者事件开始时，播放镜头位置的响亮警报声。</PlayZombieEventSiren_Help>
+	<PlaySpecialZombieAmbientSounds_Help>播放特殊僵尸发出的镜头环境音，例如坦克移动声和电流嗡鸣声。</PlaySpecialZombieAmbientSounds_Help>
+	<PlayZombieActionSounds_Help>播放僵尸行动音效，例如进食、追踪、狂暴、钻出地面、喷吐、毒性、重装和电击音效。</PlayZombieActionSounds_Help>
+	<PlayWallAndSabotageSounds_Help>播放僵尸与你基地互动的声音，例如推墙、攻击建筑、黑客破坏、开关和破坏尖叫声。</PlayWallAndSabotageSounds_Help>
+	<ShowZombieThoughtBubbles_Help>显示 Zombieland 的自定义僵尸思维气泡，例如脑子、进食、狂暴和黑客破坏。</ShowZombieThoughtBubbles_Help>
 	<ShowHealthBar_Help>由于僵尸无法被选中，你可以启用鼠标悬停血条。它显示整体健康和意识等级。</ShowHealthBar_Help>
 	<ShowZombieStats_Help>此项控制屏幕右侧僵尸信息的显示。</ShowZombieStats_Help>
 	<HighlightDangerousAreas_Help>当殖民者处于危险区域或离开安全区域时，此设置会高亮该区域。\n\n你可以使用普通区域管理器来管理危险区域。</HighlightDangerousAreas_Help>

@@ -181,6 +181,14 @@
 	<ZombiesDropBlood>Zombies hinterlassen Blut</ZombiesDropBlood>
 	<ZombiesBurnLonger>Zombies brennen länger</ZombiesBurnLonger>
 
+	<AwarenessCuesTitle>Hinweise auf Zombieaktivität</AwarenessCuesTitle>
+	<ShowZombieEventLetters>Zombie-Ereignismeldungen anzeigen</ShowZombieEventLetters>
+	<PlayZombieEventSiren>Zombie-Ereignissirene abspielen</PlayZombieEventSiren>
+	<PlaySpecialZombieAmbientSounds>Umgebungsgeräusche spezieller Zombies abspielen</PlaySpecialZombieAmbientSounds>
+	<PlayZombieActionSounds>Zombie-Aktionsgeräusche abspielen</PlayZombieActionSounds>
+	<PlayWallAndSabotageSounds>Mauer- und Sabotagegeräusche abspielen</PlayWallAndSabotageSounds>
+	<ShowZombieThoughtBubbles>Gedankenblasen von Zombies anzeigen</ShowZombieThoughtBubbles>
+
 	<ZombieActionsTitle>Aktionen</ZombieActionsTitle>
 	<ZombieSettingsReset>Einstellungen zurücksetzen</ZombieSettingsReset>
 	<FactoryResetButton>Werkseinstellung</FactoryResetButton>

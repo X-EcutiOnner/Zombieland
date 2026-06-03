@@ -750,7 +750,7 @@ namespace ZombieLand
 			if ((ticks % 30) != 0)
 				return;
 
-			if (Constants.USE_SOUND == false || Prefs.VolumeAmbient <= 0f)
+			if (ZombieAwarenessCues.ShouldPlaySpecialZombieAmbientSound() == false)
 			{
 				electricSustainer?.End();
 				electricSustainer = null;
@@ -785,7 +785,7 @@ namespace ZombieLand
 			if ((ticks % 30) != 0)
 				return;
 
-			if (Constants.USE_SOUND == false || Prefs.VolumeAmbient <= 0f)
+			if (ZombieAwarenessCues.ShouldPlaySpecialZombieAmbientSound() == false)
 			{
 				tankSustainer?.End();
 				tankSustainer = null;

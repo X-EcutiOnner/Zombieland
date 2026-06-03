@@ -117,6 +117,13 @@
 	<BetterZombieAvoidance_Help>Zombilerin etrafından daha iyi yol bulmaya yardımcı olmak için bu seçeneği açabilirsiniz. Zombieland, zombilerden kaçınmak için bir kolonistin yolunu sürekli ayarlar. Daha az mikro yönetim ve diğer kolonistleri kurtarmak için çok yararlıdır.</BetterZombieAvoidance_Help>
 	<ZombiesDropBlood_Help>Oyun hızı ayarı: bunu kapatın, zombiler artık kan bırakmaz.</ZombiesDropBlood_Help>
 	<ZombiesBurnLonger_Help>Daha ilginç oynanış için zombiler ateş alır ve etrafta yürürken normalden uzun yanar. Bilgisayarınız çok fazla ateşi kaldıramıyorsa kapatın.</ZombiesBurnLonger_Help>
+	<AwarenessCuesTitle_Help>Bu ayarlar zombi etkinliğini açığa çıkarabilecek mektupları, sesleri ve görsel ipuçlarını kontrol eder. Bunları kapatmak yalnızca geri bildirimi değiştirir, zombilerin davranışını değiştirmez.</AwarenessCuesTitle_Help>
+	<ShowZombieEventLetters_Help>Zombilerin ortaya çıkması ve tükürücü olayları için RimWorld mektupları dahil, otomatik Zombieland olay uyarılarını gösterir veya gizler.</ShowZombieEventLetters_Help>
+	<PlayZombieEventSiren_Help>Büyük bir zombi olayı veya tükürücü olayı başladığında kamerada yüksek siren çalar.</PlayZombieEventSiren_Help>
+	<PlaySpecialZombieAmbientSounds_Help>Tank hareketi ve elektrik uğultusu gibi özel zombilerin kamera odaklı ortam seslerini çalar.</PlaySpecialZombieAmbientSounds_Help>
+	<PlayZombieActionSounds_Help>Yeme, takip, öfke, yerden çıkma, tükürme, zehirli, tank ve elektrikli zombi sesleri gibi eylem seslerini çalar.</PlayZombieActionSounds_Help>
+	<PlayWallAndSabotageSounds_Help>Duvar itme, yapılara vurma, hackleme, anahtarlar ve sabotaj çığlıkları gibi zombilerin üssünüzle etkileşim seslerini çalar.</PlayWallAndSabotageSounds_Help>
+	<ShowZombieThoughtBubbles_Help>Beyin, yeme, öfke ve hackleme gibi zombi eylemleri için Zombieland'in özel düşünce balonlarını gösterir.</ShowZombieThoughtBubbles_Help>
 	<ShowHealthBar_Help>Zombiler seçilemediği için fareyle üzerlerine geldiğinizde sağlık çubuğu gösterebilirsiniz. Genel sağlığı ve bilinç seviyesini gösterir.</ShowHealthBar_Help>
 	<ShowZombieStats_Help>Ekranınızın sağ tarafındaki zombi bilgisinin görüntülenmesini kontrol eder.</ShowZombieStats_Help>
 	<HighlightDangerousAreas_Help>Bir kolonist tehlikeli bir alandaysa veya güvenli alandan çıkarsa bu ayar o alanı vurgular.\n\nTehlikeli alanları yönetmek için normal alan yöneticisini kullanabilirsiniz.</HighlightDangerousAreas_Help>

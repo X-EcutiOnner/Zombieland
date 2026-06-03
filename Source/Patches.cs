@@ -99,7 +99,7 @@ namespace ZombieLand
 
 				GenSpawn.Spawn(ThingMaker.MakeThing(CustomDefs.TarSmoke), cell, map);
 			}
-			if (playSound)
+			if (playSound && ZombieAwarenessCues.ShouldPlayZombieActionSound())
 				CustomDefs.TarSmokePop.PlayOneShot(SoundInfo.InMap(new TargetInfo(center, map)));
 		}
 
@@ -3548,8 +3548,11 @@ namespace ZombieLand
 
 						if (stage == 0)
 						{
-							var info = SoundInfo.InMap(zombie);
-							CustomDefs.ElectricShock.PlayOneShot(info);
+							if (ZombieAwarenessCues.ShouldPlayZombieActionSound())
+							{
+								var info = SoundInfo.InMap(zombie);
+								CustomDefs.ElectricShock.PlayOneShot(info);
+							}
 						}
 
 						if (stage == 0 || (stage >= 4 && stage <= 12) || stage == 16)

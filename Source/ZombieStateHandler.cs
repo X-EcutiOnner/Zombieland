@@ -158,7 +158,7 @@ namespace ZombieLand
 			zombie.wallPushStart = pos.ToVector3Shifted();
 			zombie.wallPushDestination = destination.ToVector3Shifted();
 			zombie.wallPushCooldown = ticks + GenDate.TicksPerHour;
-			if (Constants.USE_SOUND)
+			if (ZombieAwarenessCues.ShouldPlayWallAndSabotageSound())
 				CustomDefs.WallPushing.PlayOneShot(SoundInfo.InMap(new TargetInfo(pos, map)));
 			if (ZombieSettings.Values.dangerousSituationMessage && map.areaManager.Home[wallCell])
 				if ("DangerousSituation".RunThrottled(5f))
@@ -310,7 +310,7 @@ namespace ZombieLand
 			driver.destination = enemy.Position;
 
 			zombie.state = ZombieState.Tracking;
-			if (Constants.USE_SOUND && Prefs.VolumeAmbient > 0f)
+			if (ZombieAwarenessCues.ShouldPlayZombieActionSound() && Prefs.VolumeAmbient > 0f)
 			{
 				var info = SoundInfo.InMap(enemy);
 				CustomDefs.ZombieHit.PlayOneShot(info);
@@ -572,7 +572,7 @@ namespace ZombieLand
 
 			driver.destination = building.Position;
 
-			if (Constants.USE_SOUND && Prefs.VolumeAmbient > 0f)
+			if (ZombieAwarenessCues.ShouldPlayWallAndSabotageSound() && Prefs.VolumeAmbient > 0f)
 			{
 				var info = SoundInfo.InMap(building);
 				CustomDefs.ZombieHit.PlayOneShot(info);
@@ -1095,7 +1095,7 @@ namespace ZombieLand
 
 		static void CastEatingSound(Zombie zombie)
 		{
-			if (Constants.USE_SOUND && Prefs.VolumeAmbient > 0f)
+			if (ZombieAwarenessCues.ShouldPlayZombieActionSound() && Prefs.VolumeAmbient > 0f)
 			{
 				var info = SoundInfo.InMap(zombie);
 				CustomDefs.ZombieEating.PlayOneShot(info);
@@ -1106,7 +1106,7 @@ namespace ZombieLand
 		{
 			Tools.CastThoughtBubble(pawn, Constants.BRRAINZ);
 
-			if (Constants.USE_SOUND && Prefs.VolumeAmbient > 0f)
+			if (ZombieAwarenessCues.ShouldPlayZombieActionSound() && Prefs.VolumeAmbient > 0f)
 				if ("CastBrainzThought".RunThrottled(2f))
 				{
 					var info = SoundInfo.InMap(pawn);
@@ -1188,7 +1188,7 @@ namespace ZombieLand
 			zombie.raging = GenTicks.TicksAbs + (int)(GenDate.TicksPerHour * Rand.Range(min, max));
 			Tools.CastThoughtBubble(zombie, Constants.RAGING);
 
-			if (Constants.USE_SOUND && Prefs.VolumeAmbient > 0f)
+			if (ZombieAwarenessCues.ShouldPlayZombieActionSound() && Prefs.VolumeAmbient > 0f)
 				if ("StartRage".RunThrottled(3f))
 				{
 					var info = SoundInfo.InMap(zombie);

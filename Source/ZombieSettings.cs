@@ -209,6 +209,12 @@ namespace ZombieLand
 		public ZombieInstinct zombieInstinct = ZombieInstinct.Normal;
 		public bool useCustomTextures = true;
 		public bool playCreepyAmbientSound = true;
+		public bool showZombieEventLetters = true;
+		public bool playZombieEventSiren = true;
+		public bool playSpecialZombieAmbientSounds = true;
+		public bool playZombieActionSounds = true;
+		public bool playWallAndSabotageSounds = true;
+		public bool showZombieThoughtBubbles = true;
 		public bool zombiesEatDowned = true;
 		public bool zombiesEatCorpses = true;
 		public float zombieBiteInfectionChance = 0.5f;

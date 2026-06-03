@@ -181,6 +181,14 @@
 	<ZombiesDropBlood>丧尸流血</ZombiesDropBlood>
 	<ZombiesBurnLonger>僵尸燃烧时间更长</ZombiesBurnLonger>
 
+	<AwarenessCuesTitle>感知提示</AwarenessCuesTitle>
+	<ShowZombieEventLetters>显示僵尸事件警报</ShowZombieEventLetters>
+	<PlayZombieEventSiren>播放僵尸事件警报声</PlayZombieEventSiren>
+	<PlaySpecialZombieAmbientSounds>播放特殊僵尸环境音</PlaySpecialZombieAmbientSounds>
+	<PlayZombieActionSounds>播放僵尸行动音效</PlayZombieActionSounds>
+	<PlayWallAndSabotageSounds>播放撞墙和破坏音效</PlayWallAndSabotageSounds>
+	<ShowZombieThoughtBubbles>显示僵尸思维气泡</ShowZombieThoughtBubbles>
+
 	<ZombieActionsTitle>操作</ZombieActionsTitle>
 	<ZombieSettingsReset>恢复默认设置</ZombieSettingsReset>
 	<FactoryResetButton>工厂重置</FactoryResetButton>

@@ -117,6 +117,13 @@
 	<BetterZombieAvoidance_Help>Um bessere Wege um Zombies zu ermöglichen, können Sie diese Option aktivieren. Zombieland passt den Weg eines Kolonisten ständig an, um Zombies zu vermeiden. Sehr nützlich für weniger Mikromanagement und zum Retten anderer Kolonisten.</BetterZombieAvoidance_Help>
 	<ZombiesDropBlood_Help>Spielgeschwindigkeitsanpassung: Schalten Sie dies aus, und Zombies hinterlassen kein Blut mehr.</ZombiesDropBlood_Help>
 	<ZombiesBurnLonger_Help>Für interessanteres Gameplay fangen Zombies Feuer und brennen länger, während sie herumlaufen. Schalten Sie es aus, wenn Ihr Computer zu langsam für viel Feuer ist.</ZombiesBurnLonger_Help>
+	<AwarenessCuesTitle_Help>Diese Einstellungen steuern Briefe, Geräusche und visuelle Hinweise, die Zombieaktivität verraten können. Das Abschalten ändert nur die Rückmeldung, nicht das Verhalten der Zombies.</AwarenessCuesTitle_Help>
+	<ShowZombieEventLetters_Help>Zeigt oder verbirgt automatische Zombieland-Ereignismeldungen, einschließlich RimWorld-Briefen für Zombie-Ausbrüche und Spucker-Ereignisse.</ShowZombieEventLetters_Help>
+	<PlayZombieEventSiren_Help>Spielt die laute Sirene an der Kamera ab, wenn ein großes Zombie-Ereignis oder Spucker-Ereignis beginnt.</PlayZombieEventSiren_Help>
+	<PlaySpecialZombieAmbientSounds_Help>Spielt kamerabezogene Umgebungsgeräusche spezieller Zombies ab, etwa Tank-Bewegung und elektrisches Brummen.</PlaySpecialZombieAmbientSounds_Help>
+	<PlayZombieActionSounds_Help>Spielt Zombie-Aktionsgeräusche wie Fressen, Verfolgen, Raserei, Ausgraben, Spucken, Gift-, Tank- und Elektrifizierer-Geräusche ab.</PlayZombieActionSounds_Help>
+	<PlayWallAndSabotageSounds_Help>Spielt Geräusche von Zombies ab, die mit Ihrer Basis interagieren, etwa Mauerschieben, Gebäudeschläge, Hacking, Schalter und Sabotageschreie.</PlayWallAndSabotageSounds_Help>
+	<ShowZombieThoughtBubbles_Help>Zeigt die eigenen Zombieland-Gedankenblasen für Zombieaktionen wie Gehirne, Fressen, Raserei und Hacking.</ShowZombieThoughtBubbles_Help>
 	<ShowHealthBar_Help>Da Zombies nicht ausgewählt werden können, können Sie eine Gesundheitsleiste beim Überfahren mit der Maus aktivieren. Sie zeigt die Gesamtgesundheit und das Bewusstseinsniveau.</ShowHealthBar_Help>
 	<ShowZombieStats_Help>Steuert die Anzeige der Zombieinformationen auf der rechten Bildschirmseite.</ShowZombieStats_Help>
 	<HighlightDangerousAreas_Help>Wenn ein Kolonist in einem gefährlichen Bereich ist oder einen sicheren Bereich verlässt, hebt diese Einstellung diesen Bereich hervor.\n\nSie können den normalen Zonenmanager verwenden, um gefährliche Bereiche zu verwalten.</HighlightDangerousAreas_Help>

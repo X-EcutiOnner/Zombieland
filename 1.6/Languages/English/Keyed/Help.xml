@@ -146,6 +146,13 @@
 	<ReplaceTwinkie_Help>Zombieland the movie has a meme about twinkies. In honor of the movie, the mod changes the visual appearance of survival meals to a twinkie.</ReplaceTwinkie_Help>
 	<ZombiesTriggerDangerMusic_Help>Normally RimWorld plays specific danger music when there is a threat on the map. Since zombies are most likely permanent on the map, this option turns this feature off.</ZombiesTriggerDangerMusic_Help>
 	<PlayCreepyAmbientSound_Help>No zombie theme without some creepy ambient sounds. At night, when all zombies drift towards your base, this will play some spooky sounds.</PlayCreepyAmbientSound_Help>
+	<AwarenessCuesTitle_Help>These settings control letters, sounds, and visual hints that can reveal zombie activity. Turning them off changes feedback only, not what zombies do.</AwarenessCuesTitle_Help>
+	<ShowZombieEventLetters_Help>Shows or hides automatic Zombieland event alerts, including RimWorld letters for zombie rising events and spitter events.</ShowZombieEventLetters_Help>
+	<PlayZombieEventSiren_Help>Plays the loud on-camera siren when a large zombie event or spitter event starts.</PlayZombieEventSiren_Help>
+	<PlaySpecialZombieAmbientSounds_Help>Plays camera-based ambient sounds from special zombies, such as tank movement and electric humming.</PlaySpecialZombieAmbientSounds_Help>
+	<PlayZombieActionSounds_Help>Plays zombie action sounds such as eating, tracking, rage, dig-out, spitter, toxic, tanky, and electrifier sounds.</PlayZombieActionSounds_Help>
+	<PlayWallAndSabotageSounds_Help>Plays sounds from zombies interacting with your base, such as wall pushing, building hits, hacking, switches, and sabotage screams.</PlayWallAndSabotageSounds_Help>
+	<ShowZombieThoughtBubbles_Help>Shows Zombieland's custom thought bubbles for zombie actions such as brains, eating, rage, and hacking.</ShowZombieThoughtBubbles_Help>
 	<BetterZombieAvoidance_Help>To assist you with better pathing around any zombies, you can turn this option on. Zombieland will constantly adjust the path of a colonist to avoid zombies. Very useful for less micro and for rescuing other colonists.</BetterZombieAvoidance_Help>
 	<ZombiesDropBlood_Help>Game speed tweak: turn this off and zombies do not drop blood anymore.</ZombiesDropBlood_Help>
 	<ZombiesBurnLonger_Help>To give you more interesting gameplay, zombies will catch fire and burn longer than usual while walking around. Turn off if your computer is too slow to handle a lot of fire.</ZombiesBurnLonger_Help>

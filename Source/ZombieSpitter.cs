@@ -75,11 +75,14 @@ namespace ZombieLand
 
 			spitter.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Spitter));
 
-			var headline = "LetterLabelZombiesSpitter".Translate();
-			var text = "ZombiesSpitter".Translate();
-			Find.LetterStack.ReceiveLetter(headline, text, LetterDefOf.ThreatSmall, new GlobalTargetInfo(cell, map));
+			if (ZombieAwarenessCues.ShouldShowZombieEventLetter())
+			{
+				var headline = "LetterLabelZombiesSpitter".Translate();
+				var text = "ZombiesSpitter".Translate();
+				Find.LetterStack.ReceiveLetter(headline, text, LetterDefOf.ThreatSmall, new GlobalTargetInfo(cell, map));
+			}
 
-			if (Constants.USE_SOUND && Prefs.VolumeAmbient > 0f)
+			if (ZombieAwarenessCues.ShouldPlayZombieEventSiren())
 				CustomDefs.ZombiesRising.PlayOneShotOnCamera(null);
 		}
 

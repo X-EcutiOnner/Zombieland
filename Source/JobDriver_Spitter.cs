@@ -107,7 +107,8 @@ namespace ZombieLand
 			var target = TryFindNewTarget();
 			if (target.IsValid && (target.x != 0 || target.z != 0))
 			{
-				CustomDefs.BallSpit.PlayOneShot(new TargetInfo(spitter.Position, spitter.Map, false));
+				if (ZombieAwarenessCues.ShouldPlayZombieActionSound())
+					CustomDefs.BallSpit.PlayOneShot(new TargetInfo(spitter.Position, spitter.Map, false));
 				var projectile = (Projectile)GenSpawn.Spawn(CustomDefs.ZombieBall, spitter.Position, spitter.Map, WipeMode.Vanish);
 				projectile.Launch(spitter, spitter.DrawPos + new Vector3(0, 0, 0.5f), target, target, ProjectileHitFlags.IntendedTarget);
 				return true;
@@ -160,7 +161,8 @@ namespace ZombieLand
 					if (spitter.moveState != currentMoveState)
 					{
 						spitter.moveState = currentMoveState;
-						CustomDefs.SpitterMove.PlayOneShot(new TargetInfo(spitter.Position, spitter.Map, false));
+						if (ZombieAwarenessCues.ShouldPlayZombieActionSound())
+							CustomDefs.SpitterMove.PlayOneShot(new TargetInfo(spitter.Position, spitter.Map, false));
 					}
 					break;
 

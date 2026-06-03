@@ -181,6 +181,14 @@
 	<ZombiesDropBlood>Зомби бросают кровь</ZombiesDropBlood>
 	<ZombiesBurnLonger>Зомби горят дольше</ZombiesBurnLonger>
 
+	<AwarenessCuesTitle>Подсказки активности зомби</AwarenessCuesTitle>
+	<ShowZombieEventLetters>Показывать оповещения о событиях зомби</ShowZombieEventLetters>
+	<PlayZombieEventSiren>Проигрывать сирену событий зомби</PlayZombieEventSiren>
+	<PlaySpecialZombieAmbientSounds>Проигрывать фоновые звуки особых зомби</PlaySpecialZombieAmbientSounds>
+	<PlayZombieActionSounds>Проигрывать звуки действий зомби</PlayZombieActionSounds>
+	<PlayWallAndSabotageSounds>Проигрывать звуки стен и саботажа</PlayWallAndSabotageSounds>
+	<ShowZombieThoughtBubbles>Показывать облачка мыслей зомби</ShowZombieThoughtBubbles>
+
 	<ZombieActionsTitle>команды</ZombieActionsTitle>
 	<ZombieSettingsReset>Восстановить настройки по умолчанию</ZombieSettingsReset>
 	<FactoryResetButton>Заводской сброс</FactoryResetButton>

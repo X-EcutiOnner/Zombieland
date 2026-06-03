@@ -8,7 +8,7 @@ namespace ZombieLand
 {
 	static class SettingsDialog
 	{
-		public static readonly float totalEstimatedHeight = 3880f;
+		public static readonly float totalEstimatedHeight = 4020f;
 		public static Vector2 scrollPosition = Vector2.zero;
 
 		public static void DoWindowContentsInternal(ref SettingsGroup settings, ref List<SettingsKeyFrame> settingsOverTime, Rect inRect)
@@ -309,21 +309,34 @@ namespace ZombieLand
 					list.Gap(28f);
 				}
 
+				// Awareness cues
+				if (DialogExtensions.Section<string>(":AwarenessCuesTitle", ":ShowZombieEventLetters", ":PlayZombieEventSiren", ":PlaySpecialZombieAmbientSounds", ":PlayZombieActionSounds", ":PlayWallAndSabotageSounds", ":ShowZombieThoughtBubbles", ":PlayCreepyAmbientSound", ":ShowHealthBar", ":ShowZombieStats", ":HighlightDangerousAreas", ":DangerousSituationMessage"))
+				{
+					list.Dialog_Label("AwarenessCuesTitle", headerColor);
+					list.Dialog_Checkbox("ShowZombieEventLetters", ref settings.showZombieEventLetters);
+					list.Dialog_Checkbox("PlayZombieEventSiren", ref settings.playZombieEventSiren);
+					list.Dialog_Checkbox("PlaySpecialZombieAmbientSounds", ref settings.playSpecialZombieAmbientSounds);
+					list.Dialog_Checkbox("PlayZombieActionSounds", ref settings.playZombieActionSounds);
+					list.Dialog_Checkbox("PlayWallAndSabotageSounds", ref settings.playWallAndSabotageSounds);
+					list.Dialog_Checkbox("ShowZombieThoughtBubbles", ref settings.showZombieThoughtBubbles);
+					list.Dialog_Checkbox("PlayCreepyAmbientSound", ref settings.playCreepyAmbientSound);
+					list.Dialog_Checkbox("ShowHealthBar", ref settings.showHealthBar);
+					list.Dialog_Checkbox("ShowZombieStats", ref settings.showZombieStats);
+					list.Dialog_Checkbox("HighlightDangerousAreas", ref settings.highlightDangerousAreas);
+					list.Dialog_Checkbox("DangerousSituationMessage", ref settings.dangerousSituationMessage);
+					list.Gap(30f);
+				}
+
 				// Miscellaneous
-				if (DialogExtensions.Section<string>(":ZombieMiscTitle", ":UseCustomTextures", ":ReplaceTwinkie", ":PlayCreepyAmbientSound", ":BetterZombieAvoidance", ":ZombiesDropBlood", ":ZombiesBurnLonger", ":ShowHealthBar", ":ShowZombieStats", ":HighlightDangerousAreas", ":DisableRandomApparel", ":DangerousSituationMessage", SoSTools.isInstalled ? ":FloatingZombiesInSOS2" : ""))
+				if (DialogExtensions.Section<string>(":ZombieMiscTitle", ":UseCustomTextures", ":ReplaceTwinkie", ":BetterZombieAvoidance", ":ZombiesDropBlood", ":ZombiesBurnLonger", ":DisableRandomApparel", SoSTools.isInstalled ? ":FloatingZombiesInSOS2" : ""))
 				{
 					list.Dialog_Label("ZombieMiscTitle", headerColor);
 					list.Dialog_Checkbox("UseCustomTextures", ref settings.useCustomTextures);
 					list.Dialog_Checkbox("ReplaceTwinkie", ref settings.replaceTwinkie);
-					list.Dialog_Checkbox("PlayCreepyAmbientSound", ref settings.playCreepyAmbientSound);
 					list.Dialog_Checkbox("BetterZombieAvoidance", ref settings.betterZombieAvoidance);
 					list.Dialog_Checkbox("ZombiesDropBlood", ref settings.zombiesDropBlood);
 					list.Dialog_Checkbox("ZombiesBurnLonger", ref settings.zombiesBurnLonger);
-					list.Dialog_Checkbox("ShowHealthBar", ref settings.showHealthBar);
-					list.Dialog_Checkbox("ShowZombieStats", ref settings.showZombieStats);
-					list.Dialog_Checkbox("HighlightDangerousAreas", ref settings.highlightDangerousAreas);
 					list.Dialog_Checkbox("DisableRandomApparel", ref settings.disableRandomApparel);
-					list.Dialog_Checkbox("DangerousSituationMessage", ref settings.dangerousSituationMessage);
 					if (SoSTools.isInstalled)
 						list.Dialog_Checkbox("FloatingZombiesInSOS2", ref settings.floatingZombies);
 					else

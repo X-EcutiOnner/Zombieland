@@ -181,6 +181,14 @@
 	<ZombiesDropBlood>Zombies drop blood</ZombiesDropBlood>
 	<ZombiesBurnLonger>Zombies burn longer</ZombiesBurnLonger>
 
+	<AwarenessCuesTitle>Awareness cues</AwarenessCuesTitle>
+	<ShowZombieEventLetters>Show zombie event alerts</ShowZombieEventLetters>
+	<PlayZombieEventSiren>Play zombie event siren</PlayZombieEventSiren>
+	<PlaySpecialZombieAmbientSounds>Play special zombie ambient sounds</PlaySpecialZombieAmbientSounds>
+	<PlayZombieActionSounds>Play zombie action sounds</PlayZombieActionSounds>
+	<PlayWallAndSabotageSounds>Play wall and sabotage sounds</PlayWallAndSabotageSounds>
+	<ShowZombieThoughtBubbles>Show zombie thought bubbles</ShowZombieThoughtBubbles>
+
 	<ZombieActionsTitle>Actions</ZombieActionsTitle>
 	<ZombieSettingsReset>Restore default settings</ZombieSettingsReset>
 	<FactoryResetButton>Factory reset</FactoryResetButton>
