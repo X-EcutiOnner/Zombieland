@@ -97,7 +97,7 @@ namespace ZombieLand
 			running = true;
 			workerThread = new Thread(() =>
 			{
-			EndlessLoop:
+				EndlessLoop:
 
 				try
 				{

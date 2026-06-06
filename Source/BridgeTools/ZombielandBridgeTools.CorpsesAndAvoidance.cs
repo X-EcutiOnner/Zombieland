@@ -1778,275 +1778,275 @@ namespace ZombieLand
 				};
 			}
 			finally
-				{
-					ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
-				}
-			}
-
-				class ProbePathGridCustomizer : PathRequest.IPathGridCustomizer, IDisposable
-				{
-					NativeArray<ushort> offsets;
-
-				public ProbePathGridCustomizer(Map map)
-				{
-					offsets = new NativeArray<ushort>(map.cellIndices.NumGridCells, Allocator.Persistent);
-				}
-
-				public NativeArray<ushort> GetOffsetGrid()
-				{
-					return offsets;
-				}
-
-				public void Dispose()
-				{
-					if (offsets.IsCreated)
-						offsets.Dispose();
-				}
-			}
-
-			static object VerifyAsyncAvoidGridPathRequest(Map map, Pawn actor, IntVec3 destination)
 			{
-				var customizerField = typeof(PathRequest).GetField("customizer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-				if (customizerField == null)
-				{
-					return new
-					{
-						success = false,
-						error = "PathRequest.customizer field was not found."
-					};
-				}
+				ZombieSettings.Values.betterZombieAvoidance = oldBetterAvoidance;
+			}
+		}
 
-				PathRequest injectedResolveRequest = null;
-				PathRequest injectedDisposeRequest = null;
-				PathRequest existingRequest = null;
-				ProbePathGridCustomizer probeCustomizer = null;
-				try
-				{
-					var traverseParms = TraverseParms.For(actor, Danger.Deadly, TraverseMode.ByPawn);
-					injectedResolveRequest = map.pathFinder.CreateRequest(actor.Position, destination, null, traverseParms, null, PathEndMode.OnCell, actor, null);
-					var injectedResolveCustomizer = customizerField.GetValue(injectedResolveRequest);
-					var injectedResolveType = injectedResolveCustomizer?.GetType().Name;
-					var injectedResolveBefore = IsCustomizerGridCreated(injectedResolveCustomizer);
-					injectedResolveRequest.Resolve(null);
-					var injectedResolveAfter = IsCustomizerGridCreated(injectedResolveCustomizer);
-					injectedResolveRequest = null;
+		class ProbePathGridCustomizer : PathRequest.IPathGridCustomizer, IDisposable
+		{
+			NativeArray<ushort> offsets;
 
-					injectedDisposeRequest = map.pathFinder.CreateRequest(actor.Position, destination, null, traverseParms, null, PathEndMode.OnCell, actor, null);
-					var injectedDisposeCustomizer = customizerField.GetValue(injectedDisposeRequest);
-					var injectedDisposeType = injectedDisposeCustomizer?.GetType().Name;
-					var injectedDisposeBefore = IsCustomizerGridCreated(injectedDisposeCustomizer);
-					injectedDisposeRequest.Dispose();
-					var injectedDisposeAfter = IsCustomizerGridCreated(injectedDisposeCustomizer);
-					injectedDisposeRequest = null;
-
-					probeCustomizer = new ProbePathGridCustomizer(map);
-					existingRequest = map.pathFinder.CreateRequest(actor.Position, destination, null, traverseParms, null, PathEndMode.OnCell, actor, probeCustomizer);
-					var existingCustomizer = customizerField.GetValue(existingRequest);
-					var existingPreserved = ReferenceEquals(existingCustomizer, probeCustomizer);
-					existingRequest.Dispose();
-					existingRequest = null;
-					var probeStillCreated = probeCustomizer.GetOffsetGrid().IsCreated;
-					probeCustomizer.Dispose();
-					var probeDisposedManually = probeCustomizer.GetOffsetGrid().IsCreated == false;
-					probeCustomizer = null;
-
-					var resolveInjected = injectedResolveCustomizer != null && injectedResolveType == "ZombieAvoidGridPathCustomizer";
-					var disposeInjected = injectedDisposeCustomizer != null && injectedDisposeType == "ZombieAvoidGridPathCustomizer";
-					return new
-					{
-						success = resolveInjected
-							&& injectedResolveBefore
-							&& injectedResolveAfter == false
-							&& disposeInjected
-							&& injectedDisposeBefore
-							&& injectedDisposeAfter == false
-							&& existingPreserved
-							&& probeStillCreated
-							&& probeDisposedManually,
-						resolve = new
-						{
-							injected = resolveInjected,
-							customizerType = injectedResolveType,
-							offsetGridCreatedBefore = injectedResolveBefore,
-							offsetGridCreatedAfterResolve = injectedResolveAfter
-						},
-						dispose = new
-						{
-							injected = disposeInjected,
-							customizerType = injectedDisposeType,
-							offsetGridCreatedBefore = injectedDisposeBefore,
-							offsetGridCreatedAfterDispose = injectedDisposeAfter
-						},
-						existing = new
-						{
-							preserved = existingPreserved,
-							probeStillCreatedAfterRequestDispose = probeStillCreated,
-							probeDisposedManually
-						}
-					};
-				}
-				finally
-				{
-					injectedResolveRequest?.Dispose();
-					injectedDisposeRequest?.Dispose();
-					existingRequest?.Dispose();
-					probeCustomizer?.Dispose();
-				}
+			public ProbePathGridCustomizer(Map map)
+			{
+				offsets = new NativeArray<ushort>(map.cellIndices.NumGridCells, Allocator.Persistent);
 			}
 
-			static object VerifyPawnPathFollowerStartPathPatch(Map map, IntVec3 root)
+			public NativeArray<ushort> GetOffsetGrid()
 			{
-				var patchOwners = PatchOwners(typeof(Pawn_PathFollower), nameof(Pawn_PathFollower.StartPath));
-				var helperProbe = VerifyStartPathHelperBranches(map, root);
-				var downedPosture = VerifyStartPathDownedZombiePosture(map, root + new IntVec3(6, 0, 0));
+				return offsets;
+			}
 
+			public void Dispose()
+			{
+				if (offsets.IsCreated)
+					offsets.Dispose();
+			}
+		}
+
+		static object VerifyAsyncAvoidGridPathRequest(Map map, Pawn actor, IntVec3 destination)
+		{
+			var customizerField = typeof(PathRequest).GetField("customizer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+			if (customizerField == null)
+			{
 				return new
 				{
-					success = patchOwners.Contains("net.pardeike.zombieland")
-						&& ObjectSuccess(helperProbe)
-						&& ObjectSuccess(downedPosture),
-					patchOwners,
-					helperProbe,
-					downedPosture
+					success = false,
+					error = "PathRequest.customizer field was not found."
 				};
 			}
 
-			static object VerifyStartPathHelperBranches(Map map, IntVec3 root)
+			PathRequest injectedResolveRequest = null;
+			PathRequest injectedDisposeRequest = null;
+			PathRequest existingRequest = null;
+			ProbePathGridCustomizer probeCustomizer = null;
+			try
 			{
-				var patchType = typeof(Patches).GetNestedType("Pawn_PathFollower_StartPath_Patch", BindingFlags.NonPublic);
-				var helper = patchType?.GetMethod("ThingDestroyedAndNotZombie", BindingFlags.Static | BindingFlags.NonPublic);
-				if (helper == null)
-				{
-					return new
-					{
-						success = false,
-						error = "Could not reflect Pawn_PathFollower_StartPath_Patch.ThingDestroyedAndNotZombie."
-					};
-				}
+				var traverseParms = TraverseParms.For(actor, Danger.Deadly, TraverseMode.ByPawn);
+				injectedResolveRequest = map.pathFinder.CreateRequest(actor.Position, destination, null, traverseParms, null, PathEndMode.OnCell, actor, null);
+				var injectedResolveCustomizer = customizerField.GetValue(injectedResolveRequest);
+				var injectedResolveType = injectedResolveCustomizer?.GetType().Name;
+				var injectedResolveBefore = IsCustomizerGridCreated(injectedResolveCustomizer);
+				injectedResolveRequest.Resolve(null);
+				var injectedResolveAfter = IsCustomizerGridCreated(injectedResolveCustomizer);
+				injectedResolveRequest = null;
 
-				if (TryFindClearSpawnCell(map, root, 12f, out var zombieCell, out var zombieSpawnError) == false)
-					return zombieSpawnError;
-				if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(3, 0, 0), 12f, out var colonistCell, out var colonistSpawnError) == false)
-					return colonistSpawnError;
-				if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(-3, 0, 0), 12f, out var actorCell, out var actorSpawnError) == false)
-					return actorSpawnError;
+				injectedDisposeRequest = map.pathFinder.CreateRequest(actor.Position, destination, null, traverseParms, null, PathEndMode.OnCell, actor, null);
+				var injectedDisposeCustomizer = customizerField.GetValue(injectedDisposeRequest);
+				var injectedDisposeType = injectedDisposeCustomizer?.GetType().Name;
+				var injectedDisposeBefore = IsCustomizerGridCreated(injectedDisposeCustomizer);
+				injectedDisposeRequest.Dispose();
+				var injectedDisposeAfter = IsCustomizerGridCreated(injectedDisposeCustomizer);
+				injectedDisposeRequest = null;
 
-				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
-				var colonist = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-				var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-				GenSpawn.Spawn(colonist, colonistCell, map, Rot4.South);
-				GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
-				DisablePawnWork(colonist);
-				DisablePawnWork(actor);
-				if (zombie == null)
-				{
-					return new
-					{
-						success = false,
-						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
-						error = "ZombieGenerator.SpawnZombie returned no StartPath helper zombie."
-					};
-				}
+				probeCustomizer = new ProbePathGridCustomizer(map);
+				existingRequest = map.pathFinder.CreateRequest(actor.Position, destination, null, traverseParms, null, PathEndMode.OnCell, actor, probeCustomizer);
+				var existingCustomizer = customizerField.GetValue(existingRequest);
+				var existingPreserved = ReferenceEquals(existingCustomizer, probeCustomizer);
+				existingRequest.Dispose();
+				existingRequest = null;
+				var probeStillCreated = probeCustomizer.GetOffsetGrid().IsCreated;
+				probeCustomizer.Dispose();
+				var probeDisposedManually = probeCustomizer.GetOffsetGrid().IsCreated == false;
+				probeCustomizer = null;
 
-				var zombieTarget = new LocalTargetInfo(zombie);
-				var colonistTarget = new LocalTargetInfo(colonist);
-				zombie.Destroy(DestroyMode.Vanish);
-				colonist.Destroy(DestroyMode.Vanish);
-
-				var destroyedZombieBlocked = (bool)helper.Invoke(null, new object[] { zombieTarget });
-				var destroyedColonistBlocked = (bool)helper.Invoke(null, new object[] { colonistTarget });
-				actor.pather.StartPath(zombieTarget, PathEndMode.ClosestTouch);
-				var actorMovingAfterDestroyedZombieTarget = actor.pather.Moving;
-
+				var resolveInjected = injectedResolveCustomizer != null && injectedResolveType == "ZombieAvoidGridPathCustomizer";
+				var disposeInjected = injectedDisposeCustomizer != null && injectedDisposeType == "ZombieAvoidGridPathCustomizer";
 				return new
 				{
-					success = destroyedZombieBlocked == false && destroyedColonistBlocked,
-					destroyedZombie = new
+					success = resolveInjected
+						&& injectedResolveBefore
+						&& injectedResolveAfter == false
+						&& disposeInjected
+						&& injectedDisposeBefore
+						&& injectedDisposeAfter == false
+						&& existingPreserved
+						&& probeStillCreated
+						&& probeDisposedManually,
+					resolve = new
 					{
-						thingDestroyed = zombieTarget.ThingDestroyed,
-						helperBlocked = destroyedZombieBlocked
+						injected = resolveInjected,
+						customizerType = injectedResolveType,
+						offsetGridCreatedBefore = injectedResolveBefore,
+						offsetGridCreatedAfterResolve = injectedResolveAfter
 					},
-					destroyedColonist = new
+					dispose = new
 					{
-						thingDestroyed = colonistTarget.ThingDestroyed,
-						helperBlocked = destroyedColonistBlocked
+						injected = disposeInjected,
+						customizerType = injectedDisposeType,
+						offsetGridCreatedBefore = injectedDisposeBefore,
+						offsetGridCreatedAfterDispose = injectedDisposeAfter
 					},
-					realStartPathToDestroyedZombieTarget = new
+					existing = new
 					{
-						called = true,
-						actorMovingAfterDestroyedZombieTarget
+						preserved = existingPreserved,
+						probeStillCreatedAfterRequestDispose = probeStillCreated,
+						probeDisposedManually
 					}
 				};
 			}
-
-			static object VerifyStartPathDownedZombiePosture(Map map, IntVec3 root)
+			finally
 			{
-				if (TryFindClearSpawnCell(map, root, 12f, out var zombieCell, out var zombieSpawnError) == false)
-					return zombieSpawnError;
-				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
-				if (zombie == null)
+				injectedResolveRequest?.Dispose();
+				injectedDisposeRequest?.Dispose();
+				existingRequest?.Dispose();
+				probeCustomizer?.Dispose();
+			}
+		}
+
+		static object VerifyPawnPathFollowerStartPathPatch(Map map, IntVec3 root)
+		{
+			var patchOwners = PatchOwners(typeof(Pawn_PathFollower), nameof(Pawn_PathFollower.StartPath));
+			var helperProbe = VerifyStartPathHelperBranches(map, root);
+			var downedPosture = VerifyStartPathDownedZombiePosture(map, root + new IntVec3(6, 0, 0));
+
+			return new
+			{
+				success = patchOwners.Contains("net.pardeike.zombieland")
+					&& ObjectSuccess(helperProbe)
+					&& ObjectSuccess(downedPosture),
+				patchOwners,
+				helperProbe,
+				downedPosture
+			};
+		}
+
+		static object VerifyStartPathHelperBranches(Map map, IntVec3 root)
+		{
+			var patchType = typeof(Patches).GetNestedType("Pawn_PathFollower_StartPath_Patch", BindingFlags.NonPublic);
+			var helper = patchType?.GetMethod("ThingDestroyedAndNotZombie", BindingFlags.Static | BindingFlags.NonPublic);
+			if (helper == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not reflect Pawn_PathFollower_StartPath_Patch.ThingDestroyedAndNotZombie."
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, root, 12f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+			if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(3, 0, 0), 12f, out var colonistCell, out var colonistSpawnError) == false)
+				return colonistSpawnError;
+			if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(-3, 0, 0), 12f, out var actorCell, out var actorSpawnError) == false)
+				return actorSpawnError;
+
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			var colonist = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var actor = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(colonist, colonistCell, map, Rot4.South);
+			GenSpawn.Spawn(actor, actorCell, map, Rot4.South);
+			DisablePawnWork(colonist);
+			DisablePawnWork(actor);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					error = "ZombieGenerator.SpawnZombie returned no StartPath helper zombie."
+				};
+			}
+
+			var zombieTarget = new LocalTargetInfo(zombie);
+			var colonistTarget = new LocalTargetInfo(colonist);
+			zombie.Destroy(DestroyMode.Vanish);
+			colonist.Destroy(DestroyMode.Vanish);
+
+			var destroyedZombieBlocked = (bool)helper.Invoke(null, new object[] { zombieTarget });
+			var destroyedColonistBlocked = (bool)helper.Invoke(null, new object[] { colonistTarget });
+			actor.pather.StartPath(zombieTarget, PathEndMode.ClosestTouch);
+			var actorMovingAfterDestroyedZombieTarget = actor.pather.Moving;
+
+			return new
+			{
+				success = destroyedZombieBlocked == false && destroyedColonistBlocked,
+				destroyedZombie = new
+				{
+					thingDestroyed = zombieTarget.ThingDestroyed,
+					helperBlocked = destroyedZombieBlocked
+				},
+				destroyedColonist = new
+				{
+					thingDestroyed = colonistTarget.ThingDestroyed,
+					helperBlocked = destroyedColonistBlocked
+				},
+				realStartPathToDestroyedZombieTarget = new
+				{
+					called = true,
+					actorMovingAfterDestroyedZombieTarget
+				}
+			};
+		}
+
+		static object VerifyStartPathDownedZombiePosture(Map map, IntVec3 root)
+		{
+			if (TryFindClearSpawnCell(map, root, 12f, out var zombieCell, out var zombieSpawnError) == false)
+				return zombieSpawnError;
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
+					error = "ZombieGenerator.SpawnZombie returned no StartPath posture zombie."
+				};
+			}
+			if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(6, 0, 0), 16f, out var destination, out var destinationError) == false)
+				return destinationError;
+
+			var oldDoubleTapRequired = ZombieSettings.Values.doubleTapRequired;
+			try
+			{
+				ZombieSettings.Values.doubleTapRequired = true;
+				if (TryMakeDownedForCombat(zombie, out var downedError) == false)
 				{
 					return new
 					{
 						success = false,
-						zombieCell = ZombieRuntimeActions.DescribeCell(zombieCell),
-						error = "ZombieGenerator.SpawnZombie returned no StartPath posture zombie."
-					};
-				}
-				if (TryFindClearSpawnCell(map, zombieCell + new IntVec3(6, 0, 0), 16f, out var destination, out var destinationError) == false)
-					return destinationError;
-
-				var oldDoubleTapRequired = ZombieSettings.Values.doubleTapRequired;
-				try
-				{
-					ZombieSettings.Values.doubleTapRequired = true;
-					if (TryMakeDownedForCombat(zombie, out var downedError) == false)
-					{
-						return new
-						{
-							success = false,
-							zombie = DescribeZombie(zombie),
-							error = downedError
-						};
-					}
-
-					var healthDowned = zombie.health.Downed;
-					var publicDowned = zombie.Downed;
-					zombie.jobs.posture = PawnPosture.Standing;
-					zombie.pather.StopDead();
-					zombie.pather.StartPath(destination, PathEndMode.OnCell);
-					var postureAfterStartPath = zombie.jobs.posture;
-
-					return new
-					{
-						success = healthDowned
-							&& publicDowned == false
-							&& postureAfterStartPath == PawnPosture.LayingOnGroundNormal,
 						zombie = DescribeZombie(zombie),
-						destination = ZombieRuntimeActions.DescribeCell(destination),
-						healthDowned,
-						publicDowned,
-						postureAfterStartPath = postureAfterStartPath.ToString(),
-						movingAfterStartPath = zombie.pather.Moving
+						error = downedError
 					};
 				}
-				finally
+
+				var healthDowned = zombie.health.Downed;
+				var publicDowned = zombie.Downed;
+				zombie.jobs.posture = PawnPosture.Standing;
+				zombie.pather.StopDead();
+				zombie.pather.StartPath(destination, PathEndMode.OnCell);
+				var postureAfterStartPath = zombie.jobs.posture;
+
+				return new
 				{
-					ZombieSettings.Values.doubleTapRequired = oldDoubleTapRequired;
-				}
+					success = healthDowned
+						&& publicDowned == false
+						&& postureAfterStartPath == PawnPosture.LayingOnGroundNormal,
+					zombie = DescribeZombie(zombie),
+					destination = ZombieRuntimeActions.DescribeCell(destination),
+					healthDowned,
+					publicDowned,
+					postureAfterStartPath = postureAfterStartPath.ToString(),
+					movingAfterStartPath = zombie.pather.Moving
+				};
 			}
+			finally
+			{
+				ZombieSettings.Values.doubleTapRequired = oldDoubleTapRequired;
+			}
+		}
 
-				static bool IsCustomizerGridCreated(object customizer)
-				{
-					if (customizer == null)
-						return false;
-					var offsetsField = customizer.GetType().GetField("offsets", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-					if (offsetsField?.GetValue(customizer) is NativeArray<ushort> offsets)
-						return offsets.IsCreated;
-					return false;
-				}
+		static bool IsCustomizerGridCreated(object customizer)
+		{
+			if (customizer == null)
+				return false;
+			var offsetsField = customizer.GetType().GetField("offsets", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+			if (offsetsField?.GetValue(customizer) is NativeArray<ushort> offsets)
+				return offsets.IsCreated;
+			return false;
+		}
 
-			[Tool("zombieland/zombie_manual_door_close_ignored", Description = "Verify a zombie cannot manually schedule a door to close while a normal colonist still can.")]
+		[Tool("zombieland/zombie_manual_door_close_ignored", Description = "Verify a zombie cannot manually schedule a door to close while a normal colonist still can.")]
 		public static object ZombieManualDoorCloseIgnored()
 		{
 			var map = CurrentMap;

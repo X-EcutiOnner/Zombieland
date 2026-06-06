@@ -783,605 +783,605 @@ namespace ZombieLand
 				beforeGooMove,
 				afterGooMove,
 				gooDelta
+			};
+		}
+
+		[Tool("zombieland/position_side_effects_contract", Description = "Verify remaining Thing.Position prefix side effects as one reusable patch-row contract: spitter trail, zombie clogging, colonist contact, attraction gates, and optional vehicle hook.")]
+		public static object PositionSideEffectsContract()
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
 				};
 			}
 
-			[Tool("zombieland/position_side_effects_contract", Description = "Verify remaining Thing.Position prefix side effects as one reusable patch-row contract: spitter trail, zombie clogging, colonist contact, attraction gates, and optional vehicle hook.")]
-			public static object PositionSideEffectsContract()
+			var spawnedThings = new List<Thing>();
+			var touchedCenters = new List<IntVec3>();
+			var settingsSnapshot = SnapshotZombieSettings();
+			var tickManager = map.GetComponent<TickManager>();
+			var originalAvoidGrid = tickManager?.avoidGrid;
+
+			try
 			{
-				var map = CurrentMap;
-				if (map == null)
+				var positionSetter = typeof(Thing).GetProperty(nameof(Thing.Position), BindingFlags.Instance | BindingFlags.Public)?.GetSetMethod();
+				var patchOwners = PatchOwners(positionSetter);
+				var patchTargets = PatchedMethodsForPatchClass("Thing_Position_Patch");
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				ApplyZombieSettingsOverride(values =>
 				{
-					return new
-					{
-						success = false,
-						error = "No current map is loaded."
-					};
-				}
+					values.spitterThreat = Mathf.Max(values.spitterThreat, 1f);
+				});
 
-				var spawnedThings = new List<Thing>();
-				var touchedCenters = new List<IntVec3>();
-				var settingsSnapshot = SnapshotZombieSettings();
-				var tickManager = map.GetComponent<TickManager>();
-				var originalAvoidGrid = tickManager?.avoidGrid;
-
-				try
-				{
-					var positionSetter = typeof(Thing).GetProperty(nameof(Thing.Position), BindingFlags.Instance | BindingFlags.Public)?.GetSetMethod();
-					var patchOwners = PatchOwners(positionSetter);
-					var patchTargets = PatchedMethodsForPatchClass("Thing_Position_Patch");
-
-					var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
-					ApplyZombieSettingsOverride(values =>
-					{
-						values.spitterThreat = Mathf.Max(values.spitterThreat, 1f);
-					});
-
-					var spitterTrail = VerifyPositionSpitterTrail(map, root + new IntVec3(-18, 0, -18), spawnedThings, touchedCenters);
-					var ordinaryZombieClogging = VerifyPositionZombieClogging(map, root + new IntVec3(-6, 0, -18), spawnedThings, touchedCenters);
-					var colonistContact = VerifyPositionColonistContact(map, root + new IntVec3(6, 0, -18), spawnedThings, touchedCenters);
-					var attractionGates = VerifyPositionAttractionGates(map, root + new IntVec3(18, 0, -18), spawnedThings, touchedCenters);
-					var customSupportOverrides = VerifyCustomSupportOverrideGates(map, root + new IntVec3(18, 0, 0), spawnedThings, touchedCenters);
-					var vehicleHook = VerifyPositionVehicleHook(map, root + new IntVec3(-18, 0, 0), spawnedThings, touchedCenters);
-
-					return new
-					{
-						success = patchOwners.Contains("net.pardeike.zombieland")
-							&& patchTargets.Length > 0
-							&& ObjectSuccess(spitterTrail)
-							&& ObjectSuccess(ordinaryZombieClogging)
-							&& ObjectSuccess(colonistContact)
-							&& ObjectSuccess(attractionGates)
-							&& ObjectSuccess(customSupportOverrides)
-							&& ObjectSuccess(vehicleHook),
-						sourcePath = "Thing.Position setter prefix -> spitter pheromone trail, ordinary zombie clogging, colonist contact timestamp, attraction gates, optional ZombielandSupport gates, and optional Vehicle Framework timestamp hook",
-						patchOwners,
-						patchTargets,
-						spitterTrail,
-						ordinaryZombieClogging,
-						colonistContact,
-						attractionGates,
-						customSupportOverrides,
-						vehicleHook
-					};
-				}
-				finally
-				{
-					if (tickManager != null)
-						tickManager.avoidGrid = originalAvoidGrid;
-					RestoreZombieSettings(settingsSnapshot);
-					foreach (var center in touchedCenters)
-						if (center.InBounds(map))
-							ClearPheromonesAndZombieCounts(map, center, 36f);
-					foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
-						thing.Destroy(DestroyMode.Vanish);
-				}
-			}
-
-			static object VerifyPositionSpitterTrail(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
-			{
-				if (TryFindClearSpawnCell(map, root, 18f, out var startCell, out var spawnError) == false)
-					return spawnError;
-
-				var spitter = SpawnFireFixturePawn(map, startCell, "spitter") as ZombieSpitter;
-				if (spitter == null)
-				{
-					return new
-					{
-						success = false,
-						error = "Could not spawn a spitter for the Thing.Position trail probe."
-					};
-				}
-				spawnedThings.Add(spitter);
-				touchedCenters.Add(startCell);
-
-				if (TryFindAdjacentMoveCell(spitter, out var destination) == false)
-				{
-					return new
-					{
-						success = false,
-						spitter = DescribeZombie(spitter),
-						error = "No adjacent destination was available for the spitter trail probe."
-					};
-				}
-
-				var radius = GenMath.LerpDouble(0, 5, 4, 32, ZombieSettings.Values.spitterThreat);
-				ClearPheromones(map, destination, radius + 2f);
-				var before = SnapshotPheromones(map, destination, radius + 2f);
-				MovePawnThroughPositionSetter(spitter, destination);
-				var change = DescribePheromoneChange(map, before, out var changedCount);
+				var spitterTrail = VerifyPositionSpitterTrail(map, root + new IntVec3(-18, 0, -18), spawnedThings, touchedCenters);
+				var ordinaryZombieClogging = VerifyPositionZombieClogging(map, root + new IntVec3(-6, 0, -18), spawnedThings, touchedCenters);
+				var colonistContact = VerifyPositionColonistContact(map, root + new IntVec3(6, 0, -18), spawnedThings, touchedCenters);
+				var attractionGates = VerifyPositionAttractionGates(map, root + new IntVec3(18, 0, -18), spawnedThings, touchedCenters);
+				var customSupportOverrides = VerifyCustomSupportOverrideGates(map, root + new IntVec3(18, 0, 0), spawnedThings, touchedCenters);
+				var vehicleHook = VerifyPositionVehicleHook(map, root + new IntVec3(-18, 0, 0), spawnedThings, touchedCenters);
 
 				return new
 				{
-					success = changedCount > 0,
+					success = patchOwners.Contains("net.pardeike.zombieland")
+						&& patchTargets.Length > 0
+						&& ObjectSuccess(spitterTrail)
+						&& ObjectSuccess(ordinaryZombieClogging)
+						&& ObjectSuccess(colonistContact)
+						&& ObjectSuccess(attractionGates)
+						&& ObjectSuccess(customSupportOverrides)
+						&& ObjectSuccess(vehicleHook),
+					sourcePath = "Thing.Position setter prefix -> spitter pheromone trail, ordinary zombie clogging, colonist contact timestamp, attraction gates, optional ZombielandSupport gates, and optional Vehicle Framework timestamp hook",
+					patchOwners,
+					patchTargets,
+					spitterTrail,
+					ordinaryZombieClogging,
+					colonistContact,
+					attractionGates,
+					customSupportOverrides,
+					vehicleHook
+				};
+			}
+			finally
+			{
+				if (tickManager != null)
+					tickManager.avoidGrid = originalAvoidGrid;
+				RestoreZombieSettings(settingsSnapshot);
+				foreach (var center in touchedCenters)
+					if (center.InBounds(map))
+						ClearPheromonesAndZombieCounts(map, center, 36f);
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object VerifyPositionSpitterTrail(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+		{
+			if (TryFindClearSpawnCell(map, root, 18f, out var startCell, out var spawnError) == false)
+				return spawnError;
+
+			var spitter = SpawnFireFixturePawn(map, startCell, "spitter") as ZombieSpitter;
+			if (spitter == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not spawn a spitter for the Thing.Position trail probe."
+				};
+			}
+			spawnedThings.Add(spitter);
+			touchedCenters.Add(startCell);
+
+			if (TryFindAdjacentMoveCell(spitter, out var destination) == false)
+			{
+				return new
+				{
+					success = false,
 					spitter = DescribeZombie(spitter),
-					start = ZombieRuntimeActions.DescribeCell(startCell),
-					destination = ZombieRuntimeActions.DescribeCell(destination),
-					radius,
-					change
+					error = "No adjacent destination was available for the spitter trail probe."
 				};
 			}
 
-			static object VerifyPositionZombieClogging(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+			var radius = GenMath.LerpDouble(0, 5, 4, 32, ZombieSettings.Values.spitterThreat);
+			ClearPheromones(map, destination, radius + 2f);
+			var before = SnapshotPheromones(map, destination, radius + 2f);
+			MovePawnThroughPositionSetter(spitter, destination);
+			var change = DescribePheromoneChange(map, before, out var changedCount);
+
+			return new
 			{
-				if (TryFindClearSpawnCell(map, root, 18f, out var startCell, out var spawnError) == false)
-					return spawnError;
+				success = changedCount > 0,
+				spitter = DescribeZombie(spitter),
+				start = ZombieRuntimeActions.DescribeCell(startCell),
+				destination = ZombieRuntimeActions.DescribeCell(destination),
+				radius,
+				change
+			};
+		}
 
-				var zombie = ZombieRuntimeActions.SpawnZombie(startCell, map, ZombieType.Normal, true);
-				if (zombie == null)
-				{
-					return new
-					{
-						success = false,
-						error = "Could not spawn an ordinary zombie for the Thing.Position clogging probe."
-					};
-				}
-				spawnedThings.Add(zombie);
-				touchedCenters.Add(startCell);
+		static object VerifyPositionZombieClogging(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+		{
+			if (TryFindClearSpawnCell(map, root, 18f, out var startCell, out var spawnError) == false)
+				return spawnError;
 
-				if (TryFindAdjacentMoveCell(zombie, out var destination) == false)
-				{
-					return new
-					{
-						success = false,
-						zombie = DescribeZombie(zombie),
-						error = "No adjacent destination was available for the ordinary zombie clogging probe."
-					};
-				}
-
-				var grid = map.GetGrid();
-				var zombieCount = 3;
-				var timestampBefore = Tools.Ticks();
-				SetZombieCount(map, destination, zombieCount);
-				grid.SetTimestamp(destination, timestampBefore);
-				MovePawnThroughPositionSetter(zombie, destination);
-				var timestampAfter = grid.GetTimestamp(destination);
-				var expected = Math.Max(timestampBefore - zombieCount * Constants.ZOMBIE_CLOGGING_FACTOR, Tools.Ticks() - Tools.PheromoneFadeoff());
-
+			var zombie = ZombieRuntimeActions.SpawnZombie(startCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
 				return new
 				{
-					success = timestampAfter == expected,
+					success = false,
+					error = "Could not spawn an ordinary zombie for the Thing.Position clogging probe."
+				};
+			}
+			spawnedThings.Add(zombie);
+			touchedCenters.Add(startCell);
+
+			if (TryFindAdjacentMoveCell(zombie, out var destination) == false)
+			{
+				return new
+				{
+					success = false,
 					zombie = DescribeZombie(zombie),
-					start = ZombieRuntimeActions.DescribeCell(startCell),
-					destination = ZombieRuntimeActions.DescribeCell(destination),
-					zombieCount,
-					cloggingFactor = Constants.ZOMBIE_CLOGGING_FACTOR,
-					timestampBefore,
-					timestampAfter,
-					expected,
-					delta = timestampBefore - timestampAfter
+					error = "No adjacent destination was available for the ordinary zombie clogging probe."
 				};
 			}
 
-			static object VerifyPositionColonistContact(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+			var grid = map.GetGrid();
+			var zombieCount = 3;
+			var timestampBefore = Tools.Ticks();
+			SetZombieCount(map, destination, zombieCount);
+			grid.SetTimestamp(destination, timestampBefore);
+			MovePawnThroughPositionSetter(zombie, destination);
+			var timestampAfter = grid.GetTimestamp(destination);
+			var expected = Math.Max(timestampBefore - zombieCount * Constants.ZOMBIE_CLOGGING_FACTOR, Tools.Ticks() - Tools.PheromoneFadeoff());
+
+			return new
 			{
-				if (TryFindClearSpawnCell(map, root, 18f, out var zombieCell, out var spawnError) == false)
-					return spawnError;
+				success = timestampAfter == expected,
+				zombie = DescribeZombie(zombie),
+				start = ZombieRuntimeActions.DescribeCell(startCell),
+				destination = ZombieRuntimeActions.DescribeCell(destination),
+				zombieCount,
+				cloggingFactor = Constants.ZOMBIE_CLOGGING_FACTOR,
+				timestampBefore,
+				timestampAfter,
+				expected,
+				delta = timestampBefore - timestampAfter
+			};
+		}
 
-				var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
-				if (zombie == null)
-				{
-					return new
-					{
-						success = false,
-						error = "Could not spawn a zombie for the colonist contact probe."
-					};
-				}
-				spawnedThings.Add(zombie);
-				touchedCenters.Add(zombieCell);
+		static object VerifyPositionColonistContact(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+		{
+			if (TryFindClearSpawnCell(map, root, 18f, out var zombieCell, out var spawnError) == false)
+				return spawnError;
 
-				if (TryFindAdjacentClearCell(zombie, out var colonistCell) == false)
+			var zombie = ZombieRuntimeActions.SpawnZombie(zombieCell, map, ZombieType.Normal, true);
+			if (zombie == null)
+			{
+				return new
 				{
-					return new
-					{
-						success = false,
-						zombie = DescribeZombie(zombie),
-						error = "No adjacent colonist cell was available for the contact probe."
-					};
-				}
+					success = false,
+					error = "Could not spawn a zombie for the colonist contact probe."
+				};
+			}
+			spawnedThings.Add(zombie);
+			touchedCenters.Add(zombieCell);
+
+			if (TryFindAdjacentClearCell(zombie, out var colonistCell) == false)
+			{
+				return new
+				{
+					success = false,
+					zombie = DescribeZombie(zombie),
+					error = "No adjacent colonist cell was available for the contact probe."
+				};
+			}
+
+			var colonist = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			GenSpawn.Spawn(colonist, colonistCell, map, Rot4.South);
+			DisablePawnWork(colonist);
+			spawnedThings.Add(colonist);
+
+			var tickManager = map.GetComponent<TickManager>();
+			var avoidGrid = BuildAvoidGridForZombie(map, zombie as Zombie);
+			var avoidCost = AvoidCost(avoidGrid, map, colonist.Position);
+			var inDangerBefore = avoidGrid.InAvoidDanger(colonist);
+			var beforeContact = tickManager.lastZombieContact;
+			tickManager.lastZombieContact = -12345;
+
+			if (TryFindAdjacentMoveCell(colonist, out var destination) == false)
+			{
+				return new
+				{
+					success = false,
+					colonist = DescribePawn(colonist),
+					avoidCost,
+					inDangerBefore,
+					error = "No adjacent destination was available for the colonist contact probe."
+				};
+			}
+
+			var ticksBeforeMove = GenTicks.TicksGame;
+			MovePawnThroughPositionSetter(colonist, destination);
+			var contactAfter = tickManager.lastZombieContact;
+
+			return new
+			{
+				success = inDangerBefore && avoidCost > 0 && contactAfter == ticksBeforeMove,
+				zombie = DescribeZombie(zombie),
+				colonist = DescribePawn(colonist),
+				start = ZombieRuntimeActions.DescribeCell(colonistCell),
+				destination = ZombieRuntimeActions.DescribeCell(destination),
+				avoidCost,
+				inDangerBefore,
+				beforeContact,
+				ticksBeforeMove,
+				contactAfter
+			};
+		}
+
+		static object VerifyPositionAttractionGates(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+		{
+			var previousAttackMode = ZombieSettings.Values.attackMode;
+			try
+			{
+				ApplyZombieSettingsOverride(values => values.attackMode = AttackMode.OnlyColonists);
+
+				if (TryFindClearSpawnCell(map, root, 18f, out var colonistCell, out var colonistSpawnError) == false)
+					return colonistSpawnError;
+				if (TryFindClearSpawnCell(map, colonistCell + new IntVec3(5, 0, 0), 12f, out var nonColonistCell, out var nonColonistSpawnError) == false)
+					return nonColonistSpawnError;
 
 				var colonist = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
 				GenSpawn.Spawn(colonist, colonistCell, map, Rot4.South);
 				DisablePawnWork(colonist);
 				spawnedThings.Add(colonist);
 
-				var tickManager = map.GetComponent<TickManager>();
-				var avoidGrid = BuildAvoidGridForZombie(map, zombie as Zombie);
-				var avoidCost = AvoidCost(avoidGrid, map, colonist.Position);
-				var inDangerBefore = avoidGrid.InAvoidDanger(colonist);
-				var beforeContact = tickManager.lastZombieContact;
-				tickManager.lastZombieContact = -12345;
+				var nonColonist = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfAncientsHostile);
+				GenSpawn.Spawn(nonColonist, nonColonistCell, map, Rot4.South);
+				DisablePawnWork(nonColonist);
+				spawnedThings.Add(nonColonist);
+				touchedCenters.Add(colonistCell);
+				touchedCenters.Add(nonColonistCell);
 
-				if (TryFindAdjacentMoveCell(colonist, out var destination) == false)
-				{
-					return new
-					{
-						success = false,
-						colonist = DescribePawn(colonist),
-						avoidCost,
-						inDangerBefore,
-						error = "No adjacent destination was available for the colonist contact probe."
-					};
-				}
-
-				var ticksBeforeMove = GenTicks.TicksGame;
-				MovePawnThroughPositionSetter(colonist, destination);
-				var contactAfter = tickManager.lastZombieContact;
+				var colonistTrail = VerifyPawnTrailCase(map, colonist, true);
+				var nonColonistBlocked = VerifyPawnTrailCase(map, nonColonist, false);
+				var manhunterStarted = nonColonist.mindState?.mentalStateHandler?.TryStartMentalState(MentalStateDefOf.Manhunter, "Zombieland bridge Thing.Position manhunter probe", true, true) ?? false;
+				var manhunterCase = VerifyPawnTrailCase(map, nonColonist, false);
 
 				return new
 				{
-					success = inDangerBefore && avoidCost > 0 && contactAfter == ticksBeforeMove,
-					zombie = DescribeZombie(zombie),
-					colonist = DescribePawn(colonist),
-					start = ZombieRuntimeActions.DescribeCell(colonistCell),
-					destination = ZombieRuntimeActions.DescribeCell(destination),
-					avoidCost,
-					inDangerBefore,
-					beforeContact,
-					ticksBeforeMove,
-					contactAfter
+					success = ObjectSuccess(colonistTrail)
+						&& ObjectSuccess(nonColonistBlocked)
+						&& ObjectSuccess(manhunterCase),
+					attackMode = ZombieSettings.Values.attackMode.ToString(),
+					colonistTrail,
+					nonColonistBlocked,
+					manhunterCase,
+					manhunterStarted,
+					semanticNote = "The Thing.Position prefix skips the direct attack-mode early return for manhunters, but the final Customization.DoesAttractsZombies gate still applies in the base mod without an external ZombielandSupport evaluator."
+				};
+			}
+			finally
+			{
+				ApplyZombieSettingsOverride(values => values.attackMode = previousAttackMode);
+			}
+		}
+
+		static object VerifyCustomSupportOverrideGates(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+		{
+			var testSupportAssemblyLoaded = AppDomain.CurrentDomain.GetAssemblies()
+				.Any(assembly => assembly.GetName().Name == "ZLTestSupport");
+			if (testSupportAssemblyLoaded == false)
+			{
+				return new
+				{
+					success = true,
+					status = "skipped: ZLTestSupport is not installed in the active mod set"
 				};
 			}
 
-			static object VerifyPositionAttractionGates(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+			var previousAttackMode = ZombieSettings.Values.attackMode;
+			try
 			{
-				var previousAttackMode = ZombieSettings.Values.attackMode;
-				try
-				{
-					ApplyZombieSettingsOverride(values => values.attackMode = AttackMode.OnlyColonists);
+				ApplyZombieSettingsOverride(values => values.attackMode = AttackMode.OnlyColonists);
 
-					if (TryFindClearSpawnCell(map, root, 18f, out var colonistCell, out var colonistSpawnError) == false)
-						return colonistSpawnError;
-					if (TryFindClearSpawnCell(map, colonistCell + new IntVec3(5, 0, 0), 12f, out var nonColonistCell, out var nonColonistSpawnError) == false)
-						return nonColonistSpawnError;
+				if (TryFindClearSpawnCell(map, root, 18f, out var ignoredCell, out var ignoredSpawnError) == false)
+					return ignoredSpawnError;
+				if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(5, 0, 0), 12f, out var forcedCell, out var forcedSpawnError) == false)
+					return forcedSpawnError;
+				if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(0, 0, 5), 12f, out var controlCell, out var controlSpawnError) == false)
+					return controlSpawnError;
+				if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(5, 0, 5), 12f, out var blockedCell, out var blockedSpawnError) == false)
+					return blockedSpawnError;
+				if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(10, 0, 5), 12f, out var infectedControlCell, out var infectedControlSpawnError) == false)
+					return infectedControlSpawnError;
 
-					var colonist = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-					GenSpawn.Spawn(colonist, colonistCell, map, Rot4.South);
-					DisablePawnWork(colonist);
-					spawnedThings.Add(colonist);
+				var ignoredColonist = GenerateNamedSupportPawn("ZL_IgnoreZombies", Faction.OfPlayer);
+				GenSpawn.Spawn(ignoredColonist, ignoredCell, map, Rot4.South);
+				DisablePawnWork(ignoredColonist);
+				spawnedThings.Add(ignoredColonist);
 
-					var nonColonist = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfAncientsHostile);
-					GenSpawn.Spawn(nonColonist, nonColonistCell, map, Rot4.South);
-					DisablePawnWork(nonColonist);
-					spawnedThings.Add(nonColonist);
-					touchedCenters.Add(colonistCell);
-					touchedCenters.Add(nonColonistCell);
+				var forcedInfectedColonist = GenerateNamedSupportPawn("ZL_AttractsZombies", Faction.OfPlayer);
+				forcedInfectedColonist.SetInfectionState(InfectionState.Infecting);
+				GenSpawn.Spawn(forcedInfectedColonist, forcedCell, map, Rot4.South);
+				DisablePawnWork(forcedInfectedColonist);
+				spawnedThings.Add(forcedInfectedColonist);
 
-					var colonistTrail = VerifyPawnTrailCase(map, colonist, true);
-					var nonColonistBlocked = VerifyPawnTrailCase(map, nonColonist, false);
-					var manhunterStarted = nonColonist.mindState?.mentalStateHandler?.TryStartMentalState(MentalStateDefOf.Manhunter, "Zombieland bridge Thing.Position manhunter probe", true, true) ?? false;
-					var manhunterCase = VerifyPawnTrailCase(map, nonColonist, false);
+				var controlColonist = GenerateNamedSupportPawn("ZL_Neutral", Faction.OfPlayer);
+				GenSpawn.Spawn(controlColonist, controlCell, map, Rot4.South);
+				DisablePawnWork(controlColonist);
+				spawnedThings.Add(controlColonist);
 
-					return new
-					{
-						success = ObjectSuccess(colonistTrail)
-							&& ObjectSuccess(nonColonistBlocked)
-							&& ObjectSuccess(manhunterCase),
-						attackMode = ZombieSettings.Values.attackMode.ToString(),
-						colonistTrail,
-						nonColonistBlocked,
-						manhunterCase,
-						manhunterStarted,
-						semanticNote = "The Thing.Position prefix skips the direct attack-mode early return for manhunters, but the final Customization.DoesAttractsZombies gate still applies in the base mod without an external ZombielandSupport evaluator."
-					};
-				}
-				finally
-				{
-					ApplyZombieSettingsOverride(values => values.attackMode = previousAttackMode);
-				}
-			}
+				var blockedColonist = GenerateNamedSupportPawn("ZL_BlockZombie", Faction.OfPlayer);
+				GenSpawn.Spawn(blockedColonist, blockedCell, map, Rot4.South);
+				DisablePawnWork(blockedColonist);
+				spawnedThings.Add(blockedColonist);
 
-			static object VerifyCustomSupportOverrideGates(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
-			{
-				var testSupportAssemblyLoaded = AppDomain.CurrentDomain.GetAssemblies()
-					.Any(assembly => assembly.GetName().Name == "ZLTestSupport");
-				if (testSupportAssemblyLoaded == false)
-				{
-					return new
-					{
-						success = true,
-						status = "skipped: ZLTestSupport is not installed in the active mod set"
-					};
-				}
+				var infectedControlColonist = GenerateNamedSupportPawn("ZL_InfectedNeutral", Faction.OfPlayer);
+				infectedControlColonist.SetInfectionState(InfectionState.Infecting);
+				GenSpawn.Spawn(infectedControlColonist, infectedControlCell, map, Rot4.South);
+				DisablePawnWork(infectedControlColonist);
+				spawnedThings.Add(infectedControlColonist);
+				touchedCenters.Add(ignoredCell);
+				touchedCenters.Add(forcedCell);
+				touchedCenters.Add(controlCell);
+				touchedCenters.Add(blockedCell);
+				touchedCenters.Add(infectedControlCell);
 
-				var previousAttackMode = ZombieSettings.Values.attackMode;
-				try
-				{
-					ApplyZombieSettingsOverride(values => values.attackMode = AttackMode.OnlyColonists);
-
-					if (TryFindClearSpawnCell(map, root, 18f, out var ignoredCell, out var ignoredSpawnError) == false)
-						return ignoredSpawnError;
-					if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(5, 0, 0), 12f, out var forcedCell, out var forcedSpawnError) == false)
-						return forcedSpawnError;
-					if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(0, 0, 5), 12f, out var controlCell, out var controlSpawnError) == false)
-						return controlSpawnError;
-					if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(5, 0, 5), 12f, out var blockedCell, out var blockedSpawnError) == false)
-						return blockedSpawnError;
-					if (TryFindClearSpawnCell(map, ignoredCell + new IntVec3(10, 0, 5), 12f, out var infectedControlCell, out var infectedControlSpawnError) == false)
-						return infectedControlSpawnError;
-
-					var ignoredColonist = GenerateNamedSupportPawn("ZL_IgnoreZombies", Faction.OfPlayer);
-					GenSpawn.Spawn(ignoredColonist, ignoredCell, map, Rot4.South);
-					DisablePawnWork(ignoredColonist);
-					spawnedThings.Add(ignoredColonist);
-
-					var forcedInfectedColonist = GenerateNamedSupportPawn("ZL_AttractsZombies", Faction.OfPlayer);
-					forcedInfectedColonist.SetInfectionState(InfectionState.Infecting);
-					GenSpawn.Spawn(forcedInfectedColonist, forcedCell, map, Rot4.South);
-					DisablePawnWork(forcedInfectedColonist);
-					spawnedThings.Add(forcedInfectedColonist);
-
-					var controlColonist = GenerateNamedSupportPawn("ZL_Neutral", Faction.OfPlayer);
-					GenSpawn.Spawn(controlColonist, controlCell, map, Rot4.South);
-					DisablePawnWork(controlColonist);
-					spawnedThings.Add(controlColonist);
-
-					var blockedColonist = GenerateNamedSupportPawn("ZL_BlockZombie", Faction.OfPlayer);
-					GenSpawn.Spawn(blockedColonist, blockedCell, map, Rot4.South);
-					DisablePawnWork(blockedColonist);
-					spawnedThings.Add(blockedColonist);
-
-					var infectedControlColonist = GenerateNamedSupportPawn("ZL_InfectedNeutral", Faction.OfPlayer);
-					infectedControlColonist.SetInfectionState(InfectionState.Infecting);
-					GenSpawn.Spawn(infectedControlColonist, infectedControlCell, map, Rot4.South);
-					DisablePawnWork(infectedControlColonist);
-					spawnedThings.Add(infectedControlColonist);
-					touchedCenters.Add(ignoredCell);
-					touchedCenters.Add(forcedCell);
-					touchedCenters.Add(controlCell);
-					touchedCenters.Add(blockedCell);
-					touchedCenters.Add(infectedControlCell);
-
-					var ignoredTrail = VerifyPawnTrailCase(map, ignoredColonist, false);
-					var forcedDoesAttractsZombies = Customization.DoesAttractsZombies(forcedInfectedColonist);
-					var forcedTrail = VerifyPawnTrailCase(map, forcedInfectedColonist, false);
-					var controlTrail = VerifyPawnTrailCase(map, controlColonist, true);
-					var infectedControlDoesAttractsZombies = Customization.DoesAttractsZombies(infectedControlColonist);
-					var infectedControlTrail = VerifyPawnTrailCase(map, infectedControlColonist, false);
-					var blockedCannotBecomeZombie = Customization.CannotBecomeZombie(blockedColonist);
-					var controlCannotBecomeZombie = Customization.CannotBecomeZombie(controlColonist);
-
-					return new
-					{
-						success = ObjectSuccess(ignoredTrail)
-							&& ObjectSuccess(forcedTrail)
-							&& forcedDoesAttractsZombies
-							&& ObjectSuccess(controlTrail)
-							&& ObjectSuccess(infectedControlTrail)
-							&& infectedControlDoesAttractsZombies == false
-							&& blockedCannotBecomeZombie
-							&& controlCannotBecomeZombie == false,
-						status = "active: ZLTestSupport fixture return values affected attraction and infection gates",
-						attackMode = ZombieSettings.Values.attackMode.ToString(),
-						ignoredTrail,
-						forcedTrail,
-						forcedDoesAttractsZombies,
-						controlTrail,
-						infectedControlTrail,
-						infectedControlDoesAttractsZombies,
-						blockedCannotBecomeZombie,
-						controlCannotBecomeZombie,
-						blockedPawn = DescribePawn(blockedColonist),
-						controlPawn = DescribePawn(controlColonist)
-					};
-				}
-				finally
-				{
-					ApplyZombieSettingsOverride(values => values.attackMode = previousAttackMode);
-				}
-			}
-
-			static Pawn GenerateNamedSupportPawn(string name, Faction faction)
-			{
-				var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, faction);
-				pawn.Name = new NameSingle(name);
-				return pawn;
-			}
-
-			static object VerifyPawnTrailCase(Map map, Pawn pawn, bool expectTrail)
-			{
-				if (TryFindAdjacentMoveCell(pawn, out var destination) == false)
-				{
-					return new
-					{
-						success = false,
-						pawn = DescribePawn(pawn),
-						expectTrail,
-						error = "No adjacent destination was available for the pawn trail probe."
-					};
-				}
-
-				var radius = Tools.RadiusForPawn(pawn) + 2f;
-				ClearPheromones(map, destination, radius);
-				var before = SnapshotPheromones(map, destination, radius);
-				MovePawnThroughPositionSetter(pawn, destination);
-				var change = DescribePheromoneChange(map, before, out var changedCount);
+				var ignoredTrail = VerifyPawnTrailCase(map, ignoredColonist, false);
+				var forcedDoesAttractsZombies = Customization.DoesAttractsZombies(forcedInfectedColonist);
+				var forcedTrail = VerifyPawnTrailCase(map, forcedInfectedColonist, false);
+				var controlTrail = VerifyPawnTrailCase(map, controlColonist, true);
+				var infectedControlDoesAttractsZombies = Customization.DoesAttractsZombies(infectedControlColonist);
+				var infectedControlTrail = VerifyPawnTrailCase(map, infectedControlColonist, false);
+				var blockedCannotBecomeZombie = Customization.CannotBecomeZombie(blockedColonist);
+				var controlCannotBecomeZombie = Customization.CannotBecomeZombie(controlColonist);
 
 				return new
 				{
-					success = expectTrail ? changedCount > 0 : changedCount == 0,
+					success = ObjectSuccess(ignoredTrail)
+						&& ObjectSuccess(forcedTrail)
+						&& forcedDoesAttractsZombies
+						&& ObjectSuccess(controlTrail)
+						&& ObjectSuccess(infectedControlTrail)
+						&& infectedControlDoesAttractsZombies == false
+						&& blockedCannotBecomeZombie
+						&& controlCannotBecomeZombie == false,
+					status = "active: ZLTestSupport fixture return values affected attraction and infection gates",
+					attackMode = ZombieSettings.Values.attackMode.ToString(),
+					ignoredTrail,
+					forcedTrail,
+					forcedDoesAttractsZombies,
+					controlTrail,
+					infectedControlTrail,
+					infectedControlDoesAttractsZombies,
+					blockedCannotBecomeZombie,
+					controlCannotBecomeZombie,
+					blockedPawn = DescribePawn(blockedColonist),
+					controlPawn = DescribePawn(controlColonist)
+				};
+			}
+			finally
+			{
+				ApplyZombieSettingsOverride(values => values.attackMode = previousAttackMode);
+			}
+		}
+
+		static Pawn GenerateNamedSupportPawn(string name, Faction faction)
+		{
+			var pawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, faction);
+			pawn.Name = new NameSingle(name);
+			return pawn;
+		}
+
+		static object VerifyPawnTrailCase(Map map, Pawn pawn, bool expectTrail)
+		{
+			if (TryFindAdjacentMoveCell(pawn, out var destination) == false)
+			{
+				return new
+				{
+					success = false,
 					pawn = DescribePawn(pawn),
 					expectTrail,
-					destination = ZombieRuntimeActions.DescribeCell(destination),
-					doesAttractsZombies = Customization.DoesAttractsZombies(pawn),
-					change
+					error = "No adjacent destination was available for the pawn trail probe."
 				};
 			}
 
-			static object VerifyPositionVehicleHook(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+			var radius = Tools.RadiusForPawn(pawn) + 2f;
+			ClearPheromones(map, destination, radius);
+			var before = SnapshotPheromones(map, destination, radius);
+			MovePawnThroughPositionSetter(pawn, destination);
+			var change = DescribePheromoneChange(map, before, out var changedCount);
+
+			return new
 			{
-				if (VehicleTools.vehicleType == null)
-				{
-					return new
-					{
-						success = true,
-						vehicleFrameworkInstalled = false,
-						vehicleType = (string)null,
-						status = "skipped: Vehicle Framework is not installed in the active mod set"
-					};
-				}
+				success = expectTrail ? changedCount > 0 : changedCount == 0,
+				pawn = DescribePawn(pawn),
+				expectTrail,
+				destination = ZombieRuntimeActions.DescribeCell(destination),
+				doesAttractsZombies = Customization.DoesAttractsZombies(pawn),
+				change
+			};
+		}
 
-				var vehicleDefType = VehicleTools.vehicleType.Assembly.GetType("Vehicles.VehicleDef");
-				var vehicleSpawnerType = VehicleTools.vehicleType.Assembly.GetType("Vehicles.VehicleSpawner");
-				var generateVehicle = vehicleSpawnerType?
-					.GetMethods(BindingFlags.Public | BindingFlags.Static)
-					.FirstOrDefault(method =>
-					{
-						if (method.Name != "GenerateVehicle")
-							return false;
-						var parameters = method.GetParameters();
-						return parameters.Length == 2
-							&& parameters[0].ParameterType == vehicleDefType
-							&& parameters[1].ParameterType == typeof(Faction);
-					});
-
-				var concreteDefs = vehicleDefType == null
-					? Array.Empty<ThingDef>()
-					: DefDatabase<ThingDef>.AllDefsListForReading
-						.Where(def => def.defName.NullOrEmpty() == false)
-						.Where(def => vehicleDefType.IsAssignableFrom(def.GetType()))
-						.Where(def => def.defName.StartsWith("ZLTest", StringComparison.OrdinalIgnoreCase))
-						.ToArray();
-
-				var vehicleDef = concreteDefs.FirstOrDefault();
-				if (vehicleDefType == null || generateVehicle == null || vehicleDef == null)
-				{
-					return new
-					{
-						success = false,
-						vehicleFrameworkInstalled = true,
-						vehicleType = VehicleTools.vehicleType.FullName,
-						vehicleDefType = vehicleDefType?.FullName,
-						generateVehicleResolved = generateVehicle != null,
-						concreteVehicleDefs = concreteDefs.Select(def => def.defName).ToArray(),
-						error = "Vehicle Framework is active, but no local ZLTest concrete VehicleDef fixture was available for BumpTimestamps."
-					};
-				}
-
-				if (TryFindClearSpawnCell(map, root, 16f, out var vehicleCell, out var spawnError) == false)
-					return spawnError;
-
-				Pawn vehicle;
-				try
-				{
-					vehicle = generateVehicle.Invoke(null, new object[] { vehicleDef, Faction.OfPlayer }) as Pawn;
-				}
-				catch (Exception ex)
-				{
-					return new
-					{
-						success = false,
-						vehicleFrameworkInstalled = true,
-						vehicleType = VehicleTools.vehicleType.FullName,
-						vehicleDef = vehicleDef.defName,
-						error = $"VehicleSpawner.GenerateVehicle failed: {ex.GetType().Name}: {ex.Message}"
-					};
-				}
-
-				if (vehicle == null)
-				{
-					return new
-					{
-						success = false,
-						vehicleFrameworkInstalled = true,
-						vehicleType = VehicleTools.vehicleType.FullName,
-						vehicleDef = vehicleDef.defName,
-						error = "VehicleSpawner.GenerateVehicle returned null."
-					};
-				}
-
-				GenSpawn.Spawn(vehicle, vehicleCell, map, Rot4.South);
-				spawnedThings.Add(vehicle);
-				if (TryFindAdjacentClearCell(vehicle, out var destination) == false)
-				{
-					return new
-					{
-						success = false,
-						vehicleFrameworkInstalled = true,
-						vehicleType = VehicleTools.vehicleType.FullName,
-						vehicleDef = vehicleDef.defName,
-						vehicle = DescribePawn(vehicle),
-						error = "No adjacent clear destination was available for the vehicle timestamp probe."
-					};
-				}
-
-				float moveSpeed;
-				try
-				{
-					moveSpeed = vehicle.GetMoveSpeed();
-				}
-				catch (Exception ex)
-				{
-					return new
-					{
-						success = false,
-						vehicleFrameworkInstalled = true,
-						vehicleType = VehicleTools.vehicleType.FullName,
-						vehicleDef = vehicleDef.defName,
-						vehicle = DescribePawn(vehicle),
-						error = $"VehicleTools.GetMoveSpeed failed: {ex.GetType().Name}: {ex.Message}"
-					};
-				}
-
-				var radius = Mathf.Max(2f, 1.5f * moveSpeed + 1f);
-				ClearPheromones(map, destination, radius);
-				touchedCenters.Add(destination);
-				var before = SnapshotPheromones(map, destination, radius);
-				MovePawnThroughPositionSetter(vehicle, destination);
-				var timestampAfter = map.GetGrid().GetTimestamp(destination);
-				var change = DescribePheromoneChange(map, before, out var changedCount);
-
+		static object VerifyPositionVehicleHook(Map map, IntVec3 root, List<Thing> spawnedThings, List<IntVec3> touchedCenters)
+		{
+			if (VehicleTools.vehicleType == null)
+			{
 				return new
 				{
-					success = changedCount > 0 && timestampAfter > 0,
+					success = true,
+					vehicleFrameworkInstalled = false,
+					vehicleType = (string)null,
+					status = "skipped: Vehicle Framework is not installed in the active mod set"
+				};
+			}
+
+			var vehicleDefType = VehicleTools.vehicleType.Assembly.GetType("Vehicles.VehicleDef");
+			var vehicleSpawnerType = VehicleTools.vehicleType.Assembly.GetType("Vehicles.VehicleSpawner");
+			var generateVehicle = vehicleSpawnerType?
+				.GetMethods(BindingFlags.Public | BindingFlags.Static)
+				.FirstOrDefault(method =>
+				{
+					if (method.Name != "GenerateVehicle")
+						return false;
+					var parameters = method.GetParameters();
+					return parameters.Length == 2
+						&& parameters[0].ParameterType == vehicleDefType
+						&& parameters[1].ParameterType == typeof(Faction);
+				});
+
+			var concreteDefs = vehicleDefType == null
+				? Array.Empty<ThingDef>()
+				: DefDatabase<ThingDef>.AllDefsListForReading
+					.Where(def => def.defName.NullOrEmpty() == false)
+					.Where(def => vehicleDefType.IsAssignableFrom(def.GetType()))
+					.Where(def => def.defName.StartsWith("ZLTest", StringComparison.OrdinalIgnoreCase))
+					.ToArray();
+
+			var vehicleDef = concreteDefs.FirstOrDefault();
+			if (vehicleDefType == null || generateVehicle == null || vehicleDef == null)
+			{
+				return new
+				{
+					success = false,
+					vehicleFrameworkInstalled = true,
+					vehicleType = VehicleTools.vehicleType.FullName,
+					vehicleDefType = vehicleDefType?.FullName,
+					generateVehicleResolved = generateVehicle != null,
+					concreteVehicleDefs = concreteDefs.Select(def => def.defName).ToArray(),
+					error = "Vehicle Framework is active, but no local ZLTest concrete VehicleDef fixture was available for BumpTimestamps."
+				};
+			}
+
+			if (TryFindClearSpawnCell(map, root, 16f, out var vehicleCell, out var spawnError) == false)
+				return spawnError;
+
+			Pawn vehicle;
+			try
+			{
+				vehicle = generateVehicle.Invoke(null, new object[] { vehicleDef, Faction.OfPlayer }) as Pawn;
+			}
+			catch (Exception ex)
+			{
+				return new
+				{
+					success = false,
+					vehicleFrameworkInstalled = true,
+					vehicleType = VehicleTools.vehicleType.FullName,
+					vehicleDef = vehicleDef.defName,
+					error = $"VehicleSpawner.GenerateVehicle failed: {ex.GetType().Name}: {ex.Message}"
+				};
+			}
+
+			if (vehicle == null)
+			{
+				return new
+				{
+					success = false,
+					vehicleFrameworkInstalled = true,
+					vehicleType = VehicleTools.vehicleType.FullName,
+					vehicleDef = vehicleDef.defName,
+					error = "VehicleSpawner.GenerateVehicle returned null."
+				};
+			}
+
+			GenSpawn.Spawn(vehicle, vehicleCell, map, Rot4.South);
+			spawnedThings.Add(vehicle);
+			if (TryFindAdjacentClearCell(vehicle, out var destination) == false)
+			{
+				return new
+				{
+					success = false,
 					vehicleFrameworkInstalled = true,
 					vehicleType = VehicleTools.vehicleType.FullName,
 					vehicleDef = vehicleDef.defName,
 					vehicle = DescribePawn(vehicle),
-					cells = new
-					{
-						start = ZombieRuntimeActions.DescribeCell(vehicleCell),
-						destination = ZombieRuntimeActions.DescribeCell(destination)
-					},
-					moveSpeed,
-					radius,
-					timestampAfter,
-					change,
-					status = "proved: concrete VehiclePawn movement through Thing.Position called VehicleTools.BumpTimestamps"
+					error = "No adjacent clear destination was available for the vehicle timestamp probe."
 				};
 			}
 
-			static void MovePawnThroughPositionSetter(Pawn pawn, IntVec3 destination)
+			float moveSpeed;
+			try
 			{
-				pawn.Position = destination;
-				pawn.Notify_Teleported(false, false);
+				moveSpeed = vehicle.GetMoveSpeed();
 			}
-
-			static void SetZombieCount(Map map, IntVec3 cell, int count)
+			catch (Exception ex)
 			{
-				var grid = map.GetGrid();
-				var current = grid.GetZombieCount(cell);
-				if (current != count)
-					grid.ChangeZombieCount(cell, count - current);
-			}
-
-			static void ClearPheromonesAndZombieCounts(Map map, IntVec3 center, float radius)
-			{
-				var grid = map.GetGrid();
-				foreach (var cell in GenRadial.RadialCellsAround(center, radius, true))
+				return new
 				{
-					if (cell.InBounds(map) == false)
-						continue;
-					grid.SetTimestamp(cell, 0);
-					var zombieCount = grid.GetZombieCount(cell);
-					if (zombieCount != 0)
-						grid.ChangeZombieCount(cell, -zombieCount);
-				}
+					success = false,
+					vehicleFrameworkInstalled = true,
+					vehicleType = VehicleTools.vehicleType.FullName,
+					vehicleDef = vehicleDef.defName,
+					vehicle = DescribePawn(vehicle),
+					error = $"VehicleTools.GetMoveSpeed failed: {ex.GetType().Name}: {ex.Message}"
+				};
 			}
 
-			[Tool("zombieland/mine_with_miner", Description = "Place a mineable block next to a miner zombie and verify Zombieland's mining code damages it.")]
-			public static object MineWithMiner(
-				[ToolParameter(Description = "Optional miner zombie id, ThingID, label, or short name. When omitted, a fresh miner is spawned near map center.", Required = false, DefaultValue = "")] string target = "")
+			var radius = Mathf.Max(2f, 1.5f * moveSpeed + 1f);
+			ClearPheromones(map, destination, radius);
+			touchedCenters.Add(destination);
+			var before = SnapshotPheromones(map, destination, radius);
+			MovePawnThroughPositionSetter(vehicle, destination);
+			var timestampAfter = map.GetGrid().GetTimestamp(destination);
+			var change = DescribePheromoneChange(map, before, out var changedCount);
+
+			return new
+			{
+				success = changedCount > 0 && timestampAfter > 0,
+				vehicleFrameworkInstalled = true,
+				vehicleType = VehicleTools.vehicleType.FullName,
+				vehicleDef = vehicleDef.defName,
+				vehicle = DescribePawn(vehicle),
+				cells = new
+				{
+					start = ZombieRuntimeActions.DescribeCell(vehicleCell),
+					destination = ZombieRuntimeActions.DescribeCell(destination)
+				},
+				moveSpeed,
+				radius,
+				timestampAfter,
+				change,
+				status = "proved: concrete VehiclePawn movement through Thing.Position called VehicleTools.BumpTimestamps"
+			};
+		}
+
+		static void MovePawnThroughPositionSetter(Pawn pawn, IntVec3 destination)
+		{
+			pawn.Position = destination;
+			pawn.Notify_Teleported(false, false);
+		}
+
+		static void SetZombieCount(Map map, IntVec3 cell, int count)
+		{
+			var grid = map.GetGrid();
+			var current = grid.GetZombieCount(cell);
+			if (current != count)
+				grid.ChangeZombieCount(cell, count - current);
+		}
+
+		static void ClearPheromonesAndZombieCounts(Map map, IntVec3 center, float radius)
+		{
+			var grid = map.GetGrid();
+			foreach (var cell in GenRadial.RadialCellsAround(center, radius, true))
+			{
+				if (cell.InBounds(map) == false)
+					continue;
+				grid.SetTimestamp(cell, 0);
+				var zombieCount = grid.GetZombieCount(cell);
+				if (zombieCount != 0)
+					grid.ChangeZombieCount(cell, -zombieCount);
+			}
+		}
+
+		[Tool("zombieland/mine_with_miner", Description = "Place a mineable block next to a miner zombie and verify Zombieland's mining code damages it.")]
+		public static object MineWithMiner(
+			[ToolParameter(Description = "Optional miner zombie id, ThingID, label, or short name. When omitted, a fresh miner is spawned near map center.", Required = false, DefaultValue = "")] string target = "")
 		{
 			var map = CurrentMap;
 			if (map == null)

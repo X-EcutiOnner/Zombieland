@@ -1,5 +1,5 @@
-using RimBridgeServer.Annotations;
 using HarmonyLib;
+using RimBridgeServer.Annotations;
 using RimWorld;
 using System;
 using System.Collections.Generic;
@@ -107,15 +107,15 @@ namespace ZombieLand
 					&& shockers.Length > 0
 					&& thumpers.Length > 0
 					&& chainsaws.Length > 0,
-					setupFixture,
-					setup,
-					activateChainsaw,
-					chainsawActivated,
-					chainsawActivateError,
-					actionMode = normalizedActionMode,
-					actionSucceeded,
-					action,
-					advancedTicks = clampedAdvanceTicks,
+				setupFixture,
+				setup,
+				activateChainsaw,
+				chainsawActivated,
+				chainsawActivateError,
+				actionMode = normalizedActionMode,
+				actionSucceeded,
+				action,
+				advancedTicks = clampedAdvanceTicks,
 				ticksGame = Find.TickManager.TicksGame,
 				summary = new
 				{

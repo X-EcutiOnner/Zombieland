@@ -1,5 +1,5 @@
-using RimBridgeServer.Annotations;
 using HarmonyLib;
+using RimBridgeServer.Annotations;
 using RimWorld;
 using RimWorld.Planet;
 using System;
@@ -112,308 +112,308 @@ namespace ZombieLand
 						&& zombieRace != null
 						&& Mathf.Abs(zombieRace.baseHealthScale - settings.healthFactor) < 0.0001f
 				},
-					timeSpeed = gameTickManager == null ? null : gameTickManager.CurTimeSpeed.ToString()
-				};
-			}
+				timeSpeed = gameTickManager == null ? null : gameTickManager.CurTimeSpeed.ToString()
+			};
+		}
 
-			[Tool("zombieland/zombie_lightweight_perf_state", Description = "Read cheap read-only zombie performance counters without resetting frameWatch or running the heavier status probe.")]
-			public static object ZombieLightweightPerfState(
-				[ToolParameter(Description = "When true, try to include Unity Profiler memory counters via reflection. This is optional and best-effort.", Required = false, DefaultValue = false)] bool includeUnityProfilerMemory = false)
-			{
-				var map = CurrentMap;
-				var tickManager = map?.GetComponent<TickManager>();
-				var cached = tickManager?.allZombiesCached;
-				var cachedZombieCount = cached?.Count ?? 0;
-				var liveCachedZombieCount = 0;
+		[Tool("zombieland/zombie_lightweight_perf_state", Description = "Read cheap read-only zombie performance counters without resetting frameWatch or running the heavier status probe.")]
+		public static object ZombieLightweightPerfState(
+			[ToolParameter(Description = "When true, try to include Unity Profiler memory counters via reflection. This is optional and best-effort.", Required = false, DefaultValue = false)] bool includeUnityProfilerMemory = false)
+		{
+			var map = CurrentMap;
+			var tickManager = map?.GetComponent<TickManager>();
+			var cached = tickManager?.allZombiesCached;
+			var cachedZombieCount = cached?.Count ?? 0;
+			var liveCachedZombieCount = 0;
 
-				if (cached != null)
-					foreach (var zombie in cached)
-						if (zombie != null && zombie.Spawned && zombie.Dead == false)
-							liveCachedZombieCount++;
+			if (cached != null)
+				foreach (var zombie in cached)
+					if (zombie != null && zombie.Spawned && zombie.Dead == false)
+						liveCachedZombieCount++;
 
-				var ordinaryZombies = 0;
-				var blobs = 0;
-				var spitters = 0;
-				var tanky = 0;
-				var activeElectrical = 0;
-				var electrifiers = 0;
-				var miners = 0;
-				var albinos = 0;
-				var darkSlimers = 0;
-				var suicideBombers = 0;
-				var toxicSplashers = 0;
-				var healers = 0;
+			var ordinaryZombies = 0;
+			var blobs = 0;
+			var spitters = 0;
+			var tanky = 0;
+			var activeElectrical = 0;
+			var electrifiers = 0;
+			var miners = 0;
+			var albinos = 0;
+			var darkSlimers = 0;
+			var suicideBombers = 0;
+			var toxicSplashers = 0;
+			var healers = 0;
 
-				var pawns = map?.mapPawns?.AllPawnsSpawned;
-				if (pawns != null)
-					foreach (var pawn in pawns)
+			var pawns = map?.mapPawns?.AllPawnsSpawned;
+			if (pawns != null)
+				foreach (var pawn in pawns)
+				{
+					if (pawn == null || pawn.Spawned == false || pawn.Dead)
+						continue;
+					if (pawn is Zombie zombie)
 					{
-						if (pawn == null || pawn.Spawned == false || pawn.Dead)
-							continue;
-						if (pawn is Zombie zombie)
-						{
-							ordinaryZombies++;
-							if (zombie.IsTanky)
-								tanky++;
-							if (zombie.IsActiveElectric)
-								activeElectrical++;
-							if (zombie.isElectrifier)
-								electrifiers++;
-							if (zombie.isMiner)
-								miners++;
-							if (zombie.isAlbino)
-								albinos++;
-							if (zombie.isDarkSlimer)
-								darkSlimers++;
-							if (zombie.IsSuicideBomber)
-								suicideBombers++;
-							if (zombie.isToxicSplasher)
-								toxicSplashers++;
-							if (zombie.isHealer)
-								healers++;
-						}
-						else if (pawn is ZombieBlob)
-							blobs++;
-						else if (pawn is ZombieSpitter)
-							spitters++;
+						ordinaryZombies++;
+						if (zombie.IsTanky)
+							tanky++;
+						if (zombie.IsActiveElectric)
+							activeElectrical++;
+						if (zombie.isElectrifier)
+							electrifiers++;
+						if (zombie.isMiner)
+							miners++;
+						if (zombie.isAlbino)
+							albinos++;
+						if (zombie.isDarkSlimer)
+							darkSlimers++;
+						if (zombie.IsSuicideBomber)
+							suicideBombers++;
+						if (zombie.isToxicSplasher)
+							toxicSplashers++;
+						if (zombie.isHealer)
+							healers++;
 					}
-
-				return new
-				{
-					success = true,
-					hasCurrentMap = map != null,
-					mapId = map?.uniqueID ?? -1,
-					mapSize = map == null ? null : new
-					{
-						x = map.Size.x,
-						z = map.Size.z,
-						area = map.Size.x * map.Size.z
-					},
-					memory = new
-					{
-						gcTotalMemoryBytes = GC.GetTotalMemory(false),
-						gcCollectionForced = false,
-						unityProfiler = includeUnityProfilerMemory ? TryReadUnityProfilerMemory() : null
-					},
-					zombies = new
-					{
-						cachedZombieCount,
-						liveCachedZombieCount,
-						liveZombielandPawnCount = ordinaryZombies + blobs + spitters,
-						pendingSpawns = ZombieGenerator.ZombiesSpawning,
-						liveCountIncludingPendingSpawns = liveCachedZombieCount + blobs + spitters + ZombieGenerator.ZombiesSpawning,
-						special = new
-						{
-							ordinaryZombies,
-							blobs,
-							spitters,
-							tanky,
-							activeElectrical,
-							electrifiers,
-							miners,
-							albinos,
-							darkSlimers,
-							suicideBombers,
-							toxicSplashers,
-							healers
-						}
-					},
-					ticking = tickManager == null ? null : new
-					{
-						currentCount = tickManager.currentZombiesTickingCount,
-						currentCapacity = tickManager.currentZombiesTicking?.Length ?? 0,
-						currentIndex = tickManager.currentZombiesTickingIndex,
-						candidateCount = tickManager.CurrentZombiesTickingCandidatesCount,
-						candidateCapacity = tickManager.CurrentZombiesTickingCandidatesCapacity
-					},
-					zombieGrid = DescribeZombieGridDensity(map),
-					frameWatch = new
-					{
-						running = ZombielandMod.frameWatch.IsRunning,
-						elapsedMilliseconds = ZombielandMod.frameWatch.ElapsedMilliseconds
-					}
-				};
-			}
-
-			static object DescribeAmbientSoundState(Map map, TickManager tickManager, SettingsGroup settings, int zombieCount)
-			{
-				float? localHour = map == null ? null : GenLocalDate.HourFloat(map);
-				float? normalizedHour = null;
-				if (localHour.HasValue)
-					normalizedHour = localHour.Value < 12f ? localHour.Value + 24f : localHour.Value;
-
-				float? targetVolume = null;
-				if (map != null && ZombieStateHandler.creepyAmbientSoundVolumes.TryGetValue(map.uniqueID, out var ambientVolume))
-					targetVolume = ambientVolume;
-
-				var ambientSustainerField = tickManager == null ? null : AccessTools.Field(typeof(TickManager), "zombiesAmbientSound");
-				var ambientVolumeField = tickManager == null ? null : AccessTools.Field(typeof(TickManager), "zombiesAmbientSoundVolume");
-				var ambientSustainer = ambientSustainerField?.GetValue(tickManager) as Sustainer;
-				float? currentVolume = null;
-				if (ambientVolumeField?.GetValue(tickManager) is float volume)
-					currentVolume = volume;
-
-				return new
-				{
-					useSound = Constants.USE_SOUND,
-					playSetting = settings?.playCreepyAmbientSound,
-					zombieCount,
-					localHour,
-					normalizedHour,
-					spawningHours = Constants.ZOMBIE_SPAWNING_HOURS.ToArray(),
-					targetVolumeKnown = targetVolume.HasValue,
-					targetVolume,
-					hasSustainer = ambientSustainer != null,
-					currentVolume,
-					sustainerVolumeFactor = ambientSustainer?.info.volumeFactor
-				};
-			}
-
-			[Tool("zombieland/create_sos_space_map_fixture", Description = "Create a Save Our Ship 2 orbiting-ship map fixture so Zombieland space-map behavior can be verified through normal ticks.")]
-			public static object CreateSoSSpaceMapFixture(
-				[ToolParameter(Description = "Square map size to generate.", Required = false, DefaultValue = 200)] int size = 200)
-			{
-				if (SoSTools.isInstalled == false)
-					return new { success = false, message = "Save Our Ship 2 is not installed." };
-				if (SoSTools.sosShipOrbitingWorldObjectDef == null)
-					return new { success = false, message = "Save Our Ship 2 ShipOrbiting world object def was not resolved." };
-
-				size = Mathf.Clamp(size, 50, 300);
-				var previousMap = CurrentMap;
-				var mapGeneratorDef = DefDatabase<MapGeneratorDef>.GetNamed("EmptySpaceMap", false);
-				if (mapGeneratorDef == null)
-					return new { success = false, message = "Save Our Ship 2 EmptySpaceMap generator def was not resolved." };
-
-				try
-				{
-					var parent = WorldObjectMaker.MakeWorldObject(SoSTools.sosShipOrbitingWorldObjectDef) as MapParent;
-					if (parent == null)
-						return new
-						{
-							success = false,
-							message = "ShipOrbiting world object is not a MapParent.",
-							worldObjectClass = SoSTools.sosShipOrbitingWorldObjectDef.worldObjectClass?.FullName
-						};
-
-					parent.SetFaction(Faction.OfPlayer);
-					parent.Tile = FindSoSTestTile(previousMap);
-					Find.WorldObjects.Add(parent);
-
-					var generatedMap = MapGenerator.GenerateMap(new IntVec3(size, 1, size), parent, mapGeneratorDef, null, null, false);
-					Current.Game.CurrentMap = generatedMap;
-
-					var tickManager = generatedMap.GetComponent<TickManager>();
-					return new
-					{
-						success = true,
-						previousMapId = previousMap?.uniqueID ?? -1,
-						mapId = generatedMap.uniqueID,
-						mapIndex = generatedMap.Index,
-						mapSize = new { x = generatedMap.Size.x, z = generatedMap.Size.z },
-						mapBiome = generatedMap.Biome?.defName,
-						parentDef = parent.def?.defName,
-						parentType = parent.GetType().FullName,
-						parentTile = parent.Tile.ToString(),
-						mapGenerator = mapGeneratorDef.defName,
-						currentMapIsOuterSpace = generatedMap.Biome == SoSTools.sosOuterSpaceBiomeDef,
-						tickManagerPresent = tickManager != null,
-						floatingBackCount = tickManager?.floatingSpaceZombiesBack?.Count ?? 0,
-						floatingForeCount = tickManager?.floatingSpaceZombiesFore?.Count ?? 0
-					};
+					else if (pawn is ZombieBlob)
+						blobs++;
+					else if (pawn is ZombieSpitter)
+						spitters++;
 				}
-				catch (Exception ex)
+
+			return new
+			{
+				success = true,
+				hasCurrentMap = map != null,
+				mapId = map?.uniqueID ?? -1,
+				mapSize = map == null ? null : new
 				{
+					x = map.Size.x,
+					z = map.Size.z,
+					area = map.Size.x * map.Size.z
+				},
+				memory = new
+				{
+					gcTotalMemoryBytes = GC.GetTotalMemory(false),
+					gcCollectionForced = false,
+					unityProfiler = includeUnityProfilerMemory ? TryReadUnityProfilerMemory() : null
+				},
+				zombies = new
+				{
+					cachedZombieCount,
+					liveCachedZombieCount,
+					liveZombielandPawnCount = ordinaryZombies + blobs + spitters,
+					pendingSpawns = ZombieGenerator.ZombiesSpawning,
+					liveCountIncludingPendingSpawns = liveCachedZombieCount + blobs + spitters + ZombieGenerator.ZombiesSpawning,
+					special = new
+					{
+						ordinaryZombies,
+						blobs,
+						spitters,
+						tanky,
+						activeElectrical,
+						electrifiers,
+						miners,
+						albinos,
+						darkSlimers,
+						suicideBombers,
+						toxicSplashers,
+						healers
+					}
+				},
+				ticking = tickManager == null ? null : new
+				{
+					currentCount = tickManager.currentZombiesTickingCount,
+					currentCapacity = tickManager.currentZombiesTicking?.Length ?? 0,
+					currentIndex = tickManager.currentZombiesTickingIndex,
+					candidateCount = tickManager.CurrentZombiesTickingCandidatesCount,
+					candidateCapacity = tickManager.CurrentZombiesTickingCandidatesCapacity
+				},
+				zombieGrid = DescribeZombieGridDensity(map),
+				frameWatch = new
+				{
+					running = ZombielandMod.frameWatch.IsRunning,
+					elapsedMilliseconds = ZombielandMod.frameWatch.ElapsedMilliseconds
+				}
+			};
+		}
+
+		static object DescribeAmbientSoundState(Map map, TickManager tickManager, SettingsGroup settings, int zombieCount)
+		{
+			float? localHour = map == null ? null : GenLocalDate.HourFloat(map);
+			float? normalizedHour = null;
+			if (localHour.HasValue)
+				normalizedHour = localHour.Value < 12f ? localHour.Value + 24f : localHour.Value;
+
+			float? targetVolume = null;
+			if (map != null && ZombieStateHandler.creepyAmbientSoundVolumes.TryGetValue(map.uniqueID, out var ambientVolume))
+				targetVolume = ambientVolume;
+
+			var ambientSustainerField = tickManager == null ? null : AccessTools.Field(typeof(TickManager), "zombiesAmbientSound");
+			var ambientVolumeField = tickManager == null ? null : AccessTools.Field(typeof(TickManager), "zombiesAmbientSoundVolume");
+			var ambientSustainer = ambientSustainerField?.GetValue(tickManager) as Sustainer;
+			float? currentVolume = null;
+			if (ambientVolumeField?.GetValue(tickManager) is float volume)
+				currentVolume = volume;
+
+			return new
+			{
+				useSound = Constants.USE_SOUND,
+				playSetting = settings?.playCreepyAmbientSound,
+				zombieCount,
+				localHour,
+				normalizedHour,
+				spawningHours = Constants.ZOMBIE_SPAWNING_HOURS.ToArray(),
+				targetVolumeKnown = targetVolume.HasValue,
+				targetVolume,
+				hasSustainer = ambientSustainer != null,
+				currentVolume,
+				sustainerVolumeFactor = ambientSustainer?.info.volumeFactor
+			};
+		}
+
+		[Tool("zombieland/create_sos_space_map_fixture", Description = "Create a Save Our Ship 2 orbiting-ship map fixture so Zombieland space-map behavior can be verified through normal ticks.")]
+		public static object CreateSoSSpaceMapFixture(
+			[ToolParameter(Description = "Square map size to generate.", Required = false, DefaultValue = 200)] int size = 200)
+		{
+			if (SoSTools.isInstalled == false)
+				return new { success = false, message = "Save Our Ship 2 is not installed." };
+			if (SoSTools.sosShipOrbitingWorldObjectDef == null)
+				return new { success = false, message = "Save Our Ship 2 ShipOrbiting world object def was not resolved." };
+
+			size = Mathf.Clamp(size, 50, 300);
+			var previousMap = CurrentMap;
+			var mapGeneratorDef = DefDatabase<MapGeneratorDef>.GetNamed("EmptySpaceMap", false);
+			if (mapGeneratorDef == null)
+				return new { success = false, message = "Save Our Ship 2 EmptySpaceMap generator def was not resolved." };
+
+			try
+			{
+				var parent = WorldObjectMaker.MakeWorldObject(SoSTools.sosShipOrbitingWorldObjectDef) as MapParent;
+				if (parent == null)
 					return new
 					{
 						success = false,
-						message = ex.Message,
-						exceptionType = ex.GetType().FullName,
-						stackTrace = ex.StackTrace
+						message = "ShipOrbiting world object is not a MapParent.",
+						worldObjectClass = SoSTools.sosShipOrbitingWorldObjectDef.worldObjectClass?.FullName
 					};
-				}
-			}
 
-			static PlanetTile FindSoSTestTile(Map previousMap)
-			{
-				var finder = AccessTools.Method("SaveOurShip2.ShipInteriorMod2:FindWorldTileOnLayers", new[] { typeof(bool) });
-				if (finder != null)
-				{
-					var reflectedTile = finder.Invoke(null, new object[] { true });
-					if (reflectedTile is PlanetTile tile && tile != PlanetTile.Invalid)
-						return tile;
-				}
+				parent.SetFaction(Faction.OfPlayer);
+				parent.Tile = FindSoSTestTile(previousMap);
+				Find.WorldObjects.Add(parent);
 
-				if (previousMap != null && previousMap.Tile != PlanetTile.Invalid)
-					return previousMap.Tile;
+				var generatedMap = MapGenerator.GenerateMap(new IntVec3(size, 1, size), parent, mapGeneratorDef, null, null, false);
+				Current.Game.CurrentMap = generatedMap;
 
-				return TileFinder.RandomStartingTile();
-			}
-
-			[Tool("zombieland/startup_support_state", Description = "Verify startup asset loading and shared Zombieland service hook dispatch without clearing the live game.")]
-			public static object StartupSupportState()
-			{
-				var assetTargets = PatchedMethodsForPatchClass(nameof(Assets));
-				var legacyParseTargets = PatchedMethodsForPatchClass("ParseHelper_FromString_Patch");
-				var mainMenuInitTargets = PatchedMethodsForPatchClass("MainMenuDrawer_Init_Patch");
-				var timeControlTargets = PatchedMethodsForPatchClass(nameof(TimeControlService));
-				var clearMapsTargets = PatchedMethodsForPatchClass(nameof(ClearMapsService));
-				var rootUpdateTargets = PatchedMethodsForPatchClass("Root_Update_Patch");
-				var rootShutdownTargets = PatchedMethodsForPatchClass("Root_Shutdown_Patch");
-				var assetProbe = VerifyStartupAssets();
-				var legacyParseProbe = VerifyLegacyAreaRiskModeParsing();
-				var mainMenuProbe = VerifyMainMenuStartupErrors();
-				var timeControlProbe = VerifyTimeControlService();
-				var clearMapsProbe = VerifyClearMapsService();
-				var rootLifecycleProbe = VerifyRootLifecycleHooks();
-				var defResolutionProbe = VerifyZombielandDefResolution();
-				var optionalIntegrationsProbe = VerifyOptionalIntegrations();
-
+				var tickManager = generatedMap.GetComponent<TickManager>();
 				return new
 				{
-					success = assetTargets.Length > 0
-						&& legacyParseTargets.Length > 0
-						&& mainMenuInitTargets.Length > 0
-						&& timeControlTargets.Length > 0
-						&& clearMapsTargets.Length > 0
-						&& rootUpdateTargets.Length > 0
-						&& rootShutdownTargets.Length > 0
-						&& ObjectSuccess(assetProbe)
-						&& ObjectSuccess(legacyParseProbe)
-						&& ObjectSuccess(mainMenuProbe)
-						&& ObjectSuccess(timeControlProbe)
-						&& ObjectSuccess(clearMapsProbe)
-						&& ObjectSuccess(rootLifecycleProbe)
-						&& ObjectSuccess(defResolutionProbe)
-						&& ObjectSuccess(optionalIntegrationsProbe),
-					patchTargets = new
-					{
-						assets = assetTargets,
-						legacyParse = legacyParseTargets,
-						mainMenuInit = mainMenuInitTargets,
-						timeControl = timeControlTargets,
-						clearMaps = clearMapsTargets,
-						rootUpdate = rootUpdateTargets,
-						rootShutdown = rootShutdownTargets
-					},
-					assets = assetProbe,
-					legacyParse = legacyParseProbe,
-					mainMenuInit = mainMenuProbe,
-					timeControl = timeControlProbe,
-					clearMaps = clearMapsProbe,
-					rootLifecycle = rootLifecycleProbe,
-					defResolution = defResolutionProbe,
-					optionalIntegrations = optionalIntegrationsProbe
+					success = true,
+					previousMapId = previousMap?.uniqueID ?? -1,
+					mapId = generatedMap.uniqueID,
+					mapIndex = generatedMap.Index,
+					mapSize = new { x = generatedMap.Size.x, z = generatedMap.Size.z },
+					mapBiome = generatedMap.Biome?.defName,
+					parentDef = parent.def?.defName,
+					parentType = parent.GetType().FullName,
+					parentTile = parent.Tile.ToString(),
+					mapGenerator = mapGeneratorDef.defName,
+					currentMapIsOuterSpace = generatedMap.Biome == SoSTools.sosOuterSpaceBiomeDef,
+					tickManagerPresent = tickManager != null,
+					floatingBackCount = tickManager?.floatingSpaceZombiesBack?.Count ?? 0,
+					floatingForeCount = tickManager?.floatingSpaceZombiesFore?.Count ?? 0
 				};
 			}
-
-			static object VerifyOptionalIntegrations()
+			catch (Exception ex)
 			{
-				var activePackages = LoadedModManager.RunningModsListForReading
-					.Select(mod => mod.PackageIdPlayerFacing)
-					.Where(id => id.NullOrEmpty() == false)
-					.OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
-					.ToArray();
-				var activePackageSet = new HashSet<string>(activePackages, StringComparer.OrdinalIgnoreCase);
+				return new
+				{
+					success = false,
+					message = ex.Message,
+					exceptionType = ex.GetType().FullName,
+					stackTrace = ex.StackTrace
+				};
+			}
+		}
+
+		static PlanetTile FindSoSTestTile(Map previousMap)
+		{
+			var finder = AccessTools.Method("SaveOurShip2.ShipInteriorMod2:FindWorldTileOnLayers", new[] { typeof(bool) });
+			if (finder != null)
+			{
+				var reflectedTile = finder.Invoke(null, new object[] { true });
+				if (reflectedTile is PlanetTile tile && tile != PlanetTile.Invalid)
+					return tile;
+			}
+
+			if (previousMap != null && previousMap.Tile != PlanetTile.Invalid)
+				return previousMap.Tile;
+
+			return TileFinder.RandomStartingTile();
+		}
+
+		[Tool("zombieland/startup_support_state", Description = "Verify startup asset loading and shared Zombieland service hook dispatch without clearing the live game.")]
+		public static object StartupSupportState()
+		{
+			var assetTargets = PatchedMethodsForPatchClass(nameof(Assets));
+			var legacyParseTargets = PatchedMethodsForPatchClass("ParseHelper_FromString_Patch");
+			var mainMenuInitTargets = PatchedMethodsForPatchClass("MainMenuDrawer_Init_Patch");
+			var timeControlTargets = PatchedMethodsForPatchClass(nameof(TimeControlService));
+			var clearMapsTargets = PatchedMethodsForPatchClass(nameof(ClearMapsService));
+			var rootUpdateTargets = PatchedMethodsForPatchClass("Root_Update_Patch");
+			var rootShutdownTargets = PatchedMethodsForPatchClass("Root_Shutdown_Patch");
+			var assetProbe = VerifyStartupAssets();
+			var legacyParseProbe = VerifyLegacyAreaRiskModeParsing();
+			var mainMenuProbe = VerifyMainMenuStartupErrors();
+			var timeControlProbe = VerifyTimeControlService();
+			var clearMapsProbe = VerifyClearMapsService();
+			var rootLifecycleProbe = VerifyRootLifecycleHooks();
+			var defResolutionProbe = VerifyZombielandDefResolution();
+			var optionalIntegrationsProbe = VerifyOptionalIntegrations();
+
+			return new
+			{
+				success = assetTargets.Length > 0
+					&& legacyParseTargets.Length > 0
+					&& mainMenuInitTargets.Length > 0
+					&& timeControlTargets.Length > 0
+					&& clearMapsTargets.Length > 0
+					&& rootUpdateTargets.Length > 0
+					&& rootShutdownTargets.Length > 0
+					&& ObjectSuccess(assetProbe)
+					&& ObjectSuccess(legacyParseProbe)
+					&& ObjectSuccess(mainMenuProbe)
+					&& ObjectSuccess(timeControlProbe)
+					&& ObjectSuccess(clearMapsProbe)
+					&& ObjectSuccess(rootLifecycleProbe)
+					&& ObjectSuccess(defResolutionProbe)
+					&& ObjectSuccess(optionalIntegrationsProbe),
+				patchTargets = new
+				{
+					assets = assetTargets,
+					legacyParse = legacyParseTargets,
+					mainMenuInit = mainMenuInitTargets,
+					timeControl = timeControlTargets,
+					clearMaps = clearMapsTargets,
+					rootUpdate = rootUpdateTargets,
+					rootShutdown = rootShutdownTargets
+				},
+				assets = assetProbe,
+				legacyParse = legacyParseProbe,
+				mainMenuInit = mainMenuProbe,
+				timeControl = timeControlProbe,
+				clearMaps = clearMapsProbe,
+				rootLifecycle = rootLifecycleProbe,
+				defResolution = defResolutionProbe,
+				optionalIntegrations = optionalIntegrationsProbe
+			};
+		}
+
+		static object VerifyOptionalIntegrations()
+		{
+			var activePackages = LoadedModManager.RunningModsListForReading
+				.Select(mod => mod.PackageIdPlayerFacing)
+				.Where(id => id.NullOrEmpty() == false)
+				.OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+				.ToArray();
+			var activePackageSet = new HashSet<string>(activePackages, StringComparer.OrdinalIgnoreCase);
 
 			var integrations = new[]
 			{
@@ -1146,260 +1146,260 @@ namespace ZombieLand
 			public string error;
 		}
 
-			static object VerifyStartupAssets()
+		static object VerifyStartupAssets()
+		{
+			var dustInstantiated = false;
+			string dustError = null;
+			string dustName = null;
+			bool dustHasParticleSystem = false;
+			bool dustHasRenderer = false;
+			GameObject dust = null;
+			try
 			{
-				var dustInstantiated = false;
-				string dustError = null;
-				string dustName = null;
-				bool dustHasParticleSystem = false;
-				bool dustHasRenderer = false;
-				GameObject dust = null;
-				try
-				{
-					dust = Assets.NewDust();
-					dustInstantiated = dust != null;
-					dustName = dust?.name;
-					dustHasParticleSystem = dust?.GetComponent<ParticleSystem>() != null;
-					dustHasRenderer = dust?.GetComponent<ParticleSystemRenderer>() != null;
-				}
-				catch (Exception ex)
-				{
-					dustError = ex.GetType().Name + ": " + ex.Message;
-				}
-				finally
-				{
-					if (dust != null)
-						UnityEngine.Object.Destroy(dust);
-				}
+				dust = Assets.NewDust();
+				dustInstantiated = dust != null;
+				dustName = dust?.name;
+				dustHasParticleSystem = dust?.GetComponent<ParticleSystem>() != null;
+				dustHasRenderer = dust?.GetComponent<ParticleSystemRenderer>() != null;
+			}
+			catch (Exception ex)
+			{
+				dustError = ex.GetType().Name + ": " + ex.Message;
+			}
+			finally
+			{
+				if (dust != null)
+					UnityEngine.Object.Destroy(dust);
+			}
 
+			return new
+			{
+				success = Assets.initialized
+					&& Assets.MetaballShader != null
+					&& dustInstantiated
+					&& dustHasParticleSystem
+					&& dustHasRenderer,
+				Assets.initialized,
+				metaballShader = Assets.MetaballShader?.name,
+				dust = new
+				{
+					instantiated = dustInstantiated,
+					name = dustName,
+					hasParticleSystem = dustHasParticleSystem,
+					hasRenderer = dustHasRenderer,
+					error = dustError
+				}
+			};
+		}
+
+		static object VerifyLegacyAreaRiskModeParsing()
+		{
+			object ifInside = null;
+			object ifOutside = null;
+			object currentName = null;
+			string error = null;
+			try
+			{
+				ifInside = ParseHelper.FromString("IfInside", typeof(AreaRiskMode));
+				ifOutside = ParseHelper.FromString("IfOutside", typeof(AreaRiskMode));
+				currentName = ParseHelper.FromString(nameof(AreaRiskMode.ZombieInside), typeof(AreaRiskMode));
+			}
+			catch (Exception ex)
+			{
+				error = ex.GetType().Name + ": " + ex.Message;
+			}
+
+			return new
+			{
+				success = error == null
+					&& ifInside is AreaRiskMode insideMode
+					&& insideMode == AreaRiskMode.ColonistInside
+					&& ifOutside is AreaRiskMode outsideMode
+					&& outsideMode == AreaRiskMode.ColonistOutside
+					&& currentName is AreaRiskMode currentMode
+					&& currentMode == AreaRiskMode.ZombieInside,
+				legacy = new
+				{
+					ifInside = ifInside?.ToString(),
+					expectedIfInside = AreaRiskMode.ColonistInside.ToString(),
+					ifOutside = ifOutside?.ToString(),
+					expectedIfOutside = AreaRiskMode.ColonistOutside.ToString()
+				},
+				current = new
+				{
+					zombieInside = currentName?.ToString()
+				},
+				error
+			};
+		}
+
+		static object VerifyMainMenuStartupErrors()
+		{
+			var errorsField = typeof(Patches).GetField("errors", BindingFlags.Static | BindingFlags.NonPublic);
+			var errorCount = -1;
+			if (errorsField?.GetValue(null) is System.Collections.ICollection errors)
+				errorCount = errors.Count;
+			var errorDialogOpen = Find.WindowStack?.IsOpen(typeof(Dialog_ErrorMessage)) == true;
+
+			return new
+			{
+				success = errorCount == 0 && errorDialogOpen == false,
+				errorCount,
+				errorDialogOpen,
+				windowStackAvailable = Find.WindowStack != null
+			};
+		}
+
+		static object VerifyTimeControlService()
+		{
+			var postfix = typeof(TimeControlService).GetMethod("Postfix", BindingFlags.Static | BindingFlags.NonPublic);
+			var curTimeSpeedField = typeof(TimeControlService).GetField("curTimeSpeed", BindingFlags.Static | BindingFlags.NonPublic);
+			var tickManager = Current.Game?.tickManager;
+			if (postfix == null || curTimeSpeedField == null || tickManager == null)
+			{
 				return new
 				{
-					success = Assets.initialized
-						&& Assets.MetaballShader != null
-						&& dustInstantiated
-						&& dustHasParticleSystem
-						&& dustHasRenderer,
-					Assets.initialized,
-					metaballShader = Assets.MetaballShader?.name,
-					dust = new
+					success = false,
+					reflection = new
 					{
-						instantiated = dustInstantiated,
-						name = dustName,
-						hasParticleSystem = dustHasParticleSystem,
-						hasRenderer = dustHasRenderer,
-						error = dustError
+						postfix = postfix != null,
+						curTimeSpeedField = curTimeSpeedField != null,
+						tickManager = tickManager != null
 					}
 				};
 			}
 
-			static object VerifyLegacyAreaRiskModeParsing()
+			var subscriber = new object();
+			var notifications = new List<string>();
+			var originalCurTimeSpeed = curTimeSpeedField.GetValue(null);
+			try
 			{
-				object ifInside = null;
-				object ifOutside = null;
-				object currentName = null;
-				string error = null;
-				try
+				curTimeSpeedField.SetValue(null, null);
+				TimeControlService.Subscribe(subscriber, speed => notifications.Add(speed.ToString()));
+				postfix.Invoke(null, Array.Empty<object>());
+				postfix.Invoke(null, Array.Empty<object>());
+				TimeControlService.Unsubscribe(subscriber);
+			}
+			finally
+			{
+				TimeControlService.Unsubscribe(subscriber);
+				curTimeSpeedField.SetValue(null, originalCurTimeSpeed);
+			}
+
+			return new
+			{
+				success = notifications.Count == 1
+					&& notifications[0] == tickManager.CurTimeSpeed.ToString(),
+				currentTimeSpeed = tickManager.CurTimeSpeed.ToString(),
+				notifications = notifications.ToArray()
+			};
+		}
+
+		static object VerifyClearMapsService()
+		{
+			var prefix = typeof(ClearMapsService).GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+			if (prefix == null)
+			{
+				return new
 				{
-					ifInside = ParseHelper.FromString("IfInside", typeof(AreaRiskMode));
-					ifOutside = ParseHelper.FromString("IfOutside", typeof(AreaRiskMode));
-					currentName = ParseHelper.FromString(nameof(AreaRiskMode.ZombieInside), typeof(AreaRiskMode));
-				}
-				catch (Exception ex)
+					success = false,
+					reflection = new
+					{
+						prefix = false
+					}
+				};
+			}
+
+			var subscriber = new object();
+			var callbackCount = 0;
+			try
+			{
+				ClearMapsService.Subscribe(subscriber, () => callbackCount++);
+				prefix.Invoke(null, Array.Empty<object>());
+				ClearMapsService.Unsubscribe(subscriber);
+			}
+			finally
+			{
+				ClearMapsService.Unsubscribe(subscriber);
+			}
+
+			return new
+			{
+				success = callbackCount == 1,
+				callbackCount,
+				note = "Invoked the Zombieland prefix directly to avoid clearing the live game."
+			};
+		}
+
+		static object VerifyRootLifecycleHooks()
+		{
+			var rootUpdatePrefix = typeof(Patches)
+				.GetNestedType("Root_Update_Patch", BindingFlags.NonPublic)
+				?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+			var rootShutdownPrefix = typeof(Patches)
+				.GetNestedType("Root_Shutdown_Patch", BindingFlags.NonPublic)
+				?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
+			if (rootUpdatePrefix == null || rootShutdownPrefix == null)
+			{
+				return new
 				{
-					error = ex.GetType().Name + ": " + ex.Message;
-				}
+					success = false,
+					reflection = new
+					{
+						rootUpdatePrefix = rootUpdatePrefix != null,
+						rootShutdownPrefix = rootShutdownPrefix != null
+					}
+				};
+			}
+
+			var originalAvoiderRunning = Tools.avoider.running;
+			var frameWatch = ZombielandMod.frameWatch;
+			var wasRunningBeforeReset = frameWatch.IsRunning;
+			try
+			{
+				frameWatch.Reset();
+				var runningAfterReset = frameWatch.IsRunning;
+				var elapsedAfterReset = frameWatch.ElapsedTicks;
+				rootUpdatePrefix.Invoke(null, Array.Empty<object>());
+				var runningAfterUpdatePrefix = frameWatch.IsRunning;
+				var elapsedAfterUpdatePrefix = frameWatch.ElapsedTicks;
+
+				Tools.avoider.running = true;
+				rootShutdownPrefix.Invoke(null, Array.Empty<object>());
+				var avoiderRunningAfterShutdownPrefix = Tools.avoider.running;
 
 				return new
 				{
-					success = error == null
-						&& ifInside is AreaRiskMode insideMode
-						&& insideMode == AreaRiskMode.ColonistInside
-						&& ifOutside is AreaRiskMode outsideMode
-						&& outsideMode == AreaRiskMode.ColonistOutside
-						&& currentName is AreaRiskMode currentMode
-						&& currentMode == AreaRiskMode.ZombieInside,
-					legacy = new
+					success = runningAfterReset == false
+						&& elapsedAfterReset == 0
+						&& runningAfterUpdatePrefix
+						&& avoiderRunningAfterShutdownPrefix == false,
+					frameWatch = new
 					{
-						ifInside = ifInside?.ToString(),
-						expectedIfInside = AreaRiskMode.ColonistInside.ToString(),
-						ifOutside = ifOutside?.ToString(),
-						expectedIfOutside = AreaRiskMode.ColonistOutside.ToString()
+						wasRunningBeforeReset,
+						runningAfterReset,
+						elapsedAfterReset,
+						runningAfterUpdatePrefix,
+						elapsedAfterUpdatePrefix
 					},
-					current = new
+					avoider = new
 					{
-						zombieInside = currentName?.ToString()
+						originalRunning = originalAvoiderRunning,
+						runningBeforeShutdownPrefix = true,
+						runningAfterShutdownPrefix = avoiderRunningAfterShutdownPrefix
 					},
-					error
+					note = "Invoked only Zombieland root prefixes; vanilla Root.Shutdown was not called."
 				};
 			}
-
-			static object VerifyMainMenuStartupErrors()
+			finally
 			{
-				var errorsField = typeof(Patches).GetField("errors", BindingFlags.Static | BindingFlags.NonPublic);
-				var errorCount = -1;
-				if (errorsField?.GetValue(null) is System.Collections.ICollection errors)
-					errorCount = errors.Count;
-				var errorDialogOpen = Find.WindowStack?.IsOpen(typeof(Dialog_ErrorMessage)) == true;
-
-				return new
-				{
-					success = errorCount == 0 && errorDialogOpen == false,
-					errorCount,
-					errorDialogOpen,
-					windowStackAvailable = Find.WindowStack != null
-				};
+				Tools.avoider.running = originalAvoiderRunning;
+				if (wasRunningBeforeReset)
+					frameWatch.Restart();
+				else
+					frameWatch.Stop();
 			}
-
-			static object VerifyTimeControlService()
-			{
-				var postfix = typeof(TimeControlService).GetMethod("Postfix", BindingFlags.Static | BindingFlags.NonPublic);
-				var curTimeSpeedField = typeof(TimeControlService).GetField("curTimeSpeed", BindingFlags.Static | BindingFlags.NonPublic);
-				var tickManager = Current.Game?.tickManager;
-				if (postfix == null || curTimeSpeedField == null || tickManager == null)
-				{
-					return new
-					{
-						success = false,
-						reflection = new
-						{
-							postfix = postfix != null,
-							curTimeSpeedField = curTimeSpeedField != null,
-							tickManager = tickManager != null
-						}
-					};
-				}
-
-				var subscriber = new object();
-				var notifications = new List<string>();
-				var originalCurTimeSpeed = curTimeSpeedField.GetValue(null);
-				try
-				{
-					curTimeSpeedField.SetValue(null, null);
-					TimeControlService.Subscribe(subscriber, speed => notifications.Add(speed.ToString()));
-					postfix.Invoke(null, Array.Empty<object>());
-					postfix.Invoke(null, Array.Empty<object>());
-					TimeControlService.Unsubscribe(subscriber);
-				}
-				finally
-				{
-					TimeControlService.Unsubscribe(subscriber);
-					curTimeSpeedField.SetValue(null, originalCurTimeSpeed);
-				}
-
-				return new
-				{
-					success = notifications.Count == 1
-						&& notifications[0] == tickManager.CurTimeSpeed.ToString(),
-					currentTimeSpeed = tickManager.CurTimeSpeed.ToString(),
-					notifications = notifications.ToArray()
-				};
-			}
-
-			static object VerifyClearMapsService()
-			{
-				var prefix = typeof(ClearMapsService).GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
-				if (prefix == null)
-				{
-					return new
-					{
-						success = false,
-						reflection = new
-						{
-							prefix = false
-						}
-					};
-				}
-
-				var subscriber = new object();
-				var callbackCount = 0;
-				try
-				{
-					ClearMapsService.Subscribe(subscriber, () => callbackCount++);
-					prefix.Invoke(null, Array.Empty<object>());
-					ClearMapsService.Unsubscribe(subscriber);
-				}
-				finally
-				{
-					ClearMapsService.Unsubscribe(subscriber);
-				}
-
-				return new
-				{
-					success = callbackCount == 1,
-					callbackCount,
-					note = "Invoked the Zombieland prefix directly to avoid clearing the live game."
-				};
-			}
-
-			static object VerifyRootLifecycleHooks()
-			{
-				var rootUpdatePrefix = typeof(Patches)
-					.GetNestedType("Root_Update_Patch", BindingFlags.NonPublic)
-					?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
-				var rootShutdownPrefix = typeof(Patches)
-					.GetNestedType("Root_Shutdown_Patch", BindingFlags.NonPublic)
-					?.GetMethod("Prefix", BindingFlags.Static | BindingFlags.NonPublic);
-				if (rootUpdatePrefix == null || rootShutdownPrefix == null)
-				{
-					return new
-					{
-						success = false,
-						reflection = new
-						{
-							rootUpdatePrefix = rootUpdatePrefix != null,
-							rootShutdownPrefix = rootShutdownPrefix != null
-						}
-					};
-				}
-
-				var originalAvoiderRunning = Tools.avoider.running;
-				var frameWatch = ZombielandMod.frameWatch;
-				var wasRunningBeforeReset = frameWatch.IsRunning;
-				try
-				{
-					frameWatch.Reset();
-					var runningAfterReset = frameWatch.IsRunning;
-					var elapsedAfterReset = frameWatch.ElapsedTicks;
-					rootUpdatePrefix.Invoke(null, Array.Empty<object>());
-					var runningAfterUpdatePrefix = frameWatch.IsRunning;
-					var elapsedAfterUpdatePrefix = frameWatch.ElapsedTicks;
-
-					Tools.avoider.running = true;
-					rootShutdownPrefix.Invoke(null, Array.Empty<object>());
-					var avoiderRunningAfterShutdownPrefix = Tools.avoider.running;
-
-					return new
-					{
-						success = runningAfterReset == false
-							&& elapsedAfterReset == 0
-							&& runningAfterUpdatePrefix
-							&& avoiderRunningAfterShutdownPrefix == false,
-						frameWatch = new
-						{
-							wasRunningBeforeReset,
-							runningAfterReset,
-							elapsedAfterReset,
-							runningAfterUpdatePrefix,
-							elapsedAfterUpdatePrefix
-						},
-						avoider = new
-						{
-							originalRunning = originalAvoiderRunning,
-							runningBeforeShutdownPrefix = true,
-							runningAfterShutdownPrefix = avoiderRunningAfterShutdownPrefix
-						},
-						note = "Invoked only Zombieland root prefixes; vanilla Root.Shutdown was not called."
-					};
-				}
-				finally
-				{
-					Tools.avoider.running = originalAvoiderRunning;
-					if (wasRunningBeforeReset)
-						frameWatch.Restart();
-					else
-						frameWatch.Stop();
-				}
-			}
+		}
 
 		static object DescribeZombieGridDensity(Map map)
 		{
@@ -1486,7 +1486,7 @@ namespace ZombieLand
 		}
 
 		static object DescribeZombieGrid(Map map, Pawn[] zombies)
-			{
+		{
 			if (map == null)
 				return null;
 

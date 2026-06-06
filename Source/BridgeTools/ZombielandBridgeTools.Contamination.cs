@@ -62,77 +62,77 @@ namespace ZombieLand
 				cells = cellEntries,
 				pawns = pawnEntries,
 				things = thingEntries
-				};
-			}
+			};
+		}
 
-			[Tool("zombieland/read_contamination_effect_state", Description = "Read active contamination mental/job driver state for reusable pawn target lists, optionally advancing ticks first.")]
-			public static object ReadContaminationEffectState(
-				[ToolParameter(Description = "Optional semicolon-separated pawn id, ThingID, label, or short-name list. Empty returns all spawned pawns with contamination, contamination mental states, or contamination jobs.", Required = false, DefaultValue = "")] string pawns = "",
-				[ToolParameter(Description = "Optional game ticks to advance before reading; clamped to 0..5000.", Required = false, DefaultValue = 0)] int advanceTicks = 0)
+		[Tool("zombieland/read_contamination_effect_state", Description = "Read active contamination mental/job driver state for reusable pawn target lists, optionally advancing ticks first.")]
+		public static object ReadContaminationEffectState(
+			[ToolParameter(Description = "Optional semicolon-separated pawn id, ThingID, label, or short-name list. Empty returns all spawned pawns with contamination, contamination mental states, or contamination jobs.", Required = false, DefaultValue = "")] string pawns = "",
+			[ToolParameter(Description = "Optional game ticks to advance before reading; clamped to 0..5000.", Required = false, DefaultValue = 0)] int advanceTicks = 0)
+		{
+			var map = CurrentMap;
+			if (map == null)
 			{
-				var map = CurrentMap;
-				if (map == null)
-				{
-					return new
-					{
-						success = false,
-						error = "No current map is loaded."
-					};
-				}
-
-				var clampedAdvanceTicks = Mathf.Clamp(advanceTicks, 0, 5000);
-				if (clampedAdvanceTicks > 0)
-					AdvanceGameTicks(clampedAdvanceTicks);
-
-				var targets = SplitTargetList(pawns);
-				var entries = new List<object>();
-				var missing = 0;
-				if (targets.Length == 0)
-				{
-					entries.AddRange(map.mapPawns.AllPawnsSpawned
-						.Where(IsContaminationEffectPawn)
-						.OrderBy(pawn => pawn.thingIDNumber)
-						.Select(DescribeContaminationEffectPawn));
-				}
-				else
-				{
-					foreach (var target in targets)
-					{
-						if (ZombieRuntimeActions.TryFindPawn(map, target, out var pawn, out var error))
-						{
-							entries.Add(DescribeContaminationEffectPawn(pawn));
-						}
-						else
-						{
-							missing++;
-							entries.Add(new
-							{
-								query = target,
-								found = false,
-								error
-							});
-						}
-					}
-				}
-
 				return new
 				{
-					success = missing == 0,
-					ticksGame = Find.TickManager.TicksGame,
-					advancedTicks = clampedAdvanceTicks,
-					requestedTargets = targets.Length,
-					missing,
-					pawnCount = entries.Count,
-					pawns = entries.ToArray()
+					success = false,
+					error = "No current map is loaded."
 				};
 			}
 
-			[Tool("zombieland/write_contamination_state", Description = "Set one contamination value on reusable current-map cell, pawn, and thing target lists, then read the resulting state.")]
-			public static object WriteContaminationState(
-			[ToolParameter(Description = "Contamination value to set; clamped to 0..1.", Required = true)] float value,
-			[ToolParameter(Description = "Optional semicolon-separated cell list like '100,100;101,100'.", Required = false, DefaultValue = "")] string cells = "",
-			[ToolParameter(Description = "Optional semicolon-separated pawn id, ThingID, label, or short-name list.", Required = false, DefaultValue = "")] string pawns = "",
-			[ToolParameter(Description = "Optional semicolon-separated thing id, ThingID, or label list.", Required = false, DefaultValue = "")] string things = "")
+			var clampedAdvanceTicks = Mathf.Clamp(advanceTicks, 0, 5000);
+			if (clampedAdvanceTicks > 0)
+				AdvanceGameTicks(clampedAdvanceTicks);
+
+			var targets = SplitTargetList(pawns);
+			var entries = new List<object>();
+			var missing = 0;
+			if (targets.Length == 0)
+			{
+				entries.AddRange(map.mapPawns.AllPawnsSpawned
+					.Where(IsContaminationEffectPawn)
+					.OrderBy(pawn => pawn.thingIDNumber)
+					.Select(DescribeContaminationEffectPawn));
+			}
+			else
+			{
+				foreach (var target in targets)
+				{
+					if (ZombieRuntimeActions.TryFindPawn(map, target, out var pawn, out var error))
+					{
+						entries.Add(DescribeContaminationEffectPawn(pawn));
+					}
+					else
+					{
+						missing++;
+						entries.Add(new
+						{
+							query = target,
+							found = false,
+							error
+						});
+					}
+				}
+			}
+
+			return new
+			{
+				success = missing == 0,
+				ticksGame = Find.TickManager.TicksGame,
+				advancedTicks = clampedAdvanceTicks,
+				requestedTargets = targets.Length,
+				missing,
+				pawnCount = entries.Count,
+				pawns = entries.ToArray()
+			};
+		}
+
+		[Tool("zombieland/write_contamination_state", Description = "Set one contamination value on reusable current-map cell, pawn, and thing target lists, then read the resulting state.")]
+		public static object WriteContaminationState(
+		[ToolParameter(Description = "Contamination value to set; clamped to 0..1.", Required = true)] float value,
+		[ToolParameter(Description = "Optional semicolon-separated cell list like '100,100;101,100'.", Required = false, DefaultValue = "")] string cells = "",
+		[ToolParameter(Description = "Optional semicolon-separated pawn id, ThingID, label, or short-name list.", Required = false, DefaultValue = "")] string pawns = "",
+		[ToolParameter(Description = "Optional semicolon-separated thing id, ThingID, or label list.", Required = false, DefaultValue = "")] string things = "")
 		{
 			var map = CurrentMap;
 			if (map == null)
@@ -905,12 +905,12 @@ namespace ZombieLand
 			var componentAfterSplitCount = component.stackCount;
 			var splitCount = split?.stackCount ?? 0;
 			var componentAfterSplitContamination = component.GetContamination();
-				var splitContamination = split?.GetContamination() ?? 0f;
-				var groundRepair = VerifyGroundRepair(map);
-				var destroyCleanup = VerifyDestroyCleanup(map, itemCell + new IntVec3(3, 0, 0));
-				var thingCompMakeThing = VerifyThingCompMakeThingFanout(map, itemCell + new IntVec3(6, 0, 0));
-				var minifiedSplit = VerifyMinifiedThingSplit(map, itemCell + new IntVec3(9, 0, 0));
-				var worldGenerationReset = VerifyWorldGenerationReset();
+			var splitContamination = split?.GetContamination() ?? 0f;
+			var groundRepair = VerifyGroundRepair(map);
+			var destroyCleanup = VerifyDestroyCleanup(map, itemCell + new IntVec3(3, 0, 0));
+			var thingCompMakeThing = VerifyThingCompMakeThingFanout(map, itemCell + new IntVec3(6, 0, 0));
+			var minifiedSplit = VerifyMinifiedThingSplit(map, itemCell + new IntVec3(9, 0, 0));
+			var worldGenerationReset = VerifyWorldGenerationReset();
 
 			static bool Close(float? value, float expected) => value.HasValue && Mathf.Abs(value.Value - expected) < 0.0001f;
 			static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
@@ -1227,202 +1227,202 @@ namespace ZombieLand
 				highNonLethalAddSynced,
 				clampSynced,
 				secondClearSynced,
-					splitPropagated
+				splitPropagated
 					,
-					thingCompMakeThing
+				thingCompMakeThing
+			};
+		}
+
+		static object VerifyWorldGenerationReset()
+		{
+			var patchTargets = PatchedMethodsForPatchClass("WorldGenerator_GenerateWorld_Patch");
+			var instanceField = typeof(ContaminationManager).GetField("_instance", BindingFlags.Static | BindingFlags.NonPublic);
+			var currentWorld = Current.Game?.World;
+			var realComponent = currentWorld?.GetComponent<ContaminationManager>();
+			var postfix = typeof(WorldGenerator_GenerateWorld_Patch).GetMethod("Postfix", BindingFlags.Static | BindingFlags.Public);
+			if (instanceField == null || currentWorld == null || realComponent == null || postfix == null)
+			{
+				return new
+				{
+					success = false,
+					targets = CompactPatchTargets(patchTargets),
+					error = "World generation reset probe requires the ContaminationManager singleton field, current world component, and patch postfix."
 				};
 			}
 
-			static object VerifyWorldGenerationReset()
+			var originalCached = instanceField.GetValue(null);
+			var sentinel = new ContaminationManager(currentWorld);
+			try
 			{
-				var patchTargets = PatchedMethodsForPatchClass("WorldGenerator_GenerateWorld_Patch");
-				var instanceField = typeof(ContaminationManager).GetField("_instance", BindingFlags.Static | BindingFlags.NonPublic);
-				var currentWorld = Current.Game?.World;
-				var realComponent = currentWorld?.GetComponent<ContaminationManager>();
-				var postfix = typeof(WorldGenerator_GenerateWorld_Patch).GetMethod("Postfix", BindingFlags.Static | BindingFlags.Public);
-				if (instanceField == null || currentWorld == null || realComponent == null || postfix == null)
-				{
-					return new
-					{
-						success = false,
-						targets = CompactPatchTargets(patchTargets),
-						error = "World generation reset probe requires the ContaminationManager singleton field, current world component, and patch postfix."
-					};
-				}
-
-				var originalCached = instanceField.GetValue(null);
-				var sentinel = new ContaminationManager(currentWorld);
-				try
-				{
-					instanceField.SetValue(null, sentinel);
-					var sentinelInstalled = ReferenceEquals(instanceField.GetValue(null), sentinel);
-					postfix.Invoke(null, null);
-					var fieldAfterPostfix = instanceField.GetValue(null);
-					var clearedByPostfix = fieldAfterPostfix == null;
-					var rebound = ContaminationManager.Instance;
-					return new
-					{
-						success = patchTargets.Length > 0
-							&& sentinelInstalled
-							&& clearedByPostfix
-							&& ReferenceEquals(rebound, realComponent)
-							&& ReferenceEquals(rebound, sentinel) == false,
-						targets = CompactPatchTargets(patchTargets),
-						target = "RimWorld.Planet.WorldGenerator.GenerateWorld",
-						sentinelInstalled,
-						clearedByPostfix,
-						reboundToCurrentWorldComponent = ReferenceEquals(rebound, realComponent),
-						reboundToSentinel = ReferenceEquals(rebound, sentinel),
-						currentWorldComponentPresent = realComponent != null
-					};
-				}
-				finally
-				{
-					instanceField.SetValue(null, originalCached ?? realComponent);
-				}
-			}
-
-			static object VerifyThingCompMakeThingFanout(Map map, IntVec3 root)
-			{
-				var patchTargets = PatchedMethodsForPatchClass("ThingComp_MakeThing_Patch");
-				var gatherableCase = VerifyGatherableBodyResourceThingCompTransfer(map, root);
+				instanceField.SetValue(null, sentinel);
+				var sentinelInstalled = ReferenceEquals(instanceField.GetValue(null), sentinel);
+				postfix.Invoke(null, null);
+				var fieldAfterPostfix = instanceField.GetValue(null);
+				var clearedByPostfix = fieldAfterPostfix == null;
+				var rebound = ContaminationManager.Instance;
 				return new
 				{
 					success = patchTargets.Length > 0
-						&& ObjectSuccess(gatherableCase),
+						&& sentinelInstalled
+						&& clearedByPostfix
+						&& ReferenceEquals(rebound, realComponent)
+						&& ReferenceEquals(rebound, sentinel) == false,
 					targets = CompactPatchTargets(patchTargets),
-					gatherableCase
+					target = "RimWorld.Planet.WorldGenerator.GenerateWorld",
+					sentinelInstalled,
+					clearedByPostfix,
+					reboundToCurrentWorldComponent = ReferenceEquals(rebound, realComponent),
+					reboundToSentinel = ReferenceEquals(rebound, sentinel),
+					currentWorldComponentPresent = realComponent != null
+				};
+			}
+			finally
+			{
+				instanceField.SetValue(null, originalCached ?? realComponent);
+			}
+		}
+
+		static object VerifyThingCompMakeThingFanout(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("ThingComp_MakeThing_Patch");
+			var gatherableCase = VerifyGatherableBodyResourceThingCompTransfer(map, root);
+			return new
+			{
+				success = patchTargets.Length > 0
+					&& ObjectSuccess(gatherableCase),
+				targets = CompactPatchTargets(patchTargets),
+				gatherableCase
+			};
+		}
+
+		static object VerifyGatherableBodyResourceThingCompTransfer(Map map, IntVec3 root)
+		{
+			var animalKind = DefDatabase<PawnKindDef>.AllDefs
+				.Where(kind => kind?.race?.race?.Animal == true)
+				.Where(kind => kind.race.comps != null)
+				.Where(kind => kind.race.comps.Any(props => typeof(CompHasGatherableBodyResource).IsAssignableFrom(props.compClass)))
+				.OrderBy(kind => kind.defName)
+				.FirstOrDefault();
+			if (animalKind == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No animal PawnKindDef with CompHasGatherableBodyResource is available in the active def set."
 				};
 			}
 
-			static object VerifyGatherableBodyResourceThingCompTransfer(Map map, IntVec3 root)
+			if (TryFindClearSpawnCell(map, root, 16f, out var doerCell, out var doerCellError) == false)
+				return doerCellError;
+			if (TryFindClearSpawnCell(map, doerCell + IntVec3.East, 8f, out var animalCell, out var animalCellError) == false)
+				return animalCellError;
+
+			var doer = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var animal = PawnGenerator.GeneratePawn(animalKind, Faction.OfPlayer);
+			var producedThings = new List<Thing>();
+			try
 			{
-				var animalKind = DefDatabase<PawnKindDef>.AllDefs
-					.Where(kind => kind?.race?.race?.Animal == true)
-					.Where(kind => kind.race.comps != null)
-					.Where(kind => kind.race.comps.Any(props => typeof(CompHasGatherableBodyResource).IsAssignableFrom(props.compClass)))
-					.OrderBy(kind => kind.defName)
-					.FirstOrDefault();
-				if (animalKind == null)
+				GenSpawn.Spawn(doer, doerCell, map, Rot4.South);
+				GenSpawn.Spawn(animal, animalCell, map, Rot4.South);
+				DisablePawnWork(doer);
+				DisablePawnWork(animal);
+
+				var comp = animal.AllComps.OfType<CompHasGatherableBodyResource>().FirstOrDefault();
+				var fullnessField = typeof(CompHasGatherableBodyResource).GetField("fullness", BindingFlags.Instance | BindingFlags.NonPublic);
+				var resourceDef = GetProtectedThingDef(comp, "ResourceDef");
+				var resourceAmount = GetProtectedInt(comp, "ResourceAmount");
+				if (comp == null || fullnessField == null || resourceDef == null)
 				{
 					return new
 					{
 						success = false,
-						error = "No animal PawnKindDef with CompHasGatherableBodyResource is available in the active def set."
+						animalKind = animalKind.defName,
+						hasComp = comp != null,
+						hasFullnessField = fullnessField != null,
+						resourceDef = resourceDef?.defName,
+						error = "Gatherable-body-resource probe requires a comp, protected fullness field, and resource def."
 					};
 				}
 
-				if (TryFindClearSpawnCell(map, root, 16f, out var doerCell, out var doerCellError) == false)
-					return doerCellError;
-				if (TryFindClearSpawnCell(map, doerCell + IntVec3.East, 8f, out var animalCell, out var animalCellError) == false)
-					return animalCellError;
-
-				var doer = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-				var animal = PawnGenerator.GeneratePawn(animalKind, Faction.OfPlayer);
-				var producedThings = new List<Thing>();
+				const float parentContaminationBefore = 0.72f;
+				animal.SetContamination(parentContaminationBefore);
+				fullnessField.SetValue(comp, 1f);
+				var beforeProducts = map.listerThings.ThingsOfDef(resourceDef).ToHashSet();
+				var animalGatherYield = doer.GetStatValue(StatDefOf.AnimalGatherYield);
+				var seed = FindRandChanceSeed(true, animalGatherYield);
+				var animalBefore = animal.GetContamination();
+				Rand.PushState(seed);
 				try
 				{
-					GenSpawn.Spawn(doer, doerCell, map, Rot4.South);
-					GenSpawn.Spawn(animal, animalCell, map, Rot4.South);
-					DisablePawnWork(doer);
-					DisablePawnWork(animal);
-
-					var comp = animal.AllComps.OfType<CompHasGatherableBodyResource>().FirstOrDefault();
-					var fullnessField = typeof(CompHasGatherableBodyResource).GetField("fullness", BindingFlags.Instance | BindingFlags.NonPublic);
-					var resourceDef = GetProtectedThingDef(comp, "ResourceDef");
-					var resourceAmount = GetProtectedInt(comp, "ResourceAmount");
-					if (comp == null || fullnessField == null || resourceDef == null)
-					{
-						return new
-						{
-							success = false,
-							animalKind = animalKind.defName,
-							hasComp = comp != null,
-							hasFullnessField = fullnessField != null,
-							resourceDef = resourceDef?.defName,
-							error = "Gatherable-body-resource probe requires a comp, protected fullness field, and resource def."
-						};
-					}
-
-					const float parentContaminationBefore = 0.72f;
-					animal.SetContamination(parentContaminationBefore);
-					fullnessField.SetValue(comp, 1f);
-					var beforeProducts = map.listerThings.ThingsOfDef(resourceDef).ToHashSet();
-					var animalGatherYield = doer.GetStatValue(StatDefOf.AnimalGatherYield);
-					var seed = FindRandChanceSeed(true, animalGatherYield);
-					var animalBefore = animal.GetContamination();
-					Rand.PushState(seed);
-					try
-					{
-						comp.Gathered(doer);
-					}
-					finally
-					{
-						Rand.PopState();
-					}
-					producedThings.AddRange(map.listerThings.ThingsOfDef(resourceDef).Where(thing => beforeProducts.Contains(thing) == false));
-					var animalAfter = animal.GetContamination();
-					var productContaminations = producedThings.Select(thing => thing.GetContamination()).ToArray();
-					var productTotalContamination = productContaminations.Sum();
-					var expectedFirstProductContamination = animalBefore * ZombieSettings.Values.contamination.generalTransfer;
-
-					return new
-					{
-						success = producedThings.Count > 0
-							&& productContaminations.All(value => value > 0f)
-							&& productTotalContamination > 0f
-							&& animalAfter < animalBefore
-							&& Approximately(productContaminations.FirstOrDefault(), expectedFirstProductContamination, 0.0001f),
-						animalKind = animalKind.defName,
-						animal = DescribePawn(animal),
-						doer = DescribePawn(doer),
-						doerCell = ZombieRuntimeActions.DescribeCell(doerCell),
-						animalCell = ZombieRuntimeActions.DescribeCell(animalCell),
-						compType = comp.GetType().Name,
-						resourceDef = resourceDef.defName,
-						resourceAmount,
-						animalGatherYield,
-						seed,
-						animalBefore,
-						animalAfter,
-						expectedFirstProductContamination,
-						producedCount = producedThings.Count,
-						produced = producedThings.Select(DescribeContaminationThing).ToArray(),
-						productContaminations,
-						productTotalContamination
-					};
+					comp.Gathered(doer);
 				}
 				finally
 				{
-					foreach (var thing in producedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
-						thing.Destroy(DestroyMode.Vanish);
-					if (animal.Destroyed == false)
-						animal.Destroy(DestroyMode.Vanish);
-					if (doer.Destroyed == false)
-						doer.Destroy(DestroyMode.Vanish);
+					Rand.PopState();
 				}
-			}
+				producedThings.AddRange(map.listerThings.ThingsOfDef(resourceDef).Where(thing => beforeProducts.Contains(thing) == false));
+				var animalAfter = animal.GetContamination();
+				var productContaminations = producedThings.Select(thing => thing.GetContamination()).ToArray();
+				var productTotalContamination = productContaminations.Sum();
+				var expectedFirstProductContamination = animalBefore * ZombieSettings.Values.contamination.generalTransfer;
 
-			static ThingDef GetProtectedThingDef(object instance, string propertyName)
-				=> GetProtectedValue<ThingDef>(instance, propertyName);
-
-			static int GetProtectedInt(object instance, string propertyName)
-				=> GetProtectedValue<int>(instance, propertyName);
-
-			static T GetProtectedValue<T>(object instance, string propertyName)
-			{
-				var type = instance?.GetType();
-				while (type != null)
+				return new
 				{
-					var property = type.GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-					if (property != null)
-						return (T)property.GetValue(instance);
-					type = type.BaseType;
-				}
-				return default;
+					success = producedThings.Count > 0
+						&& productContaminations.All(value => value > 0f)
+						&& productTotalContamination > 0f
+						&& animalAfter < animalBefore
+						&& Approximately(productContaminations.FirstOrDefault(), expectedFirstProductContamination, 0.0001f),
+					animalKind = animalKind.defName,
+					animal = DescribePawn(animal),
+					doer = DescribePawn(doer),
+					doerCell = ZombieRuntimeActions.DescribeCell(doerCell),
+					animalCell = ZombieRuntimeActions.DescribeCell(animalCell),
+					compType = comp.GetType().Name,
+					resourceDef = resourceDef.defName,
+					resourceAmount,
+					animalGatherYield,
+					seed,
+					animalBefore,
+					animalAfter,
+					expectedFirstProductContamination,
+					producedCount = producedThings.Count,
+					produced = producedThings.Select(DescribeContaminationThing).ToArray(),
+					productContaminations,
+					productTotalContamination
+				};
 			}
+			finally
+			{
+				foreach (var thing in producedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+				if (animal.Destroyed == false)
+					animal.Destroy(DestroyMode.Vanish);
+				if (doer.Destroyed == false)
+					doer.Destroy(DestroyMode.Vanish);
+			}
+		}
 
-			[Tool("zombieland/contamination_stack_absorb_contract", Description = "Verify real Thing.TryAbsorbStack preserves weighted contamination when stacks merge.")]
+		static ThingDef GetProtectedThingDef(object instance, string propertyName)
+			=> GetProtectedValue<ThingDef>(instance, propertyName);
+
+		static int GetProtectedInt(object instance, string propertyName)
+			=> GetProtectedValue<int>(instance, propertyName);
+
+		static T GetProtectedValue<T>(object instance, string propertyName)
+		{
+			var type = instance?.GetType();
+			while (type != null)
+			{
+				var property = type.GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+				if (property != null)
+					return (T)property.GetValue(instance);
+				type = type.BaseType;
+			}
+			return default;
+		}
+
+		[Tool("zombieland/contamination_stack_absorb_contract", Description = "Verify real Thing.TryAbsorbStack preserves weighted contamination when stacks merge.")]
 		public static object ContaminationStackAbsorbContract()
 		{
 			var map = CurrentMap;
@@ -4949,144 +4949,144 @@ namespace ZombieLand
 						map.SetContamination(snowCell, oldGroundContamination);
 					}
 				}
-				}
+			}
+		}
+
+		static object VerifyCleanFilthJobTransfer(Map map, IntVec3 root)
+		{
+			var patchTargets = PatchedMethodsForPatchClass("JobDriver_CleanFilth_MakeNewToils_Patch");
+			var filthDef = DefDatabase<ThingDef>.GetNamedSilentFail("Filth_Dirt") ?? ThingDefOf.Filth_Blood;
+			if (filthDef == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No filth def was available for the clean-filth contamination probe."
+				};
 			}
 
-			static object VerifyCleanFilthJobTransfer(Map map, IntVec3 root)
+			if (TryFindClearSpawnCell(map, root, 12f, out var filthCell, out var filthCellError) == false)
+				return filthCellError;
+			if (TryFindClearSpawnCell(map, filthCell + IntVec3.East, 8f, out var workerCell, out var workerCellError) == false)
+				return workerCellError;
+
+			var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+			var madeFilth = (Filth)null;
+			var oldGroundContamination = map.GetContamination(filthCell);
+			var oldHome = map.areaManager.Home[filthCell];
+			try
 			{
-				var patchTargets = PatchedMethodsForPatchClass("JobDriver_CleanFilth_MakeNewToils_Patch");
-				var filthDef = DefDatabase<ThingDef>.GetNamedSilentFail("Filth_Dirt") ?? ThingDefOf.Filth_Blood;
-				if (filthDef == null)
+				ClearFilthAt(map, filthCell);
+				map.SetContamination(filthCell, 0f);
+				map.areaManager.Home[filthCell] = true;
+				GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
+				DisablePawnWork(worker);
+				worker.ClearContamination();
+				worker.jobs?.StopAll(false, true);
+				worker.pather?.StopDead();
+
+				var made = FilthMaker.TryMakeFilth(filthCell, map, filthDef, out madeFilth, 1, FilthSourceFlags.None, false);
+				if (made == false || madeFilth == null)
 				{
 					return new
 					{
 						success = false,
-						error = "No filth def was available for the clean-filth contamination probe."
-					};
-				}
-
-				if (TryFindClearSpawnCell(map, root, 12f, out var filthCell, out var filthCellError) == false)
-					return filthCellError;
-				if (TryFindClearSpawnCell(map, filthCell + IntVec3.East, 8f, out var workerCell, out var workerCellError) == false)
-					return workerCellError;
-
-				var worker = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
-				var madeFilth = (Filth)null;
-				var oldGroundContamination = map.GetContamination(filthCell);
-				var oldHome = map.areaManager.Home[filthCell];
-				try
-				{
-					ClearFilthAt(map, filthCell);
-					map.SetContamination(filthCell, 0f);
-					map.areaManager.Home[filthCell] = true;
-					GenSpawn.Spawn(worker, workerCell, map, Rot4.South);
-					DisablePawnWork(worker);
-					worker.ClearContamination();
-					worker.jobs?.StopAll(false, true);
-					worker.pather?.StopDead();
-
-					var made = FilthMaker.TryMakeFilth(filthCell, map, filthDef, out madeFilth, 1, FilthSourceFlags.None, false);
-					if (made == false || madeFilth == null)
-					{
-						return new
-						{
-							success = false,
-							filthDef = filthDef.defName,
-							filthCell = ZombieRuntimeActions.DescribeCell(filthCell),
-							made,
-							error = "FilthMaker.TryMakeFilth did not create filth."
-						};
-					}
-
-					const float filthContaminationBefore = 0.64f;
-					typeof(Filth).GetField("growTick", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(madeFilth, Find.TickManager.TicksGame - 601);
-					madeFilth.SetContamination(filthContaminationBefore);
-					var filthBefore = madeFilth.GetContamination();
-					var ticksSinceThickened = madeFilth.TicksSinceThickened;
-					var workerBefore = worker.GetContamination(false);
-					var filthTransfer = ZombieSettings.Values.contamination.filthTransfer;
-					var expectedWorkerAfter = filthBefore * filthTransfer;
-					var expectedFilthAfter = filthBefore * (1f - filthTransfer);
-					var workGiver = new WorkGiver_CleanFilth();
-					var hasJob = workGiver.HasJobOnThing(worker, madeFilth, true);
-					var job = hasJob ? workGiver.JobOnThing(worker, madeFilth, true) : null;
-					var jobTargetCount = job?.GetTargetQueue(TargetIndex.A)?.Count ?? 0;
-					var laborSpeed = worker.GetStatValue(StatDefOf.CleaningSpeed);
-					var terrainFactor = filthCell.GetTerrain(map).GetStatValueAbstract(StatDefOf.CleaningTimeFactor);
-					var sourceDerivedWorkTicks = Mathf.CeilToInt(madeFilth.def.filth.cleaningWorkToReduceThickness * madeFilth.thickness * terrainFactor / laborSpeed);
-					var maxTicks = sourceDerivedWorkTicks + 60;
-					if (job != null)
-					{
-						job.playerForced = true;
-						worker.jobs.StartJob(job, JobCondition.InterruptForced, null, false, true);
-					}
-
-					var ticksRun = 0;
-					while (ticksRun < maxTicks && madeFilth.Destroyed == false)
-					{
-						AdvanceGameTicks(1);
-						ticksRun++;
-					}
-
-					var workerAfter = worker.GetContamination(false);
-					var filthDestroyed = madeFilth.Destroyed;
-					var filthAfter = madeFilth.Destroyed ? 0f : madeFilth.GetContamination();
-					var recordValue = worker.records?.GetValue(RecordDefOf.MessesCleaned) ?? 0f;
-					var patchInstalled = patchTargets.Length > 0;
-					static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
-					var contaminationTransferred = CloseFloat(workerBefore, 0f)
-						&& CloseFloat(filthBefore, filthContaminationBefore)
-						&& CloseFloat(workerAfter, expectedWorkerAfter)
-						&& (filthDestroyed || CloseFloat(filthAfter, expectedFilthAfter));
-
-					return new
-					{
-						success = patchInstalled
-							&& hasJob
-							&& job != null
-							&& jobTargetCount > 0
-							&& filthDestroyed
-							&& contaminationTransferred,
-						targets = CompactPatchTargets(patchTargets),
 						filthDef = filthDef.defName,
 						filthCell = ZombieRuntimeActions.DescribeCell(filthCell),
-						worker = DescribePawn(worker),
-						workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
 						made,
-						ticksSinceThickened,
-						hasJob,
-						jobDef = job?.def?.defName,
-						jobTargetCount,
-						laborSpeed,
-						terrainFactor,
-						sourceDerivedWorkTicks,
-						maxTicks,
-						ticksRun,
-						filthTransfer,
-						workerBefore,
-						workerAfter,
-						expectedWorkerAfter,
-						filthBefore,
-						filthAfter,
-						expectedFilthAfter,
-						filthDestroyed,
-						recordValue,
-						contaminationTransferred
+						error = "FilthMaker.TryMakeFilth did not create filth."
 					};
 				}
-				finally
-				{
-					worker?.ClearContamination();
-					if (worker is { Destroyed: false, Spawned: true })
-						worker.Destroy();
-					if (madeFilth is { Destroyed: false, Spawned: true })
-						madeFilth.Destroy();
-					map.SetContamination(filthCell, oldGroundContamination);
-					map.areaManager.Home[filthCell] = oldHome;
-				}
-			}
 
-			[Tool("zombieland/contamination_social_transfer_contract", Description = "Verify real mating and lovin contamination transfer patches on prepared pawns and the JobDriver_Lovin lay-down toil.")]
+				const float filthContaminationBefore = 0.64f;
+				typeof(Filth).GetField("growTick", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(madeFilth, Find.TickManager.TicksGame - 601);
+				madeFilth.SetContamination(filthContaminationBefore);
+				var filthBefore = madeFilth.GetContamination();
+				var ticksSinceThickened = madeFilth.TicksSinceThickened;
+				var workerBefore = worker.GetContamination(false);
+				var filthTransfer = ZombieSettings.Values.contamination.filthTransfer;
+				var expectedWorkerAfter = filthBefore * filthTransfer;
+				var expectedFilthAfter = filthBefore * (1f - filthTransfer);
+				var workGiver = new WorkGiver_CleanFilth();
+				var hasJob = workGiver.HasJobOnThing(worker, madeFilth, true);
+				var job = hasJob ? workGiver.JobOnThing(worker, madeFilth, true) : null;
+				var jobTargetCount = job?.GetTargetQueue(TargetIndex.A)?.Count ?? 0;
+				var laborSpeed = worker.GetStatValue(StatDefOf.CleaningSpeed);
+				var terrainFactor = filthCell.GetTerrain(map).GetStatValueAbstract(StatDefOf.CleaningTimeFactor);
+				var sourceDerivedWorkTicks = Mathf.CeilToInt(madeFilth.def.filth.cleaningWorkToReduceThickness * madeFilth.thickness * terrainFactor / laborSpeed);
+				var maxTicks = sourceDerivedWorkTicks + 60;
+				if (job != null)
+				{
+					job.playerForced = true;
+					worker.jobs.StartJob(job, JobCondition.InterruptForced, null, false, true);
+				}
+
+				var ticksRun = 0;
+				while (ticksRun < maxTicks && madeFilth.Destroyed == false)
+				{
+					AdvanceGameTicks(1);
+					ticksRun++;
+				}
+
+				var workerAfter = worker.GetContamination(false);
+				var filthDestroyed = madeFilth.Destroyed;
+				var filthAfter = madeFilth.Destroyed ? 0f : madeFilth.GetContamination();
+				var recordValue = worker.records?.GetValue(RecordDefOf.MessesCleaned) ?? 0f;
+				var patchInstalled = patchTargets.Length > 0;
+				static bool CloseFloat(float value, float expected) => Mathf.Abs(value - expected) < 0.0001f;
+				var contaminationTransferred = CloseFloat(workerBefore, 0f)
+					&& CloseFloat(filthBefore, filthContaminationBefore)
+					&& CloseFloat(workerAfter, expectedWorkerAfter)
+					&& (filthDestroyed || CloseFloat(filthAfter, expectedFilthAfter));
+
+				return new
+				{
+					success = patchInstalled
+						&& hasJob
+						&& job != null
+						&& jobTargetCount > 0
+						&& filthDestroyed
+						&& contaminationTransferred,
+					targets = CompactPatchTargets(patchTargets),
+					filthDef = filthDef.defName,
+					filthCell = ZombieRuntimeActions.DescribeCell(filthCell),
+					worker = DescribePawn(worker),
+					workerCell = ZombieRuntimeActions.DescribeCell(workerCell),
+					made,
+					ticksSinceThickened,
+					hasJob,
+					jobDef = job?.def?.defName,
+					jobTargetCount,
+					laborSpeed,
+					terrainFactor,
+					sourceDerivedWorkTicks,
+					maxTicks,
+					ticksRun,
+					filthTransfer,
+					workerBefore,
+					workerAfter,
+					expectedWorkerAfter,
+					filthBefore,
+					filthAfter,
+					expectedFilthAfter,
+					filthDestroyed,
+					recordValue,
+					contaminationTransferred
+				};
+			}
+			finally
+			{
+				worker?.ClearContamination();
+				if (worker is { Destroyed: false, Spawned: true })
+					worker.Destroy();
+				if (madeFilth is { Destroyed: false, Spawned: true })
+					madeFilth.Destroy();
+				map.SetContamination(filthCell, oldGroundContamination);
+				map.areaManager.Home[filthCell] = oldHome;
+			}
+		}
+
+		[Tool("zombieland/contamination_social_transfer_contract", Description = "Verify real mating and lovin contamination transfer patches on prepared pawns and the JobDriver_Lovin lay-down toil.")]
 		public static object ContaminationSocialTransferContract()
 		{
 			var map = CurrentMap;
@@ -5980,9 +5980,9 @@ namespace ZombieLand
 			}
 		}
 
-			[Tool("zombieland/contamination_clear_pollution_contract", Description = "Verify real JobDriver_ClearPollution transfers contaminated polluted ground into the worker and spawned wastepack.")]
+		[Tool("zombieland/contamination_clear_pollution_contract", Description = "Verify real JobDriver_ClearPollution transfers contaminated polluted ground into the worker and spawned wastepack.")]
 		public static object ContaminationClearPollutionContract(
-			[ToolParameter(Description = "Destroy the worker/wastepack and restore pollution/cell contamination before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
+		[ToolParameter(Description = "Destroy the worker/wastepack and restore pollution/cell contamination before returning.", Required = false, DefaultValue = true)] bool cleanup = true)
 		{
 			var map = CurrentMap;
 			if (map == null)
@@ -7254,7 +7254,7 @@ namespace ZombieLand
 			Hediff_Injury wound = null;
 			try
 			{
-					worker = GenerateWorkCapableColonist(WorkTypeDefOf.Crafting, SkillDefOf.Crafting, 20);
+				worker = GenerateWorkCapableColonist(WorkTypeDefOf.Crafting, SkillDefOf.Crafting, 20);
 				GenSpawn.Spawn(worker, workerCell, map, Rot4.West, WipeMode.Vanish);
 				worker.ClearContamination();
 				worker.jobs?.StopAll(false, true);
@@ -9957,10 +9957,10 @@ namespace ZombieLand
 				&& ghostAfterInit != null
 				&& movingAfterInit
 				&& pathDestinationAfterInit == destinationAfterInit;
-				var periodicLoopRan = driverAfterUpdate != null
-					&& ghostAfterUpdate != null
-					&& ghostMoved
-					&& jobAfterUpdate == EffectDefs.ContaminationJobHallucination.defName;
+			var periodicLoopRan = driverAfterUpdate != null
+				&& ghostAfterUpdate != null
+				&& ghostMoved
+				&& jobAfterUpdate == EffectDefs.ContaminationJobHallucination.defName;
 
 			return new
 			{
@@ -10176,14 +10176,14 @@ namespace ZombieLand
 
 			return new
 			{
-					success = stateStarted && jobInitialized && survivedThinkTreeWindow && victimScared,
-					mimic = DescribePawn(mimic),
-					victim = DescribePawn(victim),
-					secondVictim = DescribePawn(secondVictim),
-					mimicCell = ZombieRuntimeActions.DescribeCell(mimicCell),
-					victimCell = ZombieRuntimeActions.DescribeCell(victimCell),
-					secondVictimCell = ZombieRuntimeActions.DescribeCell(secondVictimCell),
-					mimicContamination,
+				success = stateStarted && jobInitialized && survivedThinkTreeWindow && victimScared,
+				mimic = DescribePawn(mimic),
+				victim = DescribePawn(victim),
+				secondVictim = DescribePawn(secondVictim),
+				mimicCell = ZombieRuntimeActions.DescribeCell(mimicCell),
+				victimCell = ZombieRuntimeActions.DescribeCell(victimCell),
+				secondVictimCell = ZombieRuntimeActions.DescribeCell(secondVictimCell),
+				mimicContamination,
 				factor,
 				expectedRecoverAfterTicks,
 				applied,
@@ -11162,163 +11162,163 @@ namespace ZombieLand
 			};
 		}
 
-			static string[] SplitTargetList(string value)
-			{
-				if (string.IsNullOrWhiteSpace(value))
-					return Array.Empty<string>();
+		static string[] SplitTargetList(string value)
+		{
+			if (string.IsNullOrWhiteSpace(value))
+				return Array.Empty<string>();
 
 			return value
 				.Split(new[] { ';', '|', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
 				.Select(entry => entry.Trim())
 				.Where(entry => entry.Length > 0)
 					.ToArray();
-			}
+		}
 
-			static bool IsContaminationEffectPawn(Pawn pawn)
+		static bool IsContaminationEffectPawn(Pawn pawn)
+		{
+			if (pawn == null || pawn.Destroyed || pawn.Spawned == false)
+				return false;
+
+			return pawn.GetContamination() > 0f
+				|| IsContaminationJobDef(pawn.CurJobDef)
+				|| IsContaminationMentalStateDef(pawn.mindState?.mentalStateHandler?.CurStateDef)
+				|| pawn.jobs?.curDriver?.GetType().Name.StartsWith("JobDriver_Contamination", StringComparison.Ordinal) == true;
+		}
+
+		static bool IsContaminationJobDef(JobDef jobDef)
+		{
+			return jobDef != null
+				&& (jobDef == EffectDefs.ContaminationJobForceRest
+					|| jobDef == EffectDefs.ContaminationJobHallucination
+					|| jobDef == EffectDefs.ContaminationJobSleepwalk
+					|| jobDef == EffectDefs.ContaminationJobHoard
+					|| jobDef == EffectDefs.ContaminationJobMimic
+					|| jobDef == EffectDefs.ContaminationJobBreakdown
+					|| jobDef.defName?.Contains("Contamination") == true);
+		}
+
+		static bool IsContaminationMentalStateDef(MentalStateDef mentalStateDef)
+		{
+			return mentalStateDef != null
+				&& (mentalStateDef == EffectDefs.ContaminationStateForceRest
+					|| mentalStateDef == EffectDefs.ContaminationStateHallucination
+					|| mentalStateDef == EffectDefs.ContaminationStateSleepwalking
+					|| mentalStateDef == EffectDefs.ContaminationStateHoarding
+					|| mentalStateDef == EffectDefs.ContaminationStateMimicing
+					|| mentalStateDef == EffectDefs.ContaminationStateBreakdown
+					|| mentalStateDef.defName?.Contains("Contamination") == true);
+		}
+
+		static object DescribeContaminationEffectPawn(Pawn pawn)
+		{
+			if (pawn == null)
+				return null;
+
+			var mentalState = pawn.mindState?.mentalStateHandler?.CurState;
+			var driver = pawn.jobs?.curDriver;
+			var moving = pawn.pather?.Moving ?? false;
+			var destination = moving ? pawn.pather.Destination.Cell : IntVec3.Invalid;
+			var carriedThing = pawn.carryTracker?.CarriedThing;
+
+			return new
 			{
-				if (pawn == null || pawn.Destroyed || pawn.Spawned == false)
-					return false;
-
-				return pawn.GetContamination() > 0f
-					|| IsContaminationJobDef(pawn.CurJobDef)
-					|| IsContaminationMentalStateDef(pawn.mindState?.mentalStateHandler?.CurStateDef)
-					|| pawn.jobs?.curDriver?.GetType().Name.StartsWith("JobDriver_Contamination", StringComparison.Ordinal) == true;
-			}
-
-			static bool IsContaminationJobDef(JobDef jobDef)
-			{
-				return jobDef != null
-					&& (jobDef == EffectDefs.ContaminationJobForceRest
-						|| jobDef == EffectDefs.ContaminationJobHallucination
-						|| jobDef == EffectDefs.ContaminationJobSleepwalk
-						|| jobDef == EffectDefs.ContaminationJobHoard
-						|| jobDef == EffectDefs.ContaminationJobMimic
-						|| jobDef == EffectDefs.ContaminationJobBreakdown
-						|| jobDef.defName?.Contains("Contamination") == true);
-			}
-
-			static bool IsContaminationMentalStateDef(MentalStateDef mentalStateDef)
-			{
-				return mentalStateDef != null
-					&& (mentalStateDef == EffectDefs.ContaminationStateForceRest
-						|| mentalStateDef == EffectDefs.ContaminationStateHallucination
-						|| mentalStateDef == EffectDefs.ContaminationStateSleepwalking
-						|| mentalStateDef == EffectDefs.ContaminationStateHoarding
-						|| mentalStateDef == EffectDefs.ContaminationStateMimicing
-						|| mentalStateDef == EffectDefs.ContaminationStateBreakdown
-						|| mentalStateDef.defName?.Contains("Contamination") == true);
-			}
-
-			static object DescribeContaminationEffectPawn(Pawn pawn)
-			{
-				if (pawn == null)
-					return null;
-
-				var mentalState = pawn.mindState?.mentalStateHandler?.CurState;
-				var driver = pawn.jobs?.curDriver;
-				var moving = pawn.pather?.Moving ?? false;
-				var destination = moving ? pawn.pather.Destination.Cell : IntVec3.Invalid;
-				var carriedThing = pawn.carryTracker?.CarriedThing;
-
-				return new
+				found = true,
+				pawn = DescribePawn(pawn),
+				contamination = DescribeContamination(pawn),
+				mentalState = new
 				{
-					found = true,
-					pawn = DescribePawn(pawn),
-					contamination = DescribeContamination(pawn),
-					mentalState = new
-					{
-						defName = mentalState?.def?.defName,
-						className = mentalState?.GetType().FullName,
-						forceRecoverAfterTicks = mentalState?.forceRecoverAfterTicks ?? -1
-					},
-					job = new
-					{
-						defName = pawn.CurJobDef?.defName,
-						report = pawn.CurJob?.GetReport(pawn),
-						playerForced = pawn.CurJob?.playerForced,
-						driverType = driver?.GetType().FullName
-					},
-					pather = new
-					{
-						moving,
-						destination = destination.IsValid ? ZombieRuntimeActions.DescribeCell(destination) : null
-					},
-					carry = new
-					{
-						carriedThing = ZombieRuntimeActions.StableThingId(carriedThing),
-						carriedThingDef = carriedThing?.def?.defName,
-						stackCount = carriedThing?.stackCount ?? 0
-					},
-					driverState = DescribeContaminationDriverState(driver)
-				};
-			}
-
-			static object DescribeContaminationDriverState(JobDriver driver)
-			{
-				if (driver == null)
-					return null;
-
-				switch (driver)
+					defName = mentalState?.def?.defName,
+					className = mentalState?.GetType().FullName,
+					forceRecoverAfterTicks = mentalState?.forceRecoverAfterTicks ?? -1
+				},
+				job = new
 				{
-					case JobDriver_ContaminationHallucination hallucination:
-						return new
-						{
-							type = nameof(JobDriver_ContaminationHallucination),
-							destination = hallucination.destination.IsValid ? ZombieRuntimeActions.DescribeCell(hallucination.destination) : null,
-							ghostPresent = hallucination.ghost != null && hallucination.ghost.Destroyed == false,
-							ghostVec = DescribeVector(hallucination.ghostVec)
-						};
-					case JobDriver_ContaminationMimic mimic:
-						return new
-						{
-							type = nameof(JobDriver_ContaminationMimic),
-							victim = ZombieRuntimeActions.StableThingId(mimic.victim),
-							victimPosition = mimic.victim?.Spawned == true ? ZombieRuntimeActions.DescribeCell(mimic.victim.Position) : null,
-							previousVictim = ZombieRuntimeActions.StableThingId(mimic.previousVictims)
-						};
-					case JobDriver_ContaminationSleepwalk sleepwalk:
-						return new
-						{
-							type = nameof(JobDriver_ContaminationSleepwalk),
-							bed = ZombieRuntimeActions.StableThingId(sleepwalk.bed),
-							bedCell = sleepwalk.bed?.Spawned == true ? ZombieRuntimeActions.DescribeCell(sleepwalk.bed.Position) : null,
-							occupants = sleepwalk.bed?.CurOccupants.Select(ZombieRuntimeActions.StableThingId).ToArray() ?? Array.Empty<string>(),
-							waitUntil = sleepwalk.waitUntil
-						};
-					case JobDriver_ContaminationHoard hoard:
-						return new
-						{
-							type = nameof(JobDriver_ContaminationHoard),
-							state = hoard.state.ToString(),
-							roomCellCount = hoard.room?.CellCount ?? 0,
-							storageCount = hoard.storage?.Count ?? 0,
-							thing = ZombieRuntimeActions.StableThingId(hoard.thing),
-							thingDef = hoard.thing?.def?.defName,
-							thingCell = hoard.thing?.Spawned == true ? ZombieRuntimeActions.DescribeCell(hoard.thing.Position) : null,
-							cell = hoard.cell.IsValid ? ZombieRuntimeActions.DescribeCell(hoard.cell) : null,
-							rejectedCount = hoard.rejectedThings?.Count ?? 0
-						};
-					case JobDriver_ContaminationBreakdown _:
-						return new
-						{
-							type = nameof(JobDriver_ContaminationBreakdown)
-						};
-					case JobDriver_ContaminationForceRest _:
-						return new
-						{
-							type = nameof(JobDriver_ContaminationForceRest)
-						};
-					default:
-						return new
-						{
-							type = driver.GetType().FullName
-						};
-				}
-			}
+					defName = pawn.CurJobDef?.defName,
+					report = pawn.CurJob?.GetReport(pawn),
+					playerForced = pawn.CurJob?.playerForced,
+					driverType = driver?.GetType().FullName
+				},
+				pather = new
+				{
+					moving,
+					destination = destination.IsValid ? ZombieRuntimeActions.DescribeCell(destination) : null
+				},
+				carry = new
+				{
+					carriedThing = ZombieRuntimeActions.StableThingId(carriedThing),
+					carriedThingDef = carriedThing?.def?.defName,
+					stackCount = carriedThing?.stackCount ?? 0
+				},
+				driverState = DescribeContaminationDriverState(driver)
+			};
+		}
 
-			static object DescribeContaminationCell(Map map, string entry)
+		static object DescribeContaminationDriverState(JobDriver driver)
+		{
+			if (driver == null)
+				return null;
+
+			switch (driver)
 			{
-				if (TryParseCell(entry, out var cell) == false)
+				case JobDriver_ContaminationHallucination hallucination:
+					return new
+					{
+						type = nameof(JobDriver_ContaminationHallucination),
+						destination = hallucination.destination.IsValid ? ZombieRuntimeActions.DescribeCell(hallucination.destination) : null,
+						ghostPresent = hallucination.ghost != null && hallucination.ghost.Destroyed == false,
+						ghostVec = DescribeVector(hallucination.ghostVec)
+					};
+				case JobDriver_ContaminationMimic mimic:
+					return new
+					{
+						type = nameof(JobDriver_ContaminationMimic),
+						victim = ZombieRuntimeActions.StableThingId(mimic.victim),
+						victimPosition = mimic.victim?.Spawned == true ? ZombieRuntimeActions.DescribeCell(mimic.victim.Position) : null,
+						previousVictim = ZombieRuntimeActions.StableThingId(mimic.previousVictims)
+					};
+				case JobDriver_ContaminationSleepwalk sleepwalk:
+					return new
+					{
+						type = nameof(JobDriver_ContaminationSleepwalk),
+						bed = ZombieRuntimeActions.StableThingId(sleepwalk.bed),
+						bedCell = sleepwalk.bed?.Spawned == true ? ZombieRuntimeActions.DescribeCell(sleepwalk.bed.Position) : null,
+						occupants = sleepwalk.bed?.CurOccupants.Select(ZombieRuntimeActions.StableThingId).ToArray() ?? Array.Empty<string>(),
+						waitUntil = sleepwalk.waitUntil
+					};
+				case JobDriver_ContaminationHoard hoard:
+					return new
+					{
+						type = nameof(JobDriver_ContaminationHoard),
+						state = hoard.state.ToString(),
+						roomCellCount = hoard.room?.CellCount ?? 0,
+						storageCount = hoard.storage?.Count ?? 0,
+						thing = ZombieRuntimeActions.StableThingId(hoard.thing),
+						thingDef = hoard.thing?.def?.defName,
+						thingCell = hoard.thing?.Spawned == true ? ZombieRuntimeActions.DescribeCell(hoard.thing.Position) : null,
+						cell = hoard.cell.IsValid ? ZombieRuntimeActions.DescribeCell(hoard.cell) : null,
+						rejectedCount = hoard.rejectedThings?.Count ?? 0
+					};
+				case JobDriver_ContaminationBreakdown _:
+					return new
+					{
+						type = nameof(JobDriver_ContaminationBreakdown)
+					};
+				case JobDriver_ContaminationForceRest _:
+					return new
+					{
+						type = nameof(JobDriver_ContaminationForceRest)
+					};
+				default:
+					return new
+					{
+						type = driver.GetType().FullName
+					};
+			}
+		}
+
+		static object DescribeContaminationCell(Map map, string entry)
+		{
+			if (TryParseCell(entry, out var cell) == false)
 			{
 				return new
 				{

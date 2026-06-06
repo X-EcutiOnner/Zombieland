@@ -838,14 +838,14 @@ namespace ZombieLand
 				actor.jobs.StartJob(draftedWait, JobCondition.InterruptForced, null, false, true);
 				for (var tick = 0; tick < 5; tick++)
 					AdvanceGameTicks(1);
-					var draftedJob = actor.CurJobDef?.defName;
-					var draftedInterruptedToFlee = actor.CurJobDef == JobDefOf.Flee;
-					actor.drafter.Drafted = false;
-					actor.jobs.EndCurrentJob(JobCondition.InterruptForced);
+				var draftedJob = actor.CurJobDef?.defName;
+				var draftedInterruptedToFlee = actor.CurJobDef == JobDefOf.Flee;
+				actor.drafter.Drafted = false;
+				actor.jobs.EndCurrentJob(JobCondition.InterruptForced);
 
-					var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
-					waitJob.playerForced = false;
-					actor.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+				var waitJob = JobMaker.MakeJob(JobDefOf.Wait_Combat);
+				waitJob.playerForced = false;
+				actor.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
 				var startedJob = actor.CurJobDef?.defName;
 				var tickHit = -1;
 				var samples = new List<object>();
@@ -882,7 +882,7 @@ namespace ZombieLand
 
 				return new
 				{
-						success = colonistInDangerArea
+					success = colonistInDangerArea
 							&& zombieInDangerArea
 							&& actor.playerSettings.AreaRestrictionInPawnCurrentMap == colonistInsideArea
 							&& actorShouldAvoid
@@ -1163,11 +1163,11 @@ namespace ZombieLand
 				else
 					SetAreaCells(map, assignedArea, pawn.Position);
 
-					var pawnAvoidCost = AvoidCost(avoidGrid, map, pawn.Position);
-					var pawnShouldAvoid = avoidGrid.ShouldAvoid(map, pawn.Position);
-					var waitJob = JobMaker.MakeJob(JobDefOf.Wait);
-					waitJob.playerForced = false;
-					pawn.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
+				var pawnAvoidCost = AvoidCost(avoidGrid, map, pawn.Position);
+				var pawnShouldAvoid = avoidGrid.ShouldAvoid(map, pawn.Position);
+				var waitJob = JobMaker.MakeJob(JobDefOf.Wait);
+				waitJob.playerForced = false;
+				pawn.jobs.StartJob(waitJob, JobCondition.InterruptForced, null, false, true);
 				var startedJob = pawn.CurJobDef?.defName;
 				var tickHit = -1;
 				var samples = new List<object>();
@@ -1198,8 +1198,8 @@ namespace ZombieLand
 				var fleeDestinationInAssignedArea = fleeDestination.IsValid && assignedArea[fleeDestination];
 				var expectedInAssignedArea = includeSafeAllowedCell;
 				return new
-					{
-						success = pawnShouldAvoid
+				{
+					success = pawnShouldAvoid
 							&& pawnAvoidCost > 0
 							&& startedJob == JobDefOf.Wait.defName
 							&& tickHit > 0
@@ -1227,13 +1227,13 @@ namespace ZombieLand
 			finally
 			{
 				ColonistSettings.Values.RemoveColonist(pawn);
-					if (pawn.Destroyed == false)
-						pawn.Destroy(DestroyMode.Vanish);
-				}
+				if (pawn.Destroyed == false)
+					pawn.Destroy(DestroyMode.Vanish);
 			}
+		}
 
-			static object VerifyAreaWorkflowVanillaFleeAndCowerPolicy(Map map, Area_Allowed assignedArea, Zombie zombie)
-			{
+		static object VerifyAreaWorkflowVanillaFleeAndCowerPolicy(Map map, Area_Allowed assignedArea, Zombie zombie)
+		{
 			var tryGetFleeJob = AccessTools.Method(typeof(JobGiver_ConfigurableHostilityResponse), "TryGetFleeJob", new[] { typeof(Pawn) });
 			if (tryGetFleeJob == null)
 			{
@@ -1358,16 +1358,16 @@ namespace ZombieLand
 			}
 		}
 
-			static bool TryFindAvoidDangerSpawnCell(Map map, AvoidGrid avoidGrid, IntVec3 root, out IntVec3 result, out object error)
-			{
-				result = GenRadial.RadialCellsAround(root, 8f, false)
-					.Where(cell => cell.InBounds(map))
-					.Where(cell => cell.Standable(map))
-					.Where(cell => cell.Fogged(map) == false)
-					.Where(cell => cell.GetFirstPawn(map) == null)
-					.Where(cell => avoidGrid.ShouldAvoid(map, cell))
-					.OrderBy(cell => cell.DistanceToSquared(root))
-					.FirstOrDefault();
+		static bool TryFindAvoidDangerSpawnCell(Map map, AvoidGrid avoidGrid, IntVec3 root, out IntVec3 result, out object error)
+		{
+			result = GenRadial.RadialCellsAround(root, 8f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => avoidGrid.ShouldAvoid(map, cell))
+				.OrderBy(cell => cell.DistanceToSquared(root))
+				.FirstOrDefault();
 			error = null;
 			if (result.IsValid)
 				return true;
@@ -7484,12 +7484,12 @@ namespace ZombieLand
 			return false;
 		}
 
-			static object VerifyAreaWorkflowVisualSupport(Map map, IntVec3 root, List<Thing> spawnedThings)
-			{
-				var drawTrackerConstructorTargets = PatchedMethodsForPatchClass("Pawn_DrawTracker_Constructor_Patch");
-				var rendererConstructorTargets = PatchedMethodsForPatchClass("PawnRenderer_Constructor_With_Pawn_Patch");
-				var damageNotifyTargets = PatchedMethodsForPatchClass("DamageFlasher_Notify_DamageApplied_Patch");
-				var damageMatTargets = PatchedMethodsForPatchClass("DamageFlasher_GetDamagedMat_Patch");
+		static object VerifyAreaWorkflowVisualSupport(Map map, IntVec3 root, List<Thing> spawnedThings)
+		{
+			var drawTrackerConstructorTargets = PatchedMethodsForPatchClass("Pawn_DrawTracker_Constructor_Patch");
+			var rendererConstructorTargets = PatchedMethodsForPatchClass("PawnRenderer_Constructor_With_Pawn_Patch");
+			var damageNotifyTargets = PatchedMethodsForPatchClass("DamageFlasher_Notify_DamageApplied_Patch");
+			var damageMatTargets = PatchedMethodsForPatchClass("DamageFlasher_GetDamagedMat_Patch");
 			var drawPosTargets = PatchedMethodsForPatchClass("Pawn_DrawTracker_DrawPos_Patch");
 			var tickVisualTargets = PatchedMethodsForPatchClass("Pawn_DrawTrackerDrawTrackerTick_Patch");
 			var dinfoDefField = AccessTools.Field(typeof(ZombieDamageFlasher), nameof(ZombieDamageFlasher.dinfoDef));
@@ -7532,27 +7532,27 @@ namespace ZombieLand
 				};
 			}
 
-				var damageFlash = VerifyVisualSupportDamageFlash(zombie, human, dinfoDefField);
-				var customPawnState = VerifyVisualSupportCustomPawnState(zombie, human);
-				var leaner = VerifyVisualSupportLeaner(zombie, human, jitterOffsetField, extraOffsetInternalField, randTickFrequencyField, randTickOffsetField, drawTrackerProcessPostTickVisuals);
+			var damageFlash = VerifyVisualSupportDamageFlash(zombie, human, dinfoDefField);
+			var customPawnState = VerifyVisualSupportCustomPawnState(zombie, human);
+			var leaner = VerifyVisualSupportLeaner(zombie, human, jitterOffsetField, extraOffsetInternalField, randTickFrequencyField, randTickOffsetField, drawTrackerProcessPostTickVisuals);
 
-				return new
+			return new
+			{
+				success = drawTrackerConstructorTargets.Length > 0
+					&& rendererConstructorTargets.Length > 0
+					&& damageNotifyTargets.Length > 0
+					&& damageMatTargets.Length > 0
+					&& drawPosTargets.Length > 0
+					&& tickVisualTargets.Length > 0
+					&& ObjectSuccess(damageFlash)
+					&& ObjectSuccess(customPawnState)
+					&& ObjectSuccess(leaner),
+				patchTargets = new
 				{
-					success = drawTrackerConstructorTargets.Length > 0
-						&& rendererConstructorTargets.Length > 0
-						&& damageNotifyTargets.Length > 0
-						&& damageMatTargets.Length > 0
-						&& drawPosTargets.Length > 0
-						&& tickVisualTargets.Length > 0
-						&& ObjectSuccess(damageFlash)
-						&& ObjectSuccess(customPawnState)
-						&& ObjectSuccess(leaner),
-					patchTargets = new
-					{
-						drawTrackerConstructor = drawTrackerConstructorTargets,
-						rendererConstructor = rendererConstructorTargets,
-						damageNotify = damageNotifyTargets,
-						damageMaterial = damageMatTargets,
+					drawTrackerConstructor = drawTrackerConstructorTargets,
+					rendererConstructor = rendererConstructorTargets,
+					damageNotify = damageNotifyTargets,
+					damageMaterial = damageMatTargets,
 					drawPos = drawPosTargets,
 					postTickVisuals = tickVisualTargets
 				},
@@ -7560,12 +7560,12 @@ namespace ZombieLand
 				{
 					zombie = DescribeZombie(zombie),
 					human = DescribePawn(human)
-					},
-					damageFlash,
-					customPawnState,
-					leaner
-				};
-			}
+				},
+				damageFlash,
+				customPawnState,
+				leaner
+			};
+		}
 
 		static object VerifyVisualSupportDamageFlash(Zombie zombie, Pawn human, FieldInfo dinfoDefField)
 		{
@@ -7613,50 +7613,50 @@ namespace ZombieLand
 				expectedBiteColor = DescribeColor(expectedBiteColor),
 				cutColor = DescribeColor(cutColor),
 				cutStayedNonGreen = ColorsApproximatelyEqual(cutColor, expectedBiteColor, 0.03f) == false
-				};
-			}
+			};
+		}
 
-			static object VerifyVisualSupportCustomPawnState(Zombie zombie, Pawn human)
+		static object VerifyVisualSupportCustomPawnState(Zombie zombie, Pawn human)
+		{
+			var humanLeaner = human?.Drawer?.leaner;
+			var zombieLeaner = zombie?.Drawer?.leaner;
+			var humanInitial = human?.InfectionState();
+			var zombieState = zombie?.InfectionState();
+			if (human != null)
+				human.SetInfectionState(InfectionState.Infecting);
+			var humanAfterSet = human?.InfectionState();
+			if (human != null)
+				human.SetInfectionState(InfectionState.None);
+			var humanAfterReset = human?.InfectionState();
+
+			return new
 			{
-				var humanLeaner = human?.Drawer?.leaner;
-				var zombieLeaner = zombie?.Drawer?.leaner;
-				var humanInitial = human?.InfectionState();
-				var zombieState = zombie?.InfectionState();
-				if (human != null)
-					human.SetInfectionState(InfectionState.Infecting);
-				var humanAfterSet = human?.InfectionState();
-				if (human != null)
-					human.SetInfectionState(InfectionState.None);
-				var humanAfterReset = human?.InfectionState();
-
-				return new
+				success = humanLeaner is CustomPawnState
+					&& zombieLeaner is ZombieLeaner
+					&& humanInitial == InfectionState.None
+					&& humanAfterSet == InfectionState.Infecting
+					&& humanAfterReset == InfectionState.None
+					&& zombieState == InfectionState.Infected,
+				humanLeanerType = humanLeaner?.GetType().Name,
+				zombieLeanerType = zombieLeaner?.GetType().Name,
+				humanStates = new
 				{
-					success = humanLeaner is CustomPawnState
-						&& zombieLeaner is ZombieLeaner
-						&& humanInitial == InfectionState.None
-						&& humanAfterSet == InfectionState.Infecting
-						&& humanAfterReset == InfectionState.None
-						&& zombieState == InfectionState.Infected,
-					humanLeanerType = humanLeaner?.GetType().Name,
-					zombieLeanerType = zombieLeaner?.GetType().Name,
-					humanStates = new
-					{
-						initial = humanInitial?.ToString(),
-						afterSet = humanAfterSet?.ToString(),
-						afterReset = humanAfterReset?.ToString()
-					},
-					zombieState = zombieState?.ToString()
-				};
-			}
+					initial = humanInitial?.ToString(),
+					afterSet = humanAfterSet?.ToString(),
+					afterReset = humanAfterReset?.ToString()
+				},
+				zombieState = zombieState?.ToString()
+			};
+		}
 
-			static object VerifyVisualSupportLeaner(
-				Zombie zombie,
-			Pawn human,
-			FieldInfo jitterOffsetField,
-			FieldInfo extraOffsetInternalField,
-			FieldInfo randTickFrequencyField,
-			FieldInfo randTickOffsetField,
-			MethodInfo drawTrackerProcessPostTickVisuals)
+		static object VerifyVisualSupportLeaner(
+			Zombie zombie,
+		Pawn human,
+		FieldInfo jitterOffsetField,
+		FieldInfo extraOffsetInternalField,
+		FieldInfo randTickFrequencyField,
+		FieldInfo randTickOffsetField,
+		MethodInfo drawTrackerProcessPostTickVisuals)
 		{
 			var zombieLeaner = zombie?.Drawer?.leaner as ZombieLeaner;
 			var humanHasZombieLeaner = human?.Drawer?.leaner is ZombieLeaner;
@@ -7680,16 +7680,16 @@ namespace ZombieLand
 			zombie.Drawer.leaner = new PawnLeaner(zombie);
 			var vanillaDrawPos = zombie.Drawer.DrawPos;
 			zombie.Drawer.leaner = originalLeaner;
-				var drawDelta = patchedDrawPos - vanillaDrawPos;
-				var drawPosAppliesOffset = VectorsApproximatelyEqual(drawDelta, forcedOffset, 0.01f);
+			var drawDelta = patchedDrawPos - vanillaDrawPos;
+			var drawPosAppliesOffset = VectorsApproximatelyEqual(drawDelta, forcedOffset, 0.01f);
 
-				randTickFrequencyField.SetValue(zombieLeaner, 1);
-				randTickOffsetField.SetValue(zombieLeaner, 0);
-				jitterOffsetField.SetValue(zombieLeaner, new Vector3(0.11f, 0f, 0.12f));
-				extraOffsetInternalField.SetValue(zombieLeaner, new Vector3(0.22f, 0f, 0.23f));
-				zombieLeaner.extraOffset = Vector3.zero;
-				zombie.state = ZombieState.Emerging;
-				drawTrackerProcessPostTickVisuals.Invoke(zombie.Drawer, new object[] { 1 });
+			randTickFrequencyField.SetValue(zombieLeaner, 1);
+			randTickOffsetField.SetValue(zombieLeaner, 0);
+			jitterOffsetField.SetValue(zombieLeaner, new Vector3(0.11f, 0f, 0.12f));
+			extraOffsetInternalField.SetValue(zombieLeaner, new Vector3(0.22f, 0f, 0.23f));
+			zombieLeaner.extraOffset = Vector3.zero;
+			zombie.state = ZombieState.Emerging;
+			drawTrackerProcessPostTickVisuals.Invoke(zombie.Drawer, new object[] { 1 });
 			var resetOffset = zombieLeaner.ZombieOffset;
 			var postTickReset = VectorsApproximatelyEqual(resetOffset, Vector3.zero, 0.0001f);
 

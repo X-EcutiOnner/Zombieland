@@ -849,20 +849,20 @@ namespace ZombieLand
 						});
 						if (includeDetails)
 							rows.Add(new
-						{
-							testCase.id,
-							testCase.kindDef,
-							mode = mode.ToString(),
-							ticks = clampedTicks,
-							enemiesAttackZombies,
-							expectedEngagement,
-							moved,
-							moveCell = moved ? ZombieRuntimeActions.DescribeCell(moveCell) : null,
-							before,
-							afterMove,
-							afterTicks,
-							classification
-						});
+							{
+								testCase.id,
+								testCase.kindDef,
+								mode = mode.ToString(),
+								ticks = clampedTicks,
+								enemiesAttackZombies,
+								expectedEngagement,
+								moved,
+								moveCell = moved ? ZombieRuntimeActions.DescribeCell(moveCell) : null,
+								before,
+								afterMove,
+								afterTicks,
+								classification
+							});
 
 						if (cleanup)
 						{

@@ -1,5 +1,5 @@
-using RimBridgeServer.Annotations;
 using HarmonyLib;
+using RimBridgeServer.Annotations;
 using RimWorld;
 using System;
 using System.Collections;
@@ -138,7 +138,7 @@ namespace ZombieLand
 					hologramConverted = hologramPawn is Zombie || CurrentZombies(map).Any(zombie => zombie.Position == hologramCell && ZombieRuntimeActions.StableThingId(zombie) != ZombieRuntimeActions.StableThingId(hologramPawn));
 				}
 
-					var shipSuccess = newZombies.Length > 0 && convertedZombies.Length > 0 && generatedZombies.Length > 0;
+				var shipSuccess = newZombies.Length > 0 && convertedZombies.Length > 0 && generatedZombies.Length > 0;
 				var hologramSuccess = hologramDef != null
 					&& hologramSpawnError == null
 					&& hologramBefore
@@ -213,10 +213,10 @@ namespace ZombieLand
 					if (thing != null && thing.Destroyed == false)
 						thing.Destroy(DestroyMode.Vanish);
 				}
-					if (lord != null)
-						map.lordManager.RemoveLord(lord);
-				}
+				if (lord != null)
+					map.lordManager.RemoveLord(lord);
 			}
+		}
 
 		static Def CreateReflectedSoS2ShipDef(Type shipDefType, Type shipShapeType, int pawnCount)
 		{

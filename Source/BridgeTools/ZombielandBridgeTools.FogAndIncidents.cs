@@ -2247,109 +2247,109 @@ namespace ZombieLand
 				ZombieTicker.currentTicking = originalCurrentTicking;
 				tickManager.ClearZombieTickingBuffers();
 			}
-			}
+		}
 
-			static object VerifyZombieGridRepopulationAfterReset(Map map, Zombie zombie)
+		static object VerifyZombieGridRepopulationAfterReset(Map map, Zombie zombie)
+		{
+			if (zombie == null)
 			{
-				if (zombie == null)
-				{
-					return new
-					{
-						success = false,
-						error = "No live zombie sample was available for grid repopulation verification."
-					};
-				}
-
-				var destination = IntVec3.Invalid;
-				foreach (var offset in GenAdj.AdjacentCells)
-				{
-					var cell = zombie.Position + offset;
-					if (cell.InBounds(map) && zombie.HasValidDestination(cell))
-					{
-						destination = cell;
-						break;
-					}
-				}
-
-				if (destination.IsValid == false)
-				{
-					return new
-					{
-						success = false,
-						error = "No valid adjacent destination was available for grid repopulation verification.",
-						position = ZombieRuntimeActions.DescribeCell(zombie.Position)
-					};
-				}
-
-				var grid = map.GetGrid();
-				ClearZombieCount(grid, zombie.Position);
-				ClearZombieCount(grid, destination);
-				if (zombie.lastGotoPosition.IsValid)
-					ClearZombieCount(grid, zombie.lastGotoPosition);
-
-				zombie.pather?.StopDead();
-				zombie.lastGotoPosition = IntVec3.Invalid;
-				var beforeAtPosition = grid.GetZombieCount(zombie.Position);
-				var beforeAtDestination = grid.GetZombieCount(destination);
-				var beforeLastGotoValid = zombie.lastGotoPosition.IsValid;
-
-				zombie.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
-				if (zombie.jobs.curDriver is not JobDriver_Stumble stumbleDriver)
-				{
-					return new
-					{
-						success = false,
-						error = "The sample zombie did not start a Stumble job.",
-						currentJob = zombie.CurJobDef?.defName
-					};
-				}
-
-				stumbleDriver.destination = destination;
-				stumbleDriver.ExecuteMove(zombie, grid);
-
-				var afterAtPosition = grid.GetZombieCount(zombie.Position);
-				var afterAtDestination = grid.GetZombieCount(destination);
-				var afterLastGoto = zombie.lastGotoPosition;
-				var moving = zombie.pather?.Moving ?? false;
-				var pathDestination = moving ? zombie.pather.Destination.Cell : IntVec3.Invalid;
-
 				return new
 				{
-					success = beforeAtPosition == 0
-						&& beforeAtDestination == 0
-						&& beforeLastGotoValid == false
-						&& afterAtPosition == 0
-						&& afterAtDestination == 1
-						&& afterLastGoto == destination
-						&& moving
-						&& pathDestination == destination,
-					position = ZombieRuntimeActions.DescribeCell(zombie.Position),
-					destination = ZombieRuntimeActions.DescribeCell(destination),
-					beforeAtPosition,
-					beforeAtDestination,
-					beforeLastGotoValid,
-					afterAtPosition,
-					afterAtDestination,
-					afterLastGoto = ZombieRuntimeActions.DescribeCell(afterLastGoto),
-					moving,
-					pathDestination = pathDestination.IsValid ? ZombieRuntimeActions.DescribeCell(pathDestination) : null,
+					success = false,
+					error = "No live zombie sample was available for grid repopulation verification."
+				};
+			}
+
+			var destination = IntVec3.Invalid;
+			foreach (var offset in GenAdj.AdjacentCells)
+			{
+				var cell = zombie.Position + offset;
+				if (cell.InBounds(map) && zombie.HasValidDestination(cell))
+				{
+					destination = cell;
+					break;
+				}
+			}
+
+			if (destination.IsValid == false)
+			{
+				return new
+				{
+					success = false,
+					error = "No valid adjacent destination was available for grid repopulation verification.",
+					position = ZombieRuntimeActions.DescribeCell(zombie.Position)
+				};
+			}
+
+			var grid = map.GetGrid();
+			ClearZombieCount(grid, zombie.Position);
+			ClearZombieCount(grid, destination);
+			if (zombie.lastGotoPosition.IsValid)
+				ClearZombieCount(grid, zombie.lastGotoPosition);
+
+			zombie.pather?.StopDead();
+			zombie.lastGotoPosition = IntVec3.Invalid;
+			var beforeAtPosition = grid.GetZombieCount(zombie.Position);
+			var beforeAtDestination = grid.GetZombieCount(destination);
+			var beforeLastGotoValid = zombie.lastGotoPosition.IsValid;
+
+			zombie.jobs.StartJob(JobMaker.MakeJob(CustomDefs.Stumble), JobCondition.InterruptForced, null, true, false, null, null);
+			if (zombie.jobs.curDriver is not JobDriver_Stumble stumbleDriver)
+			{
+				return new
+				{
+					success = false,
+					error = "The sample zombie did not start a Stumble job.",
 					currentJob = zombie.CurJobDef?.defName
 				};
 			}
 
-			static void ClearZombieCount(PheromoneGrid grid, IntVec3 cell)
-			{
-				if (cell.IsValid == false)
-					return;
+			stumbleDriver.destination = destination;
+			stumbleDriver.ExecuteMove(zombie, grid);
 
-				var current = grid.GetZombieCount(cell);
-				if (current != 0)
-					grid.ChangeZombieCount(cell, -current);
-			}
+			var afterAtPosition = grid.GetZombieCount(zombie.Position);
+			var afterAtDestination = grid.GetZombieCount(destination);
+			var afterLastGoto = zombie.lastGotoPosition;
+			var moving = zombie.pather?.Moving ?? false;
+			var pathDestination = moving ? zombie.pather.Destination.Cell : IntVec3.Invalid;
 
-			static object VerifyNothingHappeningSpawnGate()
+			return new
 			{
-				var originalSpawning = ZombieGenerator.ZombiesSpawning;
+				success = beforeAtPosition == 0
+					&& beforeAtDestination == 0
+					&& beforeLastGotoValid == false
+					&& afterAtPosition == 0
+					&& afterAtDestination == 1
+					&& afterLastGoto == destination
+					&& moving
+					&& pathDestination == destination,
+				position = ZombieRuntimeActions.DescribeCell(zombie.Position),
+				destination = ZombieRuntimeActions.DescribeCell(destination),
+				beforeAtPosition,
+				beforeAtDestination,
+				beforeLastGotoValid,
+				afterAtPosition,
+				afterAtDestination,
+				afterLastGoto = ZombieRuntimeActions.DescribeCell(afterLastGoto),
+				moving,
+				pathDestination = pathDestination.IsValid ? ZombieRuntimeActions.DescribeCell(pathDestination) : null,
+				currentJob = zombie.CurJobDef?.defName
+			};
+		}
+
+		static void ClearZombieCount(PheromoneGrid grid, IntVec3 cell)
+		{
+			if (cell.IsValid == false)
+				return;
+
+			var current = grid.GetZombieCount(cell);
+			if (current != 0)
+				grid.ChangeZombieCount(cell, -current);
+		}
+
+		static object VerifyNothingHappeningSpawnGate()
+		{
+			var originalSpawning = ZombieGenerator.ZombiesSpawning;
 			try
 			{
 				ZombieGenerator.ZombiesSpawning = 0;
@@ -2386,129 +2386,129 @@ namespace ZombieLand
 			}
 		}
 
-			static object VerifyGunshotPheromoneBump(Map map, IntVec3 root)
+		static object VerifyGunshotPheromoneBump(Map map, IntVec3 root)
+		{
+			var spawnedThings = new List<Thing>();
+			var originalInstinct = ZombieSettings.Values.zombieInstinct;
+			try
 			{
-				var spawnedThings = new List<Thing>();
-				var originalInstinct = ZombieSettings.Values.zombieInstinct;
-				try
+				if (TryFindClearSpawnCell(map, root, 16f, out var shooterCell, out var shooterError) == false)
+					return shooterError;
+				var targetCell = GenRadial.RadialCellsAround(shooterCell, 12f, false)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.DistanceTo(shooterCell) >= 6f)
+					.Where(cell => GenSight.LineOfSight(shooterCell, cell, map, true))
+					.OrderBy(cell => cell.DistanceToSquared(shooterCell))
+					.FirstOrDefault();
+				if (targetCell.IsValid == false)
 				{
-					if (TryFindClearSpawnCell(map, root, 16f, out var shooterCell, out var shooterError) == false)
-						return shooterError;
-					var targetCell = GenRadial.RadialCellsAround(shooterCell, 12f, false)
-						.Where(cell => cell.InBounds(map))
-						.Where(cell => cell.Standable(map))
-						.Where(cell => cell.Fogged(map) == false)
-						.Where(cell => cell.DistanceTo(shooterCell) >= 6f)
-						.Where(cell => GenSight.LineOfSight(shooterCell, cell, map, true))
-						.OrderBy(cell => cell.DistanceToSquared(shooterCell))
-						.FirstOrDefault();
-					if (targetCell.IsValid == false)
-					{
-						return new
-						{
-							success = false,
-							shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
-							error = "No line-of-sight target cell was found for the gunshot pheromone fixture."
-						};
-					}
-					if (TryFindClearSpawnCell(map, shooterCell + new IntVec3(0, 0, 3), 10f, out var spitterCell, out var spitterError) == false)
-						return spitterError;
-
-					ZombieSettings.Values.zombieInstinct = ZombieInstinct.Normal;
-					var shooter = SpawnArmedAreaWorkflowPawn(map, "ZL_Core_GunshotPheromoneShooter", shooterCell, Faction.OfPlayer, spawnedThings);
-					var projectileDef = shooter?.equipment?.PrimaryEq?.PrimaryVerb?.verbProps?.defaultProjectile;
-					if (shooter == null || projectileDef == null)
-					{
-						return new
-						{
-							success = false,
-							shooter = DescribePawn(shooter),
-							error = "Could not create an armed pawn with a default projectile."
-						};
-					}
-
-					const float radius = 16f;
-					ClearPheromones(map, shooterCell, radius);
-					var beforeHumanShot = SnapshotPheromones(map, shooterCell, radius);
-					var humanProjectile = (Projectile)GenSpawn.Spawn(ThingMaker.MakeThing(projectileDef), shooterCell, map, WipeMode.Vanish);
-					spawnedThings.Add(humanProjectile);
-					humanProjectile.Launch(shooter, shooter.DrawPos, targetCell, targetCell, ProjectileHitFlags.IntendedTarget, false, shooter.equipment.Primary);
-					var humanChange = DescribePheromoneChange(map, beforeHumanShot, out var humanChangedCount);
-
-					var spitter = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieSpitter, Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies)) as ZombieSpitter;
-					GenSpawn.Spawn(spitter, spitterCell, map, Rot4.South, WipeMode.Vanish, false);
-					spawnedThings.Add(spitter);
-					ClearPheromones(map, spitterCell, radius);
-					var beforeSpitterShot = SnapshotPheromones(map, spitterCell, radius);
-					var spitterProjectile = (Projectile)GenSpawn.Spawn(ThingMaker.MakeThing(projectileDef), spitterCell, map, WipeMode.Vanish);
-					spawnedThings.Add(spitterProjectile);
-					spitterProjectile.Launch(spitter, spitter.DrawPos, targetCell, targetCell, ProjectileHitFlags.IntendedTarget, false, null);
-					var spitterChange = DescribePheromoneChange(map, beforeSpitterShot, out var spitterChangedCount);
-
 					return new
 					{
-						success = humanChangedCount > 0 && spitterChangedCount == 0,
-						shooter = DescribePawn(shooter),
-						spitter = DescribeZombie(spitter),
-						projectileDef = projectileDef.defName,
+						success = false,
 						shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
-						spitterCell = ZombieRuntimeActions.DescribeCell(spitterCell),
-						targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
-						humanChangedCount,
-						spitterChangedCount,
-						humanChange,
-						spitterChange
+						error = "No line-of-sight target cell was found for the gunshot pheromone fixture."
 					};
 				}
-				finally
-				{
-					ZombieSettings.Values.zombieInstinct = originalInstinct;
-					foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
-						thing.Destroy(DestroyMode.Vanish);
-				}
-			}
+				if (TryFindClearSpawnCell(map, shooterCell + new IntVec3(0, 0, 3), 10f, out var spitterCell, out var spitterError) == false)
+					return spitterError;
 
-			static object VerifyZombieCollisionSuppression(Map map, Zombie zombie)
-			{
-				if (zombie == null)
+				ZombieSettings.Values.zombieInstinct = ZombieInstinct.Normal;
+				var shooter = SpawnArmedAreaWorkflowPawn(map, "ZL_Core_GunshotPheromoneShooter", shooterCell, Faction.OfPlayer, spawnedThings);
+				var projectileDef = shooter?.equipment?.PrimaryEq?.PrimaryVerb?.verbProps?.defaultProjectile;
+				if (shooter == null || projectileDef == null)
 				{
 					return new
 					{
 						success = false,
-						error = "No sample zombie was available for collision suppression."
+						shooter = DescribePawn(shooter),
+						error = "Could not create an armed pawn with a default projectile."
 					};
 				}
 
-				var probeCell = zombie.Position + IntVec3.East;
-				if (probeCell.InBounds(map) == false)
-					probeCell = zombie.Position;
-				if (TryWillCollideWithPawnAt(zombie, probeCell, out var zombieWillCollide, out var collideError) == false)
-				{
-					return new
-					{
-						success = false,
-						zombie = DescribeZombie(zombie),
-						error = collideError
-					};
-				}
-				var collisionOffset = PawnCollisionTweenerUtility.PawnCollisionPosOffsetFor(zombie);
+				const float radius = 16f;
+				ClearPheromones(map, shooterCell, radius);
+				var beforeHumanShot = SnapshotPheromones(map, shooterCell, radius);
+				var humanProjectile = (Projectile)GenSpawn.Spawn(ThingMaker.MakeThing(projectileDef), shooterCell, map, WipeMode.Vanish);
+				spawnedThings.Add(humanProjectile);
+				humanProjectile.Launch(shooter, shooter.DrawPos, targetCell, targetCell, ProjectileHitFlags.IntendedTarget, false, shooter.equipment.Primary);
+				var humanChange = DescribePheromoneChange(map, beforeHumanShot, out var humanChangedCount);
+
+				var spitter = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieSpitter, Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies)) as ZombieSpitter;
+				GenSpawn.Spawn(spitter, spitterCell, map, Rot4.South, WipeMode.Vanish, false);
+				spawnedThings.Add(spitter);
+				ClearPheromones(map, spitterCell, radius);
+				var beforeSpitterShot = SnapshotPheromones(map, spitterCell, radius);
+				var spitterProjectile = (Projectile)GenSpawn.Spawn(ThingMaker.MakeThing(projectileDef), spitterCell, map, WipeMode.Vanish);
+				spawnedThings.Add(spitterProjectile);
+				spitterProjectile.Launch(spitter, spitter.DrawPos, targetCell, targetCell, ProjectileHitFlags.IntendedTarget, false, null);
+				var spitterChange = DescribePheromoneChange(map, beforeSpitterShot, out var spitterChangedCount);
+
 				return new
 				{
-					success = zombieWillCollide == false && collisionOffset == Vector3.zero,
-					zombie = DescribeZombie(zombie),
-					probeCell = ZombieRuntimeActions.DescribeCell(probeCell),
-					zombieWillCollide,
-					collisionOffset = new
-					{
-						collisionOffset.x,
-						collisionOffset.y,
-						collisionOffset.z
-					}
+					success = humanChangedCount > 0 && spitterChangedCount == 0,
+					shooter = DescribePawn(shooter),
+					spitter = DescribeZombie(spitter),
+					projectileDef = projectileDef.defName,
+					shooterCell = ZombieRuntimeActions.DescribeCell(shooterCell),
+					spitterCell = ZombieRuntimeActions.DescribeCell(spitterCell),
+					targetCell = ZombieRuntimeActions.DescribeCell(targetCell),
+					humanChangedCount,
+					spitterChangedCount,
+					humanChange,
+					spitterChange
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.zombieInstinct = originalInstinct;
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object VerifyZombieCollisionSuppression(Map map, Zombie zombie)
+		{
+			if (zombie == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No sample zombie was available for collision suppression."
 				};
 			}
 
-			static object VerifyZombieAwakeCapacity(Map map, Zombie zombie, IntVec3 humanRoot)
+			var probeCell = zombie.Position + IntVec3.East;
+			if (probeCell.InBounds(map) == false)
+				probeCell = zombie.Position;
+			if (TryWillCollideWithPawnAt(zombie, probeCell, out var zombieWillCollide, out var collideError) == false)
 			{
+				return new
+				{
+					success = false,
+					zombie = DescribeZombie(zombie),
+					error = collideError
+				};
+			}
+			var collisionOffset = PawnCollisionTweenerUtility.PawnCollisionPosOffsetFor(zombie);
+			return new
+			{
+				success = zombieWillCollide == false && collisionOffset == Vector3.zero,
+				zombie = DescribeZombie(zombie),
+				probeCell = ZombieRuntimeActions.DescribeCell(probeCell),
+				zombieWillCollide,
+				collisionOffset = new
+				{
+					collisionOffset.x,
+					collisionOffset.y,
+					collisionOffset.z
+				}
+			};
+		}
+
+		static object VerifyZombieAwakeCapacity(Map map, Zombie zombie, IntVec3 humanRoot)
+		{
 			if (zombie == null)
 			{
 				return new

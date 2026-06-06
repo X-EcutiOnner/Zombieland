@@ -933,8 +933,8 @@ namespace ZombieLand
 				resultHediffCount = result.hediffs?.Count ?? 0,
 				combatTextBefore = combatTextBefore,
 				combatTextAfter = combatTextAfter,
-					combatTextDelta = combatTextAfter - combatTextBefore
-				};
+				combatTextDelta = combatTextAfter - combatTextBefore
+			};
 		}
 
 		static object DescribeCorpse(Corpse corpse)

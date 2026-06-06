@@ -6091,19 +6091,19 @@ namespace ZombieLand
 			{
 				if (Current.ProgramState == ProgramState.Playing)
 				{
-						var label = "Options".Translate();
-						var idx = optList.FirstIndexOf(opt => opt.label == label);
-						if (idx > 0 && idx < optList.Count())
-							optList.Insert(idx, new ListableOption_Zombieland(delegate
-							{
-								MainMenuDrawer.CloseMainTab();
-								var me = LoadedModManager.GetMod<ZombielandMod>();
-								var dialog = new Dialog_ModSettings(me);
-								Find.WindowStack.Add(dialog);
-							}));
-					}
-					return OptionListingUtility.DrawOptionListing(rect, optList);
+					var label = "Options".Translate();
+					var idx = optList.FirstIndexOf(opt => opt.label == label);
+					if (idx > 0 && idx < optList.Count())
+						optList.Insert(idx, new ListableOption_Zombieland(delegate
+						{
+							MainMenuDrawer.CloseMainTab();
+							var me = LoadedModManager.GetMod<ZombielandMod>();
+							var dialog = new Dialog_ModSettings(me);
+							Find.WindowStack.Add(dialog);
+						}));
 				}
+				return OptionListingUtility.DrawOptionListing(rect, optList);
+			}
 
 			static float DrawOptionListingPatch2(Rect rect, List<ListableOption> optList)
 			{
@@ -6231,7 +6231,8 @@ namespace ZombieLand
 							{
 								var job = JobMaker.MakeJob(CustomDefs.ZapZombies, shocker);
 								_ = pawn.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
-							};
+							}
+							;
 							opts.Add(new FloatMenuOption(zapZombiesLabel, job));
 						}
 				}
@@ -6244,7 +6245,8 @@ namespace ZombieLand
 						var job = JobMaker.MakeJob(CustomDefs.RopeZombie, ropableZombie);
 						pawn.drafter.Drafted = true;
 						_ = pawn.jobs.TryTakeOrderedJob(job, new JobTag?(JobTag.Misc), false);
-					};
+					}
+					;
 					opts.Add(new FloatMenuOption(ropeZombieLabel, job));
 				}
 			}

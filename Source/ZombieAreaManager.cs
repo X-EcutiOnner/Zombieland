@@ -231,7 +231,7 @@ namespace ZombieLand
 							maxZ = Mathf.Max(maxZ, p.z);
 						});
 						ShowCentered(new IntVec3(minX, 0, minZ), new IntVec3(maxX, 0, maxZ));
-					};
+					}
 					if (showPositions)
 						zombiesInArea.Do(zombie => TargetHighlighter.Highlight(new GlobalTargetInfo(zombie), true, false, false));
 				}
