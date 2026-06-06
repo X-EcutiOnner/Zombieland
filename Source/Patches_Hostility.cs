@@ -256,6 +256,8 @@ namespace ZombieLand
 	[HarmonyPatch(nameof(AttackTargetFinder.BestAttackTarget))]
 	static class AttackTargetFinder_BestAttackTarget_Patch
 	{
+		const float EnemyZombieEngagementDistanceSquared = 81f;
+
 		static void Prefix(ref Predicate<Thing> validator, IAttackTargetSearcher searcher)
 		{
 			if (validator == null || searcher == null)
@@ -288,9 +290,10 @@ namespace ZombieLand
 
 			var attackerFaction = attacker.Faction;
 			var attackerFactionDef = attackerFaction?.def;
+			var isAnimal = attacker.RaceProps?.Animal ?? false;
 
 			// attacker is player
-			if (attackerFactionDef?.isPlayer ?? false)
+			if (isAnimal == false && (attackerFactionDef?.isPlayer ?? false))
 			{
 				validator = (Thing t) =>
 				{
@@ -317,7 +320,7 @@ namespace ZombieLand
 			}
 
 			// attacker is animal
-			if (attacker.RaceProps?.Animal ?? false)
+			if (isAnimal)
 			{
 				validator = (Thing t) =>
 				{
@@ -361,11 +364,12 @@ namespace ZombieLand
 
 					var attackDistance = verb == null ? 1f : verb.verbProps.range * verb.verbProps.range;
 					var zombieAvoidRadius = Tools.ZombieAvoidRadius(zombie, true);
+					var maxZombieEngagementDistance = Math.Min(attackDistance, EnemyZombieEngagementDistanceSquared);
 
 					if (attackDistance < zombieAvoidRadius && distanceToTarget >= zombieAvoidRadius)
 						return false;
 
-					if (distanceToTarget > attackDistance)
+					if (distanceToTarget > maxZombieEngagementDistance)
 						return false;
 				}
 

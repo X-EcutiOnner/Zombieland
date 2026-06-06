@@ -78,7 +78,7 @@ namespace ZombieLand
 				.Where(thing => thing is Zombie || thing is ZombieBlob || thing is ZombieSpitter)
 				.ToArray();
 			foreach (var thing in things)
-				thing.Destroy();
+				thing.Destroy(DestroyMode.Vanish);
 
 			var tickManager = map.GetComponent<TickManager>();
 			tickManager?.allZombiesCached?.Clear();

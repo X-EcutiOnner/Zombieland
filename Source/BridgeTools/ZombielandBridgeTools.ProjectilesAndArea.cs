@@ -56,6 +56,8 @@ namespace ZombieLand
 				action = RunAreaWorkflowBehavior(map, fixtureAreas);
 			else if (normalizedActionMode == "targeting")
 				action = RunAreaWorkflowTargeting(map);
+			else if (normalizedActionMode == "bug-reports")
+				action = RunAreaWorkflowBugReports(map);
 			else if (normalizedActionMode == "ranged-projectiles")
 				action = RunAreaWorkflowRangedProjectiles(map);
 			else if (normalizedActionMode == "ce-ranged-projectiles")
@@ -102,7 +104,7 @@ namespace ZombieLand
 				{
 					success = false,
 					actionMode,
-					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, ranged-projectiles, ce-ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, ce-compat, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, visual-support, or warning-ui."
+					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, bug-reports, ranged-projectiles, ce-ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, ce-compat, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, visual-support, or warning-ui."
 				};
 			}
 			var actionSucceeded = normalizedActionMode == "read"
@@ -1994,6 +1996,190 @@ namespace ZombieLand
 			}
 		}
 
+		static object RunAreaWorkflowBugReports(Map map)
+		{
+			var oldAttackMode = ZombieSettings.Values.attackMode;
+			var oldEnemiesAttackZombies = ZombieSettings.Values.enemiesAttackZombies;
+			var oldSpitterThreat = ZombieSettings.Values.spitterThreat;
+			var spawnedThings = new List<Thing>();
+
+			try
+			{
+				ZombieSettings.Values.attackMode = AttackMode.Everything;
+				ZombieSettings.Values.enemiesAttackZombies = true;
+				ZombieSettings.Values.spitterThreat = 1f;
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+				DestroyAreaWorkflowPawns(map);
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (TryFindClearSpawnCell(map, root + new IntVec3(-18, 0, 0), 18f, out var raiderCell, out var raiderError) == false)
+					return raiderError;
+
+				var raider = SpawnArmedAreaWorkflowPawn(map, "ZL_Area_BugRaider", raiderCell, Faction.OfAncientsHostile, spawnedThings);
+				var verb = raider?.equipment?.PrimaryEq?.PrimaryVerb;
+				if (raider == null || verb == null)
+				{
+					return new
+					{
+						success = false,
+						raider = DescribePawn(raider),
+						verb = DescribeVerb(verb),
+						error = "Could not create an armed hostile raider for the bug-report fixture."
+					};
+				}
+
+				if (FindLineOfSightTargetCell(map, raiderCell, 6f, out var nearCell) == false
+					|| FindLineOfSightTargetCell(map, raiderCell, 9f, out var edgeCell) == false
+					|| FindLineOfSightTargetCell(map, raiderCell, 10f, out var justOutsideCell) == false
+					|| FindLineOfSightTargetCell(map, raiderCell, 25f, out var farCell) == false)
+				{
+					return new
+					{
+						success = false,
+						raiderCell = ZombieRuntimeActions.DescribeCell(raiderCell),
+						error = "Could not find all line-of-sight target cells for the raider distance fixture."
+					};
+				}
+
+				var near = SpawnTargetZombie(map, nearCell, ZombieType.Normal, "ZL_Area_BugRaiderNearZombie", spawnedThings);
+				var edge = SpawnTargetZombie(map, edgeCell, ZombieType.Normal, "ZL_Area_BugRaiderEdgeZombie", spawnedThings);
+				var justOutside = SpawnTargetZombie(map, justOutsideCell, ZombieType.Normal, "ZL_Area_BugRaiderOutsideZombie", spawnedThings);
+				var far = SpawnTargetZombie(map, farCell, ZombieType.Normal, "ZL_Area_BugRaiderFarZombie", spawnedThings);
+				var spitter = SpawnTargetSpitter(map, raiderCell + new IntVec3(0, 0, -6), "ZL_Area_BugSpitterHealth", spawnedThings);
+				if (new Pawn[] { near, edge, justOutside, far, spitter }.Any(pawn => pawn == null))
+				{
+					return new
+					{
+						success = false,
+						targets = new
+						{
+							near = DescribeZombie(near),
+							edge = DescribeZombie(edge),
+							justOutside = DescribeZombie(justOutside),
+							far = DescribeZombie(far),
+							spitter = DescribeZombie(spitter)
+						},
+						error = "Could not create all bug-report target pawns."
+					};
+				}
+
+				var allTargets = new List<IAttackTarget> { near, edge, justOutside, far };
+				var available = InvokeAvailableTargetsPatch(allTargets, raider, verb);
+				var targeting = new[]
+				{
+					DescribeRaiderZombieTargetCase("near6", raider, near, verb, available),
+					DescribeRaiderZombieTargetCase("edge9", raider, edge, verb, available),
+					DescribeRaiderZombieTargetCase("outside10", raider, justOutside, verb, available),
+					DescribeRaiderZombieTargetCase("far25", raider, far, verb, available)
+				};
+
+				var spitterHealth = DescribeSpitterHealthAndDamage(spitter);
+				return new
+				{
+					success = targeting.All(ObjectSuccess) && ObjectSuccess(spitterHealth),
+					raider = DescribePawn(raider),
+					verb = DescribeVerb(verb),
+					settings = new
+					{
+						ZombieSettings.Values.attackMode,
+						ZombieSettings.Values.enemiesAttackZombies,
+						ZombieSettings.Values.spitterThreat
+					},
+					available = DescribeTargetPairs(available),
+					targeting,
+					spitterHealth
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.attackMode = oldAttackMode;
+				ZombieSettings.Values.enemiesAttackZombies = oldEnemiesAttackZombies;
+				ZombieSettings.Values.spitterThreat = oldSpitterThreat;
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static bool FindLineOfSightTargetCell(Map map, IntVec3 source, float targetDistance, out IntVec3 result)
+		{
+			var targetDistanceSquared = targetDistance * targetDistance;
+			result = GenRadial.RadialCellsAround(source, targetDistance + 1f, false)
+				.Where(cell => cell.InBounds(map))
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.Where(cell => Mathf.Abs(cell.DistanceToSquared(source) - targetDistanceSquared) <= targetDistance)
+				.Where(cell => GenSight.LineOfSight(source, cell, map, true))
+				.OrderBy(cell => Mathf.Abs(cell.DistanceToSquared(source) - targetDistanceSquared))
+				.FirstOrDefault();
+			return result.IsValid;
+		}
+
+		static object DescribeRaiderZombieTargetCase(string label, Pawn raider, Zombie zombie, Verb verb, IEnumerable<Pair<IAttackTarget, float>> available)
+		{
+			var best = BestSpecificTarget(raider, zombie, 40f);
+			var distanceSquared = raider.Position.DistanceToSquared(zombie.Position);
+			var expectedSelectable = distanceSquared <= 81;
+			var availableContains = available.Any(pair => ReferenceEquals(pair.first.Thing, zombie));
+			var bestMatches = ReferenceEquals(best?.Thing, zombie);
+			var attackDistance = verb == null ? 1f : verb.verbProps.range * verb.verbProps.range;
+			return new
+			{
+				success = bestMatches == expectedSelectable && availableContains == expectedSelectable,
+				label,
+				expectedSelectable,
+				distanceSquared,
+				attackDistance,
+				zombieAvoidRadius = Tools.ZombieAvoidRadius(zombie, true),
+				hostileToRaider = zombie.HostileTo(raider),
+				activeThreatToRaiderFaction = GenHostility.IsActiveThreatTo(zombie, raider.Faction, false, false),
+				availableContains,
+				best = DescribeTarget(best),
+				zombie = DescribeZombie(zombie)
+			};
+		}
+
+		static object DescribeSpitterHealthAndDamage(ZombieSpitter spitter)
+		{
+			var part = spitter?.health?.hediffSet?.GetNotMissingParts().FirstOrDefault();
+			var rangedPart = FindNonHeadPart(spitter);
+			var meleePart = FindNonHeadPart(spitter);
+			var incomingDamageFactor = spitter.GetStatValue(StatDefOf.IncomingDamageFactor);
+			var rangedBefore = TotalInjurySeverity(spitter);
+			var rangedDamage = ApplyPawnDamage(spitter, DamageDefOf.Bullet, 10f, rangedPart, 7601, 0f);
+			var rangedAfter = TotalInjurySeverity(spitter);
+			var meleeBefore = rangedAfter;
+			var meleeDamage = ApplyPawnDamage(spitter, DamageDefOf.Cut, 2f, meleePart, 7602, 0f);
+			var meleeAfter = TotalInjurySeverity(spitter);
+			var healthScale = spitter?.HealthScale ?? 0f;
+			var coreMaxHealth = part?.def?.GetMaxHealth(spitter) ?? 0f;
+			return new
+			{
+				success = spitter != null
+					&& Mathf.Approximately(incomingDamageFactor, 1f)
+					&& coreMaxHealth >= 4000f
+					&& rangedDamage.injuryDelta <= 2f
+					&& meleeDamage.injuryDelta <= 8f,
+				spitter = DescribeZombie(spitter),
+				baseHealthScale = spitter?.RaceProps?.baseHealthScale,
+				lifeStageHealthScaleFactor = spitter?.ageTracker?.CurLifeStage?.healthScaleFactor,
+				healthScale,
+				statMaxHitPoints = spitter?.MaxHitPoints,
+				incomingDamageFactor,
+				corePart = DescribeBodyPartDetail(part),
+				corePartBaseHitPoints = part?.def?.hitPoints,
+				coreMaxHealth,
+				rangedPart = DescribeBodyPartDetail(rangedPart),
+				rangedBefore,
+				rangedAfter,
+				rangedDamage,
+				meleePart = DescribeBodyPartDetail(meleePart),
+				meleeBefore,
+				meleeAfter,
+				meleeDamage
+			};
+		}
+
 		static object RunAreaWorkflowRangedProjectiles(Map map)
 		{
 			var spawnedThings = new List<Thing>();
@@ -2437,12 +2623,17 @@ namespace ZombieLand
 
 		static IAttackTarget BestSpecificTarget(IAttackTargetSearcher searcher, Thing target)
 		{
+			return BestSpecificTarget(searcher, target, 20f);
+		}
+
+		static IAttackTarget BestSpecificTarget(IAttackTargetSearcher searcher, Thing target, float maxDist)
+		{
 			return AttackTargetFinder.BestAttackTarget(
 				searcher,
 				TargetScanFlags.NeedLOSToAll | TargetScanFlags.NeedThreat,
 				thing => ReferenceEquals(thing, target),
 				0f,
-				20f);
+				maxDist);
 		}
 
 		static (bool zombiesRemoved, bool nonZombiesKept, object[] kept) VerifyFriendlyFireHelper(Zombie zombie, Pawn nonZombie)
@@ -4307,7 +4498,7 @@ namespace ZombieLand
 		static object VerifyAreaWorkflowSpecialDamage(Map map, IntVec3 root, List<Thing> spawnedThings)
 		{
 			var patchTargets = PatchedMethodsForPatchClass("DamageWorker_AddInjury_ApplyDamageToPart_Patch");
-			if (FindAreaWorkflowCells(map, root, 13, 18f, out var cells, out var cellError) == false)
+			if (FindAreaWorkflowCells(map, root, 13, 18f, true, out var cells, out var cellError) == false)
 				return cellError;
 
 			var oldSpitterThreat = ZombieSettings.Values.spitterThreat;
@@ -5137,11 +5328,16 @@ namespace ZombieLand
 
 		static bool FindAreaWorkflowCells(Map map, IntVec3 root, int count, float radius, out IntVec3[] cells, out object error)
 		{
+			return FindAreaWorkflowCells(map, root, count, radius, false, out cells, out error);
+		}
+
+		static bool FindAreaWorkflowCells(Map map, IntVec3 root, int count, float radius, bool requireDry, out IntVec3[] cells, out object error)
+		{
 			var result = new List<IntVec3>();
 			var nextRoot = root;
 			for (var i = 0; i < count; i++)
 			{
-				if (TryFindClearSpawnCell(map, nextRoot, radius, out var cell, out var spawnError) == false)
+				if (TryFindAreaWorkflowCell(map, nextRoot, radius, requireDry, out var cell, out var spawnError) == false)
 				{
 					cells = result.ToArray();
 					error = new
@@ -5161,6 +5357,58 @@ namespace ZombieLand
 			cells = result.ToArray();
 			error = null;
 			return true;
+		}
+
+		static bool TryFindAreaWorkflowCell(Map map, IntVec3 root, float radius, bool requireDry, out IntVec3 cell, out object error)
+		{
+			if (requireDry == false)
+				return TryFindClearSpawnCell(map, root, radius, out cell, out error);
+
+			cell = IntVec3.Invalid;
+			error = null;
+			if (map == null)
+			{
+				error = new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+				return false;
+			}
+
+			if (root.InBounds(map) == false)
+			{
+				error = new
+				{
+					success = false,
+					error = $"Cell ({root.x}, {root.z}) is outside the current map."
+				};
+				return false;
+			}
+
+			foreach (var candidate in GenRadial.RadialCellsAround(root, radius, true))
+			{
+				if (candidate.InBounds(map) == false)
+					continue;
+				if (candidate.Standable(map) == false)
+					continue;
+				if (candidate.Fogged(map))
+					continue;
+				if (candidate.GetTerrain(map)?.IsWater == true)
+					continue;
+				if (candidate.GetThingList(map).Any(thing => thing is Pawn))
+					continue;
+
+				cell = candidate;
+				return true;
+			}
+
+			error = new
+			{
+				success = false,
+				error = $"No clear dry standable unfogged cell was found near ({root.x}, {root.z})."
+			};
+			return false;
 		}
 
 		static Zombie SpawnFormerZombieForDamage(Map map, IntVec3 cell, List<Thing> spawnedThings)
@@ -5316,18 +5564,28 @@ namespace ZombieLand
 			var rangedPart = FindNonHeadPart(rangedElectric);
 			var cutPart = FindNonHeadPart(cutElectric);
 			var rangedAbsorbBefore = rangedElectric.absorbAttack.Count;
+			var rangedActiveBefore = rangedElectric.IsActiveElectric;
+			var cutActiveBefore = cutElectric.IsActiveElectric;
+			var rangedInWater = rangedElectric.InWater();
+			var cutInWater = cutElectric.InWater();
 			var rangedDamage = ApplyPawnDamage(rangedElectric, DamageDefOf.Bullet, 4f, rangedPart, 6532, 45f);
 			var rangedAbsorbAfter = rangedElectric.absorbAttack.Count;
 			var cutDamage = ApplyPawnDamage(cutElectric, DamageDefOf.Cut, 1f, cutPart, 6533, 0f);
 			return new
 			{
-				success = rangedElectric.IsActiveElectric
-					&& cutElectric.IsActiveElectric
+				success = rangedActiveBefore
+					&& cutActiveBefore
 					&& rangedDamage.totalDamage <= 0f
 					&& rangedAbsorbAfter > rangedAbsorbBefore
 					&& cutDamage.totalDamage > 0f,
 				rangedElectric = DescribeZombie(rangedElectric),
 				cutElectric = DescribeZombie(cutElectric),
+				rangedActiveBefore,
+				cutActiveBefore,
+				rangedInWater,
+				cutInWater,
+				rangedTerrain = rangedElectric.Position.GetTerrain(rangedElectric.Map)?.defName,
+				cutTerrain = cutElectric.Position.GetTerrain(cutElectric.Map)?.defName,
 				rangedPart = DescribeBodyPartDetail(rangedPart),
 				cutPart = DescribeBodyPartDetail(cutPart),
 				rangedAbsorbBefore,
@@ -7018,7 +7276,7 @@ namespace ZombieLand
 					MakeStatCase("fatPainShock", idleFat, StatDefOf.PainShockThreshold, 10f, "Fat body pain shock override"),
 					MakeStatCase("tankyComfyTemperatureMin", tanky, StatDefOf.ComfyTemperatureMin, -999f, "tanky temperature minimum override"),
 					MakeStatCase("tankyComfyTemperatureMax", tanky, StatDefOf.ComfyTemperatureMax, 999f, "tanky temperature maximum override"),
-					MakeStatCase("spitterIncomingDamageFactor", spitter, StatDefOf.IncomingDamageFactor, 6f - ZombieSettings.Values.spitterThreat, "spitter incoming damage factor follows spitter threat")
+					MakeStatCase("spitterIncomingDamageFactor", spitter, StatDefOf.IncomingDamageFactor, 1f, "spitter uses vanilla incoming damage factor; Zombieland spitter scaling is handled by the injury damage prefix")
 				};
 
 				var smokeSensitivity = DefDatabase<StatDef>.GetNamed("SmokeSensitivity", false);
@@ -7194,6 +7452,20 @@ namespace ZombieLand
 				.Where(cell => cell.Fogged(map) == false)
 				.Where(cell => cell.GetFirstPawn(map) == null)
 				.OrderBy(cell => cell.DistanceToSquared(root))
+				.Take(9)
+				.ToArray();
+			if (cells.Length >= 9)
+			{
+				error = null;
+				return true;
+			}
+
+			var fallbackRoot = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			cells = map.AllCells
+				.Where(cell => cell.Standable(map))
+				.Where(cell => cell.Fogged(map) == false)
+				.Where(cell => cell.GetFirstPawn(map) == null)
+				.OrderBy(cell => cell.DistanceToSquared(fallbackRoot))
 				.Take(9)
 				.ToArray();
 			if (cells.Length >= 9)

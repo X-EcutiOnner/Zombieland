@@ -4053,15 +4053,6 @@ namespace ZombieLand
 					}
 				}
 
-				if (thing is ZombieSpitter)
-				{
-					if (stat == StatDefOf.IncomingDamageFactor)
-					{
-						__result = 6f - ZombieSettings.Values.spitterThreat;
-						return false;
-					}
-				}
-
 				return true;
 			}
 		}
