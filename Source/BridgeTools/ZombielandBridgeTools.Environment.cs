@@ -1326,6 +1326,7 @@ namespace ZombieLand
 			var spawnedThings = new List<Thing>();
 			var originalBurnLonger = ZombieSettings.Values.zombiesBurnLonger;
 			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			const int fixtureCellCount = 16;
 			try
 			{
 				ZombieSettings.Values.zombiesBurnLonger = true;
@@ -1334,14 +1335,14 @@ namespace ZombieLand
 					.Where(cell => cell.Standable(map))
 					.Where(cell => cell.Fogged(map) == false)
 					.Where(cell => cell.GetThingList(map).Any(thing => thing is Pawn) == false)
-					.Take(14)
+					.Take(fixtureCellCount)
 					.ToArray();
-				if (fixtureCells.Length < 14)
+				if (fixtureCells.Length < fixtureCellCount)
 				{
 					return new
 					{
 						success = false,
-						error = "Could not find fourteen clear fixture cells for source-aware fire survival boost."
+						error = "Could not find sixteen clear fixture cells for source-aware fire survival boost."
 					};
 				}
 
@@ -1436,6 +1437,10 @@ namespace ZombieLand
 					&& synthetic.humanDamage == synthetic.boostedExternalFireDamage * 4
 					&& synthetic.humanDamage == synthetic.boostedSelfFireDamage * 2;
 
+				var eligibleExplosion = SampleSourceAwareExplosionDamage(map, wildAnimal, fixtureCells[14], true, seed + 2000);
+				var playerExplosion = SampleSourceAwareExplosionDamage(map, playerPawn, fixtureCells[15], false, seed + 3000);
+				var explosionDamageShape = SourceAwareExplosionDamageShapeSucceeded(eligibleExplosion, playerExplosion);
+
 				var cases = new[]
 				{
 					naturalCase,
@@ -1449,12 +1454,13 @@ namespace ZombieLand
 
 				return new
 				{
-					success = cases.All(FireSurvivalCaseSucceeded) && realDamageReduced && syntheticDamageShape,
+					success = cases.All(FireSurvivalCaseSucceeded) && realDamageReduced && syntheticDamageShape && explosionDamageShape,
 					patchTargets = new
 					{
 						addAttachment = PatchedMethodsForPatchClass("CompAttachBase_AddAttachment_Patch"),
 						removeAttachment = PatchedMethodsForPatchClass("CompAttachBase_RemoveAttachment_Patch"),
-						fireDamage = PatchedMethodsForPatchClass("Fire_DoFireDamage_Patch")
+						fireDamage = PatchedMethodsForPatchClass("Fire_DoFireDamage_Patch"),
+						explosionAffectCell = PatchedMethodsForPatchClass("Explosion_AffectCell_Patch")
 					},
 					animalKind = animalKind.defName,
 					cases,
@@ -1465,6 +1471,12 @@ namespace ZombieLand
 						boosted = boostedDamage,
 						syntheticDamageShape,
 						synthetic
+					},
+					explosion = new
+					{
+						explosionDamageShape,
+						eligible = eligibleExplosion,
+						player = playerExplosion
 					}
 				};
 			}
@@ -1480,6 +1492,16 @@ namespace ZombieLand
 		{
 			var property = item?.GetType().GetProperty("success");
 			return property?.GetValue(item) is bool success && success;
+		}
+
+		static bool SourceAwareExplosionDamageShapeSucceeded(ExplosionDamageSample eligibleExplosion, ExplosionDamageSample playerExplosion)
+		{
+			return eligibleExplosion.error == null
+				&& playerExplosion.error == null
+				&& eligibleExplosion.boosted
+				&& eligibleExplosion.injuryDelta <= 0.001f
+				&& playerExplosion.boosted == false
+				&& playerExplosion.injuryDelta > 0f;
 		}
 
 		static object DescribeFireInstigator(Thing instigator)
@@ -1571,6 +1593,109 @@ namespace ZombieLand
 			}
 		}
 
+		static ExplosionDamageSample SampleSourceAwareExplosionDamage(Map map, Thing instigator, IntVec3 cell, bool expectedBoost, int seed)
+		{
+			Zombie zombie = null;
+			Verse.Explosion explosion = null;
+			var last = new ExplosionDamageSample
+			{
+				kind = expectedBoost ? "eligible" : "ineligible",
+				seed = seed,
+				error = "No flame explosion attempt attached fire to the zombie."
+			};
+
+			for (var attempt = 0; attempt < 25; attempt++)
+			{
+				try
+				{
+					foreach (var existingPawn in cell.GetThingList(map).OfType<Pawn>().ToArray())
+						existingPawn.Destroy(DestroyMode.Vanish);
+					foreach (var existingFire in cell.GetThingList(map).OfType<Fire>().ToArray())
+						existingFire.Destroy(DestroyMode.Vanish);
+
+					zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+					if (zombie == null)
+					{
+						last = new ExplosionDamageSample
+						{
+							kind = expectedBoost ? "eligible" : "ineligible",
+							seed = seed + attempt,
+							error = "Could not spawn a normal zombie for source-aware explosion damage sampling."
+						};
+						continue;
+					}
+
+					NormalizeFireDamagePawn(zombie);
+					var injuryBefore = TotalInjurySeverity(zombie);
+					explosion = ThingMaker.MakeThing(ThingDefOf.Explosion) as Verse.Explosion;
+					if (explosion == null)
+					{
+						last = new ExplosionDamageSample
+						{
+							kind = expectedBoost ? "eligible" : "ineligible",
+							seed = seed + attempt,
+							pawn = DescribeZombie(zombie),
+							error = "ThingDefOf.Explosion did not create a Verse.Explosion instance."
+						};
+						continue;
+					}
+
+					explosion.radius = 0.9f;
+					explosion.damType = DamageDefOf.Flame;
+					explosion.damAmount = 30;
+					explosion.armorPenetration = 0f;
+					explosion.instigator = instigator;
+					explosion.chanceToStartFire = 0f;
+					explosion.propagationSpeed = 1f;
+					explosion.doVisualEffects = false;
+					explosion.doSoundEffects = false;
+					GenSpawn.Spawn(explosion, cell, map, WipeMode.Vanish);
+					Rand.PushState(seed + attempt);
+					try
+					{
+						explosion.StartExplosion(null, null);
+						AdvanceGameTicks(3);
+					}
+					finally
+					{
+						Rand.PopState();
+					}
+
+					var fire = zombie.GetAttachment(ThingDefOf.Fire) as Fire;
+					var injuryAfter = TotalInjurySeverity(zombie);
+					last = new ExplosionDamageSample
+					{
+						kind = expectedBoost ? "eligible" : "ineligible",
+						seed = seed + attempt,
+						attempt = attempt,
+						injuryBefore = injuryBefore,
+						injuryAfter = injuryAfter,
+						injuryDelta = injuryAfter - injuryBefore,
+						boosted = zombie.HasFireSurvivalBoost,
+						boostFlag = zombie.fireSurvivalBoost,
+						fire = ZombieRuntimeActions.StableThingId(fire),
+						fireSize = fire == null || fire.Destroyed ? (float?)null : fire.fireSize,
+						deadAfter = zombie.Dead,
+						pawn = DescribeZombie(zombie),
+						instigator = DescribeFireInstigator(instigator)
+					};
+					if (fire != null)
+						return last;
+				}
+				finally
+				{
+					if (explosion != null && explosion.Destroyed == false)
+						explosion.Destroy(DestroyMode.Vanish);
+					if (zombie != null && zombie.Destroyed == false)
+						zombie.Destroy(DestroyMode.Vanish);
+					explosion = null;
+					zombie = null;
+				}
+			}
+
+			return last;
+		}
+
 		static SyntheticFireDamagePatchResult SyntheticFireDamagePatchSample(Pawn human, Zombie boostedZombie, int seed)
 		{
 			var nested = typeof(Patches).GetNestedType("Fire_DoFireDamage_Patch", BindingFlags.NonPublic);
@@ -1639,6 +1764,24 @@ namespace ZombieLand
 			public int humanDamage { get; set; }
 			public int boostedExternalFireDamage { get; set; }
 			public int boostedSelfFireDamage { get; set; }
+		}
+
+		sealed class ExplosionDamageSample
+		{
+			public string kind { get; set; }
+			public string error { get; set; }
+			public int seed { get; set; }
+			public int attempt { get; set; }
+			public float injuryBefore { get; set; }
+			public float injuryAfter { get; set; }
+			public float injuryDelta { get; set; }
+			public bool boosted { get; set; }
+			public bool boostFlag { get; set; }
+			public string fire { get; set; }
+			public float? fireSize { get; set; }
+			public bool deadAfter { get; set; }
+			public object pawn { get; set; }
+			public object instigator { get; set; }
 		}
 
 		[Tool("zombieland/zombie_fire_damage_reduction_contract", Description = "Verify zombiesBurnLonger reduces real Fire.DoFireDamage for all Zombieland pawn fire fixtures while humans still take ordinary fire damage.")]

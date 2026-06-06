@@ -4309,6 +4309,87 @@ namespace ZombieLand
 			}
 		}
 
+		// patch for preventing eligible flame explosions from doing direct damage when they grant the fire-survival boost
+		//
+		sealed class FireSurvivalExplosionDamageSnapshot
+		{
+			public Zombie zombie;
+			public bool hadFireSurvivalBoost;
+			public Dictionary<Hediff_Injury, float> injurySeverities;
+
+			public static FireSurvivalExplosionDamageSnapshot Make(Zombie zombie)
+			{
+				var injuries = zombie.health?.hediffSet?.hediffs?
+					.OfType<Hediff_Injury>()
+					.ToDictionary(injury => injury, injury => injury.Severity);
+				if (injuries == null)
+					return null;
+
+				return new FireSurvivalExplosionDamageSnapshot
+				{
+					zombie = zombie,
+					hadFireSurvivalBoost = zombie.HasFireSurvivalBoost,
+					injurySeverities = injuries
+				};
+			}
+
+			public void RestoreIfBoostWasGranted()
+			{
+				if (zombie == null || zombie.Destroyed || zombie.Dead || hadFireSurvivalBoost || zombie.HasFireSurvivalBoost == false)
+					return;
+
+				var injuries = zombie.health?.hediffSet?.hediffs?.OfType<Hediff_Injury>().ToArray();
+				if (injuries == null)
+					return;
+
+				foreach (var injury in injuries)
+				{
+					if (injurySeverities.TryGetValue(injury, out var severity))
+					{
+						if (injury.Severity > severity)
+							injury.Severity = severity;
+					}
+					else
+						zombie.health.RemoveHediff(injury);
+				}
+			}
+		}
+
+		[HarmonyPatch(typeof(Verse.Explosion), "AffectCell")]
+		static class Explosion_AffectCell_Patch
+		{
+			static void Prefix(Verse.Explosion __instance, IntVec3 c, out List<FireSurvivalExplosionDamageSnapshot> __state)
+			{
+				__state = null;
+				if (CanGrantFireSurvivalBoost(__instance) == false)
+					return;
+
+				__state = c.GetThingList(__instance.Map)
+					.OfType<Zombie>()
+					.Where(zombie => zombie.Destroyed == false && zombie.Dead == false)
+					.Where(zombie => IsEligibleZombieFireInstigator(__instance.instigator, zombie))
+					.Select(FireSurvivalExplosionDamageSnapshot.Make)
+					.Where(snapshot => snapshot != null)
+					.ToList();
+			}
+
+			static void Postfix(List<FireSurvivalExplosionDamageSnapshot> __state)
+			{
+				if (__state == null)
+					return;
+
+				foreach (var snapshot in __state)
+					snapshot.RestoreIfBoostWasGranted();
+			}
+
+			static bool CanGrantFireSurvivalBoost(Verse.Explosion explosion)
+			{
+				return ZombieSettings.Values.zombiesBurnLonger
+					&& explosion?.Map != null
+					&& (explosion.chanceToStartFire > 0f || explosion.damType == DamageDefOf.Flame);
+			}
+		}
+
 		// patch for making zombies burn slower and spread fire faster on tar
 		//
 		[HarmonyPatch(typeof(Fire))]
