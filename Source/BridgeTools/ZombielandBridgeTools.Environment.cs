@@ -1055,8 +1055,8 @@ namespace ZombieLand
 				blobFireSize = blobFire.fireSize,
 				fireDangerAfter,
 				expectedExcludingZombie,
-					expectedIncludingZombie,
-					tolerance
+				expectedIncludingZombie,
+				tolerance
 				};
 			}
 			finally
@@ -1280,15 +1280,366 @@ namespace ZombieLand
 					restoredBurnLonger = originalBurnLonger
 				};
 			}
+			finally
+			{
+				ZombieSettings.Values.zombiesBurnLonger = originalBurnLonger;
+				DestroyFireFixturePawn(blob);
+				DestroyFireFixturePawn(spitter);
+				DestroyFireFixturePawn(zombie);
+				DestroyFireFixturePawn(human);
+			}
+		}
+
+		[Tool("zombieland/zombie_fire_survival_boost_contract", Description = "Verify source-aware zombie fire survival boost only applies to natural/non-player animal fire and boosted-zombie propagation, gives boosted zombies quarter external fire damage, and keeps self-fire on the old half damage path.")]
+		public static object ZombieFireSurvivalBoostContract(
+			[ToolParameter(Description = "Deterministic Rand seed used for paired fire-damage samples.", Required = false, DefaultValue = 757575)] int seed = 757575)
+		{
+			var map = CurrentMap;
+			if (map == null)
+			{
+				return new
+				{
+					success = false,
+					error = "No current map is loaded."
+				};
+			}
+			if (fireDoFireDamageMethod == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find Fire.DoFireDamage(Thing)."
+				};
+			}
+
+			var animalKind = DefDatabase<PawnKindDef>.AllDefs
+				.FirstOrDefault(def => def?.race?.race?.Animal == true && def.race.race.IsMechanoid == false);
+			if (animalKind == null)
+			{
+				return new
+				{
+					success = false,
+					error = "Could not find an animal PawnKindDef for fire-source classification."
+				};
+			}
+
+			var spawnedThings = new List<Thing>();
+			var originalBurnLonger = ZombieSettings.Values.zombiesBurnLonger;
+			var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+			try
+			{
+				ZombieSettings.Values.zombiesBurnLonger = true;
+				var fixtureCells = GenRadial.RadialCellsAround(root, 32f, true)
+					.Where(cell => cell.InBounds(map))
+					.Where(cell => cell.Standable(map))
+					.Where(cell => cell.Fogged(map) == false)
+					.Where(cell => cell.GetThingList(map).Any(thing => thing is Pawn) == false)
+					.Take(14)
+					.ToArray();
+				if (fixtureCells.Length < 14)
+				{
+					return new
+					{
+						success = false,
+						error = "Could not find fourteen clear fixture cells for source-aware fire survival boost."
+					};
+				}
+
+				foreach (var cell in fixtureCells)
+				{
+					ClearGasAt(map, cell);
+					ClearFilthAt(map, cell);
+					foreach (var existingFire in cell.GetThingList(map).OfType<Fire>().ToArray())
+						existingFire.Destroy();
+				}
+
+				var wildAnimal = PawnGenerator.GeneratePawn(animalKind, null);
+				GenSpawn.Spawn(wildAnimal, fixtureCells[0], map, Rot4.South);
+				spawnedThings.Add(wildAnimal);
+
+				var playerAnimal = PawnGenerator.GeneratePawn(animalKind, Faction.OfPlayer);
+				GenSpawn.Spawn(playerAnimal, fixtureCells[1], map, Rot4.South);
+				spawnedThings.Add(playerAnimal);
+
+				var playerPawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, Faction.OfPlayer);
+				GenSpawn.Spawn(playerPawn, fixtureCells[2], map, Rot4.South);
+				DisablePawnWork(playerPawn);
+				spawnedThings.Add(playerPawn);
+
+				var hostileFaction = Find.FactionManager.AllFactionsVisible
+					.FirstOrDefault(faction => faction != null && faction.HostileTo(Faction.OfPlayer) && faction.def?.humanlikeFaction == true)
+					?? Faction.OfAncientsHostile;
+				var hostilePawn = PawnGenerator.GeneratePawn(PawnKindDefOf.Colonist, hostileFaction);
+				GenSpawn.Spawn(hostilePawn, fixtureCells[3], map, Rot4.South);
+				DisablePawnWork(hostilePawn);
+				spawnedThings.Add(hostilePawn);
+
+				object AttachCase(string name, Thing instigator, IntVec3 cell, bool expectedBoost)
+				{
+					var zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+					if (zombie != null)
+						spawnedThings.Add(zombie);
+					FireUtility.TryAttachFire(zombie, 1f, instigator);
+
+					var fire = zombie?.GetAttachment(ThingDefOf.Fire) as Fire;
+					var boosted = zombie?.HasFireSurvivalBoost ?? false;
+					var boostFlag = zombie?.fireSurvivalBoost ?? false;
+					return new
+					{
+						name,
+						success = zombie != null && fire != null && boosted == expectedBoost && boostFlag == expectedBoost,
+						expectedBoost,
+						boostFlag,
+						boosted,
+						zombie = DescribeZombie(zombie),
+						fire = ZombieRuntimeActions.StableThingId(fire),
+						instigator = DescribeFireInstigator(instigator)
+					};
+				}
+
+				var naturalCase = AttachCase("naturalNullInstigator", null, fixtureCells[4], true);
+				var wildAnimalCase = AttachCase("wildAnimalInstigator", wildAnimal, fixtureCells[5], true);
+				var playerAnimalCase = AttachCase("playerAnimalInstigator", playerAnimal, fixtureCells[6], false);
+				var playerPawnCase = AttachCase("playerPawnInstigator", playerPawn, fixtureCells[7], false);
+				var hostilePawnCase = AttachCase("hostilePawnInstigator", hostilePawn, fixtureCells[8], false);
+
+				var boostedSource = ZombieRuntimeActions.SpawnZombie(fixtureCells[9], map, ZombieType.Normal, true);
+				if (boostedSource != null)
+					spawnedThings.Add(boostedSource);
+				FireUtility.TryAttachFire(boostedSource, 1f, null);
+				var propagatedCase = AttachCase("boostedZombieInstigator", boostedSource, fixtureCells[10], true);
+
+				var plainSource = ZombieRuntimeActions.SpawnZombie(fixtureCells[11], map, ZombieType.Normal, true);
+				if (plainSource != null)
+					spawnedThings.Add(plainSource);
+				var plainPropagationCase = AttachCase("plainZombieInstigator", plainSource, fixtureCells[12], false);
+
+				var damageFire = ThingMaker.MakeThing(ThingDefOf.Fire) as Fire;
+				GenSpawn.Spawn(damageFire, fixtureCells[13], map, WipeMode.Vanish);
+				damageFire.fireSize = Fire.MaxFireSize;
+				damageFire.instigator = playerPawn;
+				spawnedThings.Add(damageFire);
+
+				var normalDamage = SampleSourceAwareZombieFireDamage(map, damageFire, fixtureCells[4] + new IntVec3(3, 0, 0), false, seed);
+				var boostedDamage = SampleSourceAwareZombieFireDamage(map, damageFire, fixtureCells[4] + new IntVec3(6, 0, 0), true, seed);
+				var realDamageReduced = normalDamage.error == null
+					&& boostedDamage.error == null
+					&& normalDamage.injuryDelta > 0f
+					&& boostedDamage.injuryDelta > 0f
+					&& boostedDamage.injuryDelta < normalDamage.injuryDelta;
+
+				var synthetic = SyntheticFireDamagePatchSample(playerPawn, boostedSource, seed + 1000);
+				var syntheticDamageShape = synthetic.error == null
+					&& synthetic.humanDamage > 0
+					&& synthetic.boostedExternalFireDamage > 0
+					&& synthetic.boostedSelfFireDamage > 0
+					&& synthetic.humanDamage == synthetic.boostedExternalFireDamage * 4
+					&& synthetic.humanDamage == synthetic.boostedSelfFireDamage * 2;
+
+				var cases = new[]
+				{
+					naturalCase,
+					wildAnimalCase,
+					playerAnimalCase,
+					playerPawnCase,
+					hostilePawnCase,
+					propagatedCase,
+					plainPropagationCase
+				};
+
+				return new
+				{
+					success = cases.All(FireSurvivalCaseSucceeded) && realDamageReduced && syntheticDamageShape,
+					patchTargets = new
+					{
+						addAttachment = PatchedMethodsForPatchClass("CompAttachBase_AddAttachment_Patch"),
+						removeAttachment = PatchedMethodsForPatchClass("CompAttachBase_RemoveAttachment_Patch"),
+						fireDamage = PatchedMethodsForPatchClass("Fire_DoFireDamage_Patch")
+					},
+					animalKind = animalKind.defName,
+					cases,
+					damage = new
+					{
+						realDamageReduced,
+						normal = normalDamage,
+						boosted = boostedDamage,
+						syntheticDamageShape,
+						synthetic
+					}
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.zombiesBurnLonger = originalBurnLonger;
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static bool FireSurvivalCaseSucceeded(object item)
+		{
+			var property = item?.GetType().GetProperty("success");
+			return property?.GetValue(item) is bool success && success;
+		}
+
+		static object DescribeFireInstigator(Thing instigator)
+		{
+			var pawn = instigator as Pawn;
+			var fire = instigator as Fire;
+			return new
+			{
+				thingId = ZombieRuntimeActions.StableThingId(instigator),
+				defName = instigator?.def?.defName,
+				type = instigator?.GetType().Name,
+				faction = instigator?.Faction?.def?.defName,
+				isPawn = pawn != null,
+				isAnimal = pawn?.RaceProps?.Animal,
+				isHumanlike = pawn?.RaceProps?.Humanlike,
+				isMechanoid = pawn?.RaceProps?.IsMechanoid,
+				isZombie = pawn is Zombie,
+				zombieBoosted = (pawn as Zombie)?.HasFireSurvivalBoost,
+				fireParent = ZombieRuntimeActions.StableThingId(fire?.parent),
+				fireSource = ZombieRuntimeActions.StableThingId(fire?.instigator)
+			};
+		}
+
+		static FireDamageSample SampleSourceAwareZombieFireDamage(Map map, Fire fire, IntVec3 cell, bool boosted, int seed)
+		{
+			Zombie zombie = null;
+			try
+			{
+				foreach (var existingPawn in cell.GetThingList(map).OfType<Pawn>().ToArray())
+					existingPawn.Destroy(DestroyMode.Vanish);
+
+				zombie = ZombieRuntimeActions.SpawnZombie(cell, map, ZombieType.Normal, true);
+				if (zombie == null)
+				{
+					return new FireDamageSample
+					{
+						kind = boosted ? "boosted" : "normal",
+						seed = seed,
+						burnLonger = ZombieSettings.Values.zombiesBurnLonger,
+						error = "Could not spawn a normal zombie for source-aware fire damage sampling."
+					};
+				}
+
+				NormalizeFireDamagePawn(zombie);
+				zombie.NotifyFireAttached(boosted);
+
+				var before = TotalInjurySeverity(zombie);
+				Rand.PushState(seed);
+				try
+				{
+					if (TryDoFireDamage(fire, zombie, out var error) == false)
+					{
+						return new FireDamageSample
+						{
+							kind = boosted ? "boosted" : "normal",
+							seed = seed,
+							burnLonger = ZombieSettings.Values.zombiesBurnLonger,
+							injuryBefore = before,
+							injuryAfter = TotalInjurySeverity(zombie),
+							injuryDelta = TotalInjurySeverity(zombie) - before,
+							deadAfter = zombie.Dead,
+							pawn = DescribeZombie(zombie),
+							error = error
+						};
+					}
+				}
 				finally
 				{
-					ZombieSettings.Values.zombiesBurnLonger = originalBurnLonger;
-					DestroyFireFixturePawn(blob);
-					DestroyFireFixturePawn(spitter);
-					DestroyFireFixturePawn(zombie);
-					DestroyFireFixturePawn(human);
+					Rand.PopState();
 				}
+
+				var after = TotalInjurySeverity(zombie);
+				return new FireDamageSample
+				{
+					kind = boosted ? "boosted" : "normal",
+					seed = seed,
+					burnLonger = ZombieSettings.Values.zombiesBurnLonger,
+					injuryBefore = before,
+					injuryAfter = after,
+					injuryDelta = after - before,
+					deadAfter = zombie.Dead,
+					pawn = DescribeZombie(zombie)
+				};
 			}
+			finally
+			{
+				if (zombie != null && zombie.Destroyed == false)
+					zombie.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static SyntheticFireDamagePatchResult SyntheticFireDamagePatchSample(Pawn human, Zombie boostedZombie, int seed)
+		{
+			var nested = typeof(Patches).GetNestedType("Fire_DoFireDamage_Patch", BindingFlags.NonPublic);
+			var method = nested?.GetMethod("FireDamagePatch", BindingFlags.Static | BindingFlags.NonPublic);
+			if (method == null)
+			{
+				return new SyntheticFireDamagePatchResult
+				{
+					error = "Could not reflect Patches.Fire_DoFireDamage_Patch.FireDamagePatch(float, Fire, Thing)."
+				};
+			}
+			if (boostedZombie == null)
+			{
+				return new SyntheticFireDamagePatchResult
+				{
+					error = "Boosted zombie fixture is null."
+				};
+			}
+
+			boostedZombie.NotifyFireAttached(true);
+			var selfFire = boostedZombie.GetAttachment(ThingDefOf.Fire) as Fire;
+			if (selfFire == null)
+			{
+				selfFire = ThingMaker.MakeThing(ThingDefOf.Fire) as Fire;
+				selfFire.fireSize = 1f;
+				selfFire.AttachTo(boostedZombie);
+			}
+			var originalBurnLonger = ZombieSettings.Values.zombiesBurnLonger;
+			try
+			{
+				ZombieSettings.Values.zombiesBurnLonger = true;
+				Rand.PushState(seed);
+				var humanDamage = Convert.ToInt32(method.Invoke(null, new object[] { 16f, null, human }));
+				Rand.PopState();
+				Rand.PushState(seed);
+				var boostedExternalFireDamage = Convert.ToInt32(method.Invoke(null, new object[] { 16f, null, boostedZombie }));
+				Rand.PopState();
+				Rand.PushState(seed);
+				var boostedSelfFireDamage = Convert.ToInt32(method.Invoke(null, new object[] { 16f, selfFire, boostedZombie }));
+				Rand.PopState();
+				return new SyntheticFireDamagePatchResult
+				{
+					input = 16f,
+					humanDamage = humanDamage,
+					boostedExternalFireDamage = boostedExternalFireDamage,
+					boostedSelfFireDamage = boostedSelfFireDamage
+				};
+			}
+			catch (Exception ex)
+			{
+				return new SyntheticFireDamagePatchResult
+				{
+					error = ex.InnerException?.Message ?? ex.Message
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.zombiesBurnLonger = originalBurnLonger;
+			}
+		}
+
+		sealed class SyntheticFireDamagePatchResult
+		{
+			public string error { get; set; }
+			public float input { get; set; }
+			public int humanDamage { get; set; }
+			public int boostedExternalFireDamage { get; set; }
+			public int boostedSelfFireDamage { get; set; }
+		}
 
 		[Tool("zombieland/zombie_fire_damage_reduction_contract", Description = "Verify zombiesBurnLonger reduces real Fire.DoFireDamage for all Zombieland pawn fire fixtures while humans still take ordinary fire damage.")]
 		public static object ZombieFireDamageReductionContract(
@@ -1382,12 +1733,12 @@ namespace ZombieLand
 			{
 				success = noErrors && humanFireDamageControl && normalReduced && spitterReduced && blobReduced,
 				seed,
-					samples = cappedSamples,
-					fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
-					fire = ZombieRuntimeActions.StableThingId(fire),
-					fireSubstrate = ZombieRuntimeActions.StableThingId(fireSubstrate),
-					fireSize = fire.fireSize,
-					humanFireDamageControl,
+				samples = cappedSamples,
+				fireCell = ZombieRuntimeActions.DescribeCell(fireCell),
+				fire = ZombieRuntimeActions.StableThingId(fire),
+				fireSubstrate = ZombieRuntimeActions.StableThingId(fireSubstrate),
+				fireSize = fire.fireSize,
+				humanFireDamageControl,
 				normalReduced,
 				spitterReduced,
 				blobReduced,

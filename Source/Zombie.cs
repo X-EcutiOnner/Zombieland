@@ -127,9 +127,24 @@ namespace ZombieLand
 		// transient vars
 		public bool needsGraphics = false;
 		public bool isOnFire = false;
+		public bool fireSurvivalBoost = false;
+		public bool HasFireSurvivalBoost => isOnFire && fireSurvivalBoost;
 		public bool checkSmashable = true;
 		public float currentDownedAngle = 0f;
 		bool disposed = false;
+
+		public void NotifyFireAttached(bool grantsSurvivalBoost)
+		{
+			isOnFire = true;
+			fireSurvivalBoost |= grantsSurvivalBoost;
+		}
+
+		public void NotifyFireRemoved(bool anyFireRemaining)
+		{
+			isOnFire = anyFireRemaining;
+			if (isOnFire == false)
+				fireSurvivalBoost = false;
+		}
 
 		public ZombieStateHandler.TrackMove[] topTrackingMoves = new ZombieStateHandler.TrackMove[Constants.NUMBER_OF_TOP_MOVEMENT_PICKS];
 		public readonly int[] adjIndex8 = { 0, 1, 2, 3, 4, 5, 6, 7 };
@@ -238,6 +253,7 @@ namespace ZombieLand
 					needsGraphics = true; // make custom textures in renderer
 
 				isOnFire = this.HasAttachment(ThingDefOf.Fire);
+				fireSurvivalBoost = false;
 				checkSmashable = true;
 
 				if (consciousness == 0)

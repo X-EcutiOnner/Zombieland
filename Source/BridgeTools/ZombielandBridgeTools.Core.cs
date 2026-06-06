@@ -2567,11 +2567,20 @@ namespace ZombieLand
 				isPawn = pawn != null,
 				isCorpse = corpse != null,
 				isFire = fire != null,
-				pawn = pawn == null ? null : DescribePawn(pawn),
+				pawn = DescribeFixturePawn(pawn),
 				corpseInnerPawn = corpse?.InnerPawn == null ? null : DescribePawn(corpse.InnerPawn),
 				fireSize = fire?.fireSize,
 				edifice = thing.Position.IsValid && thing.Spawned ? thing.Position.GetEdifice(thing.Map)?.def?.defName : null
 			};
+		}
+
+		static object DescribeFixturePawn(Pawn pawn)
+		{
+			if (pawn == null)
+				return null;
+			if (pawn is Zombie || pawn is ZombieSpitter || pawn is ZombieBlob)
+				return DescribeZombie(pawn);
+			return DescribePawn(pawn);
 		}
 
 		[Tool("zombieland/spawn_colonist", Description = "Spawn one player colonist near a map cell for generic scenario fixtures.")]

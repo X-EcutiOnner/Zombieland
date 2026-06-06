@@ -4315,14 +4315,22 @@ namespace ZombieLand
 		[HarmonyPatch(nameof(Fire.DoFireDamage))]
 		static class Fire_DoFireDamage_Patch
 		{
-			static int FireDamagePatch(float f, Pawn pawn)
+			static int FireDamagePatch(float f, Fire fire, Thing targ)
 			{
 				var num = GenMath.RoundRandom(f);
 				if (ZombieSettings.Values.zombiesBurnLonger == false)
 					return num;
 
+				var pawn = targ as Pawn;
 				if (IsZombielandPawn(pawn) == false)
 					return num;
+
+				if (pawn is Zombie zombie && zombie.HasFireSurvivalBoost)
+				{
+					if (fire?.parent == zombie)
+						return Math.Max(2, num / 2);
+					return Math.Max(1, num / 4);
+				}
 
 				return Math.Max(2, num / 2);
 			}
@@ -4330,15 +4338,16 @@ namespace ZombieLand
 			static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
 			{
 				var m_RoundRandom = SymbolExtensions.GetMethodInfo(() => GenMath.RoundRandom(0f));
-				var m_FireDamagePatch = SymbolExtensions.GetMethodInfo(() => FireDamagePatch(0f, null));
+				var m_FireDamagePatch = SymbolExtensions.GetMethodInfo(() => FireDamagePatch(0f, null, null));
 
 				var list = instructions.ToList();
 				var idx = list.FirstIndexOf(code => code.Calls(m_RoundRandom));
 				if (idx > 0 && idx < list.Count())
 				{
-					list[idx].opcode = OpCodes.Ldarg_1; // first argument of instance method
+					list[idx].opcode = OpCodes.Ldarg_0; // Fire instance
 					list[idx].operand = null;
-					list.Insert(idx + 1, new CodeInstruction(OpCodes.Call, m_FireDamagePatch));
+					list.Insert(idx + 1, new CodeInstruction(OpCodes.Ldarg_1)); // target thing
+					list.Insert(idx + 2, new CodeInstruction(OpCodes.Call, m_FireDamagePatch));
 				}
 				else
 					Error("Unexpected code in patch " + MethodBase.GetCurrentMethod().DeclaringType);
@@ -4862,7 +4871,7 @@ namespace ZombieLand
 				if (t.def != ThingDefOf.Fire)
 					return;
 				if (___parent is Zombie zombie)
-					zombie.isOnFire = true;
+					zombie.NotifyFireAttached(ShouldGiveZombieFireSurvivalBoost(t as Fire, zombie));
 			}
 		}
 		//
@@ -4875,8 +4884,50 @@ namespace ZombieLand
 				if (t.def != ThingDefOf.Fire)
 					return;
 				if (___parent is Zombie zombie)
-					zombie.isOnFire = ___attachments.Any(a => a.def == ThingDefOf.Fire);
+					zombie.NotifyFireRemoved(___attachments.Any(a => a.def == ThingDefOf.Fire));
 			}
+		}
+
+		static bool ShouldGiveZombieFireSurvivalBoost(Fire fire, Zombie zombie)
+		{
+			if (ZombieSettings.Values.zombiesBurnLonger == false || zombie == null || fire == null)
+				return false;
+			return IsEligibleZombieFireInstigator(fire.instigator, zombie);
+		}
+
+		static bool IsEligibleZombieFireInstigator(Thing instigator, Zombie target, int depth = 0)
+		{
+			if (depth > 4)
+				return false;
+
+			if (instigator == null)
+				return true;
+
+			if (instigator is Fire sourceFire)
+			{
+				if (sourceFire.parent is Zombie fireParentZombie && fireParentZombie.HasFireSurvivalBoost)
+					return true;
+				return IsEligibleZombieFireInstigator(sourceFire.instigator, target, depth + 1);
+			}
+
+			if (instigator is Zombie sourceZombie)
+				return sourceZombie != target && sourceZombie.HasFireSurvivalBoost;
+
+			if (instigator is Pawn pawn)
+				return IsEligibleAnimalFireInstigator(pawn);
+
+			var faction = instigator.Faction;
+			if (faction?.def?.isPlayer == true || faction?.HostileTo(Faction.OfPlayer) == true)
+				return false;
+
+			return faction == null;
+		}
+
+		static bool IsEligibleAnimalFireInstigator(Pawn pawn)
+		{
+			if (pawn?.RaceProps?.Animal != true)
+				return false;
+			return pawn.Faction?.def?.isPlayer != true;
 		}
 
 		// patch for disallowing social interaction with zombies
