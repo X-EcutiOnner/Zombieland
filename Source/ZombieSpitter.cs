@@ -22,6 +22,7 @@ namespace ZombieLand
 		public int spitInterval = 0;
 		public int waves = 0;
 		public int remainingZombies = 0;
+		public float colonyDurabilityFactor = 1f;
 
 		public override void ExposeData()
 		{
@@ -35,6 +36,55 @@ namespace ZombieLand
 			Scribe_Values.Look(ref spitInterval, "spitInterval", 0);
 			Scribe_Values.Look(ref waves, "waves", 0);
 			Scribe_Values.Look(ref remainingZombies, "remainingZombies", 0);
+			Scribe_Values.Look(ref colonyDurabilityFactor, "colonyDurabilityFactor", 1f);
+			if (Scribe.mode == LoadSaveMode.PostLoadInit)
+				colonyDurabilityFactor = NormalizeColonyDurabilityFactor(colonyDurabilityFactor);
+		}
+
+		static float MinimumColonyDurabilityFactor()
+		{
+			return GenMath.LerpDoubleClamped(0f, 5f, 0.35f, 0.75f, ZombieLand.Tools.Difficulty());
+		}
+
+		static float NormalizeColonyDurabilityFactor(float value)
+		{
+			if (float.IsNaN(value) || value <= 0f)
+				return 1f;
+			return Mathf.Clamp(value, 0.1f, 1f);
+		}
+
+		public static float CalculateColonyDurabilityFactor(Map map)
+		{
+			if (map?.mapPawns == null)
+				return 1f;
+			var freeColonists = map.mapPawns.FreeColonists.Count;
+			var colonyPoints = ZombieLand.Tools.ColonyPoints(map);
+			return CalculateColonyDurabilityFactor(freeColonists, colonyPoints[0], colonyPoints[1] + colonyPoints[2]);
+		}
+
+		public static float CalculateColonyDurabilityFactor(int freeColonists, float colonistPoints, float supportPoints)
+		{
+			if (freeColonists <= 0)
+				return 1f;
+			if (colonistPoints <= 0f)
+				return MinimumColonyDurabilityFactor();
+
+			var colonistBaseline = Mathf.Max(150f, colonistPoints);
+			var weakSupport = colonistBaseline * 0.08f;
+			var adequateSupport = colonistBaseline * 0.30f;
+			var readiness = Mathf.InverseLerp(weakSupport, adequateSupport, Mathf.Max(0f, supportPoints));
+			return Mathf.Lerp(MinimumColonyDurabilityFactor(), 1f, readiness);
+		}
+
+		public void ApplySpitterDamageScaling(ref DamageInfo dinfo)
+		{
+			var damageFactor = 6f - ZombieSettings.Values.spitterThreat;
+			if (dinfo.Def.isRanged == false)
+				dinfo.SetAmount(dinfo.Amount * damageFactor);
+			else
+				dinfo.SetAmount(dinfo.Amount / damageFactor);
+
+			dinfo.SetAmount(dinfo.Amount / NormalizeColonyDurabilityFactor(colonyDurabilityFactor));
 		}
 
 		public static void Spawn(Map map, IntVec3? location = null)
@@ -64,6 +114,7 @@ namespace ZombieLand
 			var spitter = PawnGenerator.GeneratePawn(ZombieDefOf.ZombieSpitter, null) as ZombieSpitter;
 			spitter.SetFactionDirect(Find.FactionManager.FirstFactionOfDef(ZombieDefOf.Zombies));
 			GenSpawn.Spawn(spitter, cell, map, Rot4.Random, WipeMode.Vanish, false);
+			spitter.colonyDurabilityFactor = CalculateColonyDurabilityFactor(map);
 
 			var f = ZombieSettings.Values.spitterThreat;
 			spitter.aggressive = ShipCountdown.CountingDown || Rand.Chance(f / 2f);

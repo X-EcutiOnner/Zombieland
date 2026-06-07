@@ -20,7 +20,7 @@ namespace ZombieLand
 		public static object AreaWorkflowState(
 			[ToolParameter(Description = "Create or refresh reusable allowed areas for every Zombieland risk mode.", Required = false, DefaultValue = false)] bool setupFixture = false,
 			[ToolParameter(Description = "Open RimWorld's real Manage Areas dialog after preparing the selected Zombieland area.", Required = false, DefaultValue = false)] bool openManageDialog = false,
-			[ToolParameter(Description = "Optional scenario action, such as read, behavior, ranged-projectiles, ce-ranged-projectiles, ce-compat, or warning-ui.", Required = false, DefaultValue = "read")] string actionMode = "read")
+			[ToolParameter(Description = "Optional scenario action, such as read, behavior, ranged-projectiles, ce-ranged-projectiles, ce-compat, spitter-readiness, or warning-ui.", Required = false, DefaultValue = "read")] string actionMode = "read")
 		{
 			var map = CurrentMap;
 			if (map == null)
@@ -58,6 +58,8 @@ namespace ZombieLand
 				action = RunAreaWorkflowTargeting(map);
 			else if (normalizedActionMode == "bug-reports")
 				action = RunAreaWorkflowBugReports(map);
+			else if (normalizedActionMode == "spitter-readiness")
+				action = RunAreaWorkflowSpitterReadiness(map);
 			else if (normalizedActionMode == "ranged-projectiles")
 				action = RunAreaWorkflowRangedProjectiles(map);
 			else if (normalizedActionMode == "ce-ranged-projectiles")
@@ -104,7 +106,7 @@ namespace ZombieLand
 				{
 					success = false,
 					actionMode,
-					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, bug-reports, ranged-projectiles, ce-ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, ce-compat, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, visual-support, or warning-ui."
+					error = "Unsupported area workflow actionMode. Use read, behavior, targeting, bug-reports, spitter-readiness, ranged-projectiles, ce-ranged-projectiles, danger-flee, smart-melee, job-gate, special-melee-verbs, special-damage, ce-compat, electrifier-melee-damage, animal-response, ui-state, downed-crawler-visuals, root-play-hooks, render-node-graphics, effecter-suppression, graphic-multi-texture, warmup-scaling, zombie-stats, visual-support, or warning-ui."
 				};
 			}
 			var actionSucceeded = normalizedActionMode == "read"
@@ -2062,6 +2064,7 @@ namespace ZombieLand
 						error = "Could not create all bug-report target pawns."
 					};
 				}
+				spitter.colonyDurabilityFactor = 1f;
 
 				var allTargets = new List<IAttackTarget> { near, edge, justOutside, far };
 				var available = InvokeAvailableTargetsPatch(allTargets, raider, verb);
@@ -2095,6 +2098,123 @@ namespace ZombieLand
 				ZombieSettings.Values.attackMode = oldAttackMode;
 				ZombieSettings.Values.enemiesAttackZombies = oldEnemiesAttackZombies;
 				ZombieSettings.Values.spitterThreat = oldSpitterThreat;
+				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
+					thing.Destroy(DestroyMode.Vanish);
+			}
+		}
+
+		static object RunAreaWorkflowSpitterReadiness(Map map)
+		{
+			var oldSpitterThreat = ZombieSettings.Values.spitterThreat;
+			var oldThreatScale = ZombieSettings.Values.threatScale;
+			var spawnedThings = new List<Thing>();
+
+			try
+			{
+				ZombieSettings.Values.spitterThreat = 1f;
+				ZombieSettings.Values.threatScale = 1f;
+				_ = ZombieRuntimeActions.DestroyZombies(map);
+				DestroyAreaWorkflowPawns(map);
+
+				var minimumFactor = ZombieSpitter.CalculateColonyDurabilityFactor(1, 0f, 0f);
+				var noColonistFactor = ZombieSpitter.CalculateColonyDurabilityFactor(0, 0f, 0f);
+				var weakFactor = ZombieSpitter.CalculateColonyDurabilityFactor(5, 750f, 10f);
+				var partialFactor = ZombieSpitter.CalculateColonyDurabilityFactor(5, 750f, 120f);
+				var armedFactor = ZombieSpitter.CalculateColonyDurabilityFactor(5, 750f, 250f);
+				var factorCases = new[]
+				{
+					new
+					{
+						success = Approximately(noColonistFactor, 1f),
+						label = "no-colonists",
+						freeColonists = 0,
+						colonistPoints = 0f,
+						supportPoints = 0f,
+						factor = noColonistFactor
+					},
+					new
+					{
+						success = Approximately(weakFactor, minimumFactor),
+						label = "weak-colony",
+						freeColonists = 5,
+						colonistPoints = 750f,
+						supportPoints = 10f,
+						factor = weakFactor
+					},
+					new
+					{
+						success = partialFactor > minimumFactor && partialFactor < 1f,
+						label = "partial-support",
+						freeColonists = 5,
+						colonistPoints = 750f,
+						supportPoints = 120f,
+						factor = partialFactor
+					},
+					new
+					{
+						success = Approximately(armedFactor, 1f),
+						label = "armed-colony",
+						freeColonists = 5,
+						colonistPoints = 750f,
+						supportPoints = 250f,
+						factor = armedFactor
+					}
+				};
+
+				var root = new IntVec3(map.Size.x / 2, 0, map.Size.z / 2);
+				if (FindAreaWorkflowCells(map, root + new IntVec3(8, 0, -8), 2, 12f, true, out var cells, out var cellError) == false)
+					return cellError;
+
+				var weakSpitter = SpawnTargetSpitter(map, cells[0], "ZL_Area_SpitterReadinessWeak", spawnedThings);
+				var armedSpitter = SpawnTargetSpitter(map, cells[1], "ZL_Area_SpitterReadinessArmed", spawnedThings);
+				if (weakSpitter == null || armedSpitter == null)
+				{
+					return new
+					{
+						success = false,
+						weakSpitter = DescribeZombie(weakSpitter),
+						armedSpitter = DescribeZombie(armedSpitter),
+						error = "Could not create both spitter readiness damage fixtures."
+					};
+				}
+
+				var weakDamage = DescribeSpitterReadinessDamageCase("weak-colony", weakSpitter, weakFactor, 8601);
+				var armedDamage = DescribeSpitterReadinessDamageCase("armed-colony", armedSpitter, armedFactor, 8611);
+				var damageComparison = new
+				{
+					success = weakDamage.success
+						&& armedDamage.success
+						&& weakDamage.bulletScaledAmount > armedDamage.bulletScaledAmount * 1.5f
+						&& weakDamage.cutScaledAmount > armedDamage.cutScaledAmount * 1.5f
+						&& weakDamage.cutInjuryDelta > armedDamage.cutInjuryDelta * 1.5f,
+					weakBulletScaledVsArmed = armedDamage.bulletScaledAmount <= 0f ? 0f : weakDamage.bulletScaledAmount / armedDamage.bulletScaledAmount,
+					weakCutScaledVsArmed = armedDamage.cutScaledAmount <= 0f ? 0f : weakDamage.cutScaledAmount / armedDamage.cutScaledAmount,
+					weakBulletVsArmed = armedDamage.bulletInjuryDelta <= 0f ? 0f : weakDamage.bulletInjuryDelta / armedDamage.bulletInjuryDelta,
+					weakCutVsArmed = armedDamage.cutInjuryDelta <= 0f ? 0f : weakDamage.cutInjuryDelta / armedDamage.cutInjuryDelta
+				};
+
+				return new
+				{
+					success = factorCases.All(item => item.success) && damageComparison.success,
+					settings = new
+					{
+						ZombieSettings.Values.spitterThreat,
+						ZombieSettings.Values.threatScale
+					},
+					minimumFactor,
+					factorCases,
+					damage = new
+					{
+						weak = weakDamage,
+						armed = armedDamage,
+						comparison = damageComparison
+					}
+				};
+			}
+			finally
+			{
+				ZombieSettings.Values.spitterThreat = oldSpitterThreat;
+				ZombieSettings.Values.threatScale = oldThreatScale;
 				foreach (var thing in spawnedThings.Where(thing => thing != null && thing.Destroyed == false).ToArray())
 					thing.Destroy(DestroyMode.Vanish);
 			}
@@ -2153,14 +2273,17 @@ namespace ZombieLand
 			var meleeAfter = TotalInjurySeverity(spitter);
 			var healthScale = spitter?.HealthScale ?? 0f;
 			var coreMaxHealth = part?.def?.GetMaxHealth(spitter) ?? 0f;
+			var colonyDurabilityFactor = spitter?.colonyDurabilityFactor ?? 0f;
 			return new
 			{
 				success = spitter != null
 					&& Mathf.Approximately(incomingDamageFactor, 1f)
+					&& Mathf.Approximately(colonyDurabilityFactor, 1f)
 					&& coreMaxHealth >= 4000f
 					&& rangedDamage.injuryDelta <= 2f
 					&& meleeDamage.injuryDelta <= 8f,
 				spitter = DescribeZombie(spitter),
+				colonyDurabilityFactor,
 				baseHealthScale = spitter?.RaceProps?.baseHealthScale,
 				lifeStageHealthScaleFactor = spitter?.ageTracker?.CurLifeStage?.healthScaleFactor,
 				healthScale,
@@ -2178,6 +2301,54 @@ namespace ZombieLand
 				meleeAfter,
 				meleeDamage
 			};
+		}
+
+		static SpitterReadinessDamageResult DescribeSpitterReadinessDamageCase(string label, ZombieSpitter spitter, float durabilityFactor, int seed)
+		{
+			if (spitter == null)
+			{
+				return new SpitterReadinessDamageResult
+				{
+					success = false,
+					label = label,
+					durabilityFactor = durabilityFactor,
+					error = "No spitter was available for the readiness damage case."
+				};
+			}
+			spitter.colonyDurabilityFactor = durabilityFactor;
+			var rangedPart = FindNonHeadPart(spitter);
+			var meleePart = FindNonHeadPart(spitter);
+			var bulletScaledAmount = ScaledSpitterDamageAmount(spitter, DamageDefOf.Bullet, 10f);
+			var cutScaledAmount = ScaledSpitterDamageAmount(spitter, DamageDefOf.Cut, 2f);
+			var bulletDamage = ApplyPawnDamageUntilInjured(spitter, DamageDefOf.Bullet, 10f, rangedPart, seed, 0f);
+			var cutDamage = ApplyPawnDamageUntilInjured(spitter, DamageDefOf.Cut, 2f, meleePart, seed + 100, 0f);
+			return new SpitterReadinessDamageResult
+			{
+				success = durabilityFactor > 0f
+					&& Mathf.Approximately(spitter.colonyDurabilityFactor, durabilityFactor)
+					&& bulletScaledAmount > 0f
+					&& cutScaledAmount > bulletScaledAmount
+					&& bulletDamage.injuryDelta > 0f
+					&& cutDamage.injuryDelta > bulletDamage.injuryDelta,
+				label = label,
+				durabilityFactor = durabilityFactor,
+				spitter = DescribeZombie(spitter),
+				rangedPart = DescribeBodyPartDetail(rangedPart),
+				meleePart = DescribeBodyPartDetail(meleePart),
+				bulletScaledAmount = bulletScaledAmount,
+				cutScaledAmount = cutScaledAmount,
+				bulletInjuryDelta = bulletDamage.injuryDelta,
+				cutInjuryDelta = cutDamage.injuryDelta,
+				bulletDamage = bulletDamage,
+				cutDamage = cutDamage
+			};
+		}
+
+		static float ScaledSpitterDamageAmount(ZombieSpitter spitter, DamageDef damageDef, float amount)
+		{
+			var dinfo = new DamageInfo(damageDef, amount, 0f, 0f, null, null, null, DamageInfo.SourceCategory.ThingOrUnknown, null, true, true);
+			spitter.ApplySpitterDamageScaling(ref dinfo);
+			return dinfo.Amount;
 		}
 
 		static object RunAreaWorkflowRangedProjectiles(Map map)
@@ -5750,6 +5921,18 @@ namespace ZombieLand
 			};
 		}
 
+		static DamageProbeResult ApplyPawnDamageUntilInjured(Pawn pawn, DamageDef damageDef, float amount, BodyPartRecord part, int seed, float angle)
+		{
+			var result = default(DamageProbeResult);
+			for (var attempt = 0; attempt < 24; attempt++)
+			{
+				result = ApplyPawnDamage(pawn, damageDef, amount, part, seed + attempt, angle);
+				if (result.injuryDelta > 0f)
+					return result;
+			}
+			return result;
+		}
+
 		sealed class DamageProbeResult
 		{
 			public string damageDef { get; set; }
@@ -5764,6 +5947,23 @@ namespace ZombieLand
 			public float injuryBefore { get; set; }
 			public float injuryAfter { get; set; }
 			public float injuryDelta { get; set; }
+		}
+
+		sealed class SpitterReadinessDamageResult
+		{
+			public bool success { get; set; }
+			public string label { get; set; }
+			public string error { get; set; }
+			public float durabilityFactor { get; set; }
+			public object spitter { get; set; }
+			public object rangedPart { get; set; }
+			public object meleePart { get; set; }
+			public float bulletScaledAmount { get; set; }
+			public float cutScaledAmount { get; set; }
+			public float bulletInjuryDelta { get; set; }
+			public float cutInjuryDelta { get; set; }
+			public DamageProbeResult bulletDamage { get; set; }
+			public DamageProbeResult cutDamage { get; set; }
 		}
 
 		static object VerifyAreaWorkflowUiState(Map map, IntVec3 root, List<Thing> spawnedThings)

@@ -1306,7 +1306,9 @@ namespace ZombieLand
 			return edifice is Building building && building is not Mineable;
 		}
 
-		public static int[] ColonyPoints()
+		public static int[] ColonyPoints() => ColonyPoints(Find.CurrentMap);
+
+		public static int[] ColonyPoints(Map map)
 		{
 			static float dangerPoints(Building building)
 			{
@@ -1321,8 +1323,7 @@ namespace ZombieLand
 				return building.HitPoints / 100;
 			}
 
-			var map = Find.CurrentMap;
-			if (map == null)
+			if (map?.mapPawns == null)
 				return new int[3];
 			var colonists = map.mapPawns.FreeColonists;
 			ColonyEvaluation.GetColonistArmouryPoints(colonists, map, out var colonistPoints, out var armouryPoints);

@@ -4597,15 +4597,8 @@ namespace ZombieLand
 			{
 				if (pawn is not Zombie zombie)
 				{
-					if (pawn is ZombieSpitter)
-					{
-						var def1 = dinfo.Def;
-						var f = 6f - ZombieSettings.Values.spitterThreat;
-						if (def1.isRanged == false)
-							dinfo.SetAmount(dinfo.Amount * f);
-						else
-							dinfo.SetAmount(dinfo.Amount / f);
-					}
+					if (pawn is ZombieSpitter spitter)
+						spitter.ApplySpitterDamageScaling(ref dinfo);
 					return true;
 				}
 
