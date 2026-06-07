@@ -75,8 +75,8 @@ namespace ZombieLand
 		public float consciousness = 1f;
 		public int paralyzedUntil = 0;
 		public Pawn ropedBy;
-		public bool IsConfused => Downed == false && ropedBy == null && (paralyzedUntil > 0 || consciousness <= Constants.MIN_CONSCIOUSNESS);
-		public bool IsRopedOrConfused => Downed == false && (paralyzedUntil > 0 || consciousness <= Constants.MIN_CONSCIOUSNESS || ropedBy != null);
+		public bool IsConfused => Downed == false && ropedBy == null && (this.IsParalyzed() || consciousness <= Constants.MIN_CONSCIOUSNESS);
+		public bool IsRopedOrConfused => Downed == false && (this.IsParalyzed() || consciousness <= Constants.MIN_CONSCIOUSNESS || ropedBy != null);
 
 		// being pushed over walls
 		public float wallPushProgress = -1f;
@@ -386,8 +386,8 @@ namespace ZombieLand
 
 		public void Unrope()
 		{
-			ropedBy = null;
-			paralyzedUntil = GenTicks.TicksAbs + GenDate.TicksPerHour / 2;
+			if (this.TryParalyze(ZombieParalysis.ShockerParalysisTicks, out _, true, true) == false)
+				ropedBy = null;
 		}
 
 		public override void Kill(DamageInfo? dinfo, Hediff exactCulprit = null)

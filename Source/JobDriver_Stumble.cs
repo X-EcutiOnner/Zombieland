@@ -80,6 +80,9 @@ namespace ZombieLand
 			if (this.ShouldDie(zombie))
 				return;
 
+			if (this.HandleParalyzedTick(zombie))
+				return;
+
 			if (ZombieStateHandler.WallPushing(zombie))
 				return;
 

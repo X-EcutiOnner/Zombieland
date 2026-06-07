@@ -46,6 +46,9 @@ namespace ZombieLand
 			if (this.DieEasily())
 				return;
 
+			if (this.HandleParalyzedTick(zombie))
+				return;
+
 			if (this.Wait())
 				return;
 
